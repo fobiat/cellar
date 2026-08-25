@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "cellar-cli"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -297,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "cellar-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "chrono",
  "serde",
@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "cellar-fake-server"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "cellar-core",
  "cellar-runtime",
@@ -320,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "cellar-notify"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "cellar-core",
  "chrono",
@@ -333,7 +333,7 @@ dependencies = [
 
 [[package]]
 name = "cellar-runtime"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "cellar-core",
  "chrono",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "cellar-server"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "argon2",
  "axum",
@@ -372,7 +372,7 @@ dependencies = [
 
 [[package]]
 name = "cellar-store"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "cellar-core",
  "chrono",
@@ -386,7 +386,7 @@ dependencies = [
 
 [[package]]
 name = "cellar-tui"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "cellar-core",
  "cellar-runtime",
@@ -398,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "cellar-update"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "cellar-core",
  "chrono",
