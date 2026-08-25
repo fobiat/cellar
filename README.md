@@ -330,6 +330,21 @@ export CELLAR_TEST_DATABASE_URL='mysql://root:cellartest@127.0.0.1:33061/cellar'
 cargo test --workspace
 ```
 
+**CI has never run.** Every GitHub Actions run on this repository fails before
+starting, on "recent account payments have failed or your spending limit needs
+to be increased". The workflow is therefore unproven. Private repositories bill
+Actions minutes and public ones do not, so making this repository public would
+resolve it; so would setting the repository variable `CI_RUNNER` to a
+self-hosted label, which the workflow already reads. Until then, releases are
+cut locally:
+
+```sh
+cargo build --release -p cellar-cli -p cellar-fake-server
+./scripts/cross-build-windows.sh   # docker plus mingw, no host toolchain needed
+./scripts/package-release.sh
+gh release create vX.Y.Z --verify-tag --notes-file CHANGELOG.md dist/release/*
+```
+
 The gate before any commit:
 
 ```sh
