@@ -36,6 +36,123 @@ function showTab(name) {
   if (name === "database") loadTables();
   if (name === "players") loadPlayers();
   if (name === "releases") loadReleases();
+  if (name === "ordinance") loadSettings();
+}
+
+/* ---- ordinance: features and settings ----------------------------------- */
+
+async function loadSettings() {
+  const featureRows = $("#features");
+  const settingRows = $("#settings");
+  featureRows.replaceChildren();
+  settingRows.replaceChildren();
+
+  const response = await fetch("/api/settings");
+  const data = await response.json();
+
+  if (!response.ok) {
+    const row = el("tr");
+    const cell = el("td", "muted", text(data.error));
+    cell.colSpan = 4;
+    row.append(cell);
+    featureRows.append(row);
+    return;
+  }
+
+  for (const feature of data.features) {
+    const row = el("tr");
+
+    const state = el("td");
+    const lamp = el("span", `lamp ${feature.enabled ? "up" : "wait"}`, feature.enabled ? "on" : "off");
+    state.append(lamp);
+    if (!feature.is_default) state.append(el("span", "muted small", "  (override)"));
+
+    const actions = el("td");
+    if (feature.toggle === "core") {
+      // Core is not toggleable at all; the gamemode refuses it. Showing a
+      // button that always fails would be worse than showing none.
+      actions.append(el("span", "muted small", "core"));
+    } else {
+      const button = el("button", "chip", feature.enabled ? "turn off" : "turn on");
+      button.onclick = async () => {
+        button.disabled = true;
+        await setSetting("feature", feature.id, feature.enabled ? "off" : "on");
+        loadSettings();
+      };
+      actions.append(button);
+    }
+
+    row.append(
+      el("td", null, `${text(feature.id)}`),
+      state,
+      el("td", "muted", text(feature.toggle)),
+      actions,
+    );
+
+    const title = el("tr");
+    const titleCell = el("td", "muted small", text(feature.title));
+    titleCell.colSpan = 4;
+    titleCell.style.borderBottom = "0";
+    titleCell.style.paddingTop = "0";
+    title.append(titleCell);
+
+    featureRows.append(row);
+    if (feature.title) featureRows.append(title);
+  }
+
+  for (const setting of data.settings) {
+    const row = el("tr");
+
+    const value = el("td");
+    value.append(el("span", null, text(setting.value)));
+    if (setting.value !== setting.default) value.append(el("span", "muted small", "  (override)"));
+
+    const input = el("input");
+    input.type = "text";
+    input.value = text(setting.value);
+    input.style.cssText = "width:90px;padding:3px 6px";
+
+    const save = el("button", "chip", "set");
+    save.onclick = async () => {
+      save.disabled = true;
+      await setSetting("setting", setting.id, input.value.trim());
+      loadSettings();
+    };
+
+    const actions = el("td");
+    actions.append(input, save);
+
+    row.append(
+      el("td", null, text(setting.id)),
+      value,
+      el("td", "muted", text(setting.default)),
+      el("td", "muted", text(setting.bounds)),
+      actions,
+    );
+    settingRows.append(row);
+  }
+}
+
+async function setSetting(kind, id, value) {
+  const response = await fetch("/api/settings", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ kind, id, value }),
+  });
+  const data = await response.json();
+
+  if (!response.ok) {
+    appendLine("error", now(), "cellar", text(data.error));
+    return;
+  }
+
+  appendLine("echo", now(), "you", `> ${text(data.command)}`);
+  for (const line of data.reply || []) appendLine("", now(), "reply", text(line));
+}
+
+async function exportSettings(format, overrides) {
+  const response = await fetch(`/api/settings/export?format=${format}&overrides=${overrides}`);
+  $("#export").textContent = await response.text();
 }
 
 /* ---- releases ----------------------------------------------------------- */

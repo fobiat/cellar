@@ -203,6 +203,121 @@ async fn a_console_command_returns_its_reply() {
     let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
 }
 
+/// The configuration round trip, end to end: read what the server is set to,
+/// write a change, and read it back.
+///
+/// The parsers are unit-tested against the formats read out of
+/// `FeatureDirector.cs` and `SettingDirector.cs`. This proves they also match
+/// what actually arrives through a pty, a log file and the reply window.
+#[tokio::test]
+async fn the_configuration_can_be_captured_changed_and_read_back() {
+    use cellar_core::convar;
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(dir.path().join("logs/sbox-server.log"), &[]);
+
+    let (supervisor, handle, control) = Supervisor::new(config);
+    let mut events = handle.subscribe();
+    let task = tokio::spawn(supervisor.run(control));
+
+    wait_for(&mut events, Duration::from_secs(10), |e| {
+        matches!(e, Event::ServerReady { .. })
+    })
+    .await;
+
+    let features =
+        convar::parse_features(&handle.exec("applejack_features", "test").await.unwrap());
+    assert!(!features.is_empty(), "the listing parsed into nothing");
+
+    let admin = features
+        .iter()
+        .find(|feature| feature.id == "ui.menu.admin")
+        .expect("ui.menu.admin is in the catalogue");
+    assert!(!admin.enabled, "it ships off");
+    assert!(admin.toggle.is_writable());
+
+    let core = features
+        .iter()
+        .find(|feature| feature.id == "economy.manufacture")
+        .expect("a core feature is in the catalogue");
+    assert!(
+        !core.toggle.is_writable(),
+        "core features cannot be toggled"
+    );
+
+    let settings =
+        convar::parse_settings(&handle.exec("applejack_settings", "test").await.unwrap());
+    let arrest = settings
+        .iter()
+        .find(|setting| setting.id == "crime.arrest_seconds")
+        .expect("crime.arrest_seconds is catalogued");
+    assert_eq!(arrest.value, "300");
+    assert!(arrest.is_default());
+
+    // Plan the change the way `cellar settings apply` does, then send it.
+    let current = convar::Snapshot {
+        features: features.clone(),
+        settings: settings.clone(),
+        ..Default::default()
+    };
+
+    let desired = convar::Snapshot {
+        features: vec![convar::Feature {
+            id: "ui.menu.admin".into(),
+            enabled: true,
+            is_default: false,
+            toggle: convar::Toggle::Live,
+            title: String::new(),
+        }],
+        settings: vec![convar::Setting {
+            id: "crime.arrest_seconds".into(),
+            value: "600".into(),
+            default: "300".into(),
+            bounds: None,
+            source: None,
+        }],
+        ..Default::default()
+    };
+
+    let changes = convar::plan(&current, &desired);
+    assert_eq!(changes.len(), 2, "{changes:#?}");
+
+    for change in &changes {
+        handle.exec(&change.command, "test").await.unwrap();
+    }
+
+    // Read it back. A write nothing can observe is not a write.
+    let after = convar::parse_features(&handle.exec("applejack_features", "test").await.unwrap());
+    assert!(
+        after.iter().any(|f| f.id == "ui.menu.admin" && f.enabled),
+        "the feature stayed off: {after:#?}"
+    );
+
+    let after = convar::parse_settings(&handle.exec("applejack_settings", "test").await.unwrap());
+    let arrest = after
+        .iter()
+        .find(|setting| setting.id == "crime.arrest_seconds")
+        .unwrap();
+    assert_eq!(arrest.value, "600");
+    assert!(!arrest.is_default(), "it is now an override");
+
+    // And it survives a round trip through the file format.
+    let snapshot = convar::Snapshot {
+        features: after_features(&handle).await,
+        settings: after.clone(),
+        ..Default::default()
+    };
+    let text = snapshot.to_toml().unwrap();
+    assert_eq!(convar::Snapshot::parse(&text).unwrap(), snapshot);
+
+    handle.stop().await;
+    let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+}
+
+async fn after_features(handle: &cellar_runtime::Handle) -> Vec<cellar_core::convar::Feature> {
+    cellar_core::convar::parse_features(&handle.exec("applejack_features", "test").await.unwrap())
+}
+
 /// A server that ignores `quit` must still be stopped, and the escalation must
 /// be reported rather than silent.
 #[tokio::test]

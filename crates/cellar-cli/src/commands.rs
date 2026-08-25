@@ -414,6 +414,272 @@ pub async fn doc(path: &Path, action: DocAction) -> Result<()> {
     Ok(())
 }
 
+/// Read and write the running server's configuration.
+///
+/// These drive the running instance through its web API rather than through a
+/// socket of their own. `cellar run` owns the console; a second process opening
+/// its own channel to the same terminal is two writers on one file descriptor,
+/// and the interleaving is exactly as bad as it sounds.
+pub async fn settings(path: &Path, action: crate::SettingsAction) -> Result<()> {
+    use cellar_core::convar;
+
+    let config = Config::load(path)?;
+    let client = LiveServer::connect(&config).await?;
+
+    match action {
+        crate::SettingsAction::Dump {
+            yaml,
+            output,
+            overrides,
+            find,
+        } => {
+            let mut snapshot = client.capture(&find).await?;
+            snapshot.hostname = Some(config.server.hostname.clone());
+            snapshot.captured_at = Some(chrono::Utc::now().to_rfc3339());
+
+            if overrides {
+                snapshot = snapshot.overrides_only();
+            }
+
+            let text = if yaml {
+                snapshot.to_yaml()
+            } else {
+                snapshot.to_toml()
+            }
+            .map_err(anyhow::Error::msg)?;
+
+            match output {
+                Some(file) => {
+                    std::fs::write(&file, &text)
+                        .with_context(|| format!("writing {}", file.display()))?;
+                    println!(
+                        "Wrote {} feature(s), {} setting(s) and {} convar(s) to {}.",
+                        snapshot.features.len(),
+                        snapshot.settings.len(),
+                        snapshot.convars.len(),
+                        file.display()
+                    );
+                }
+                None => print!("{text}"),
+            }
+        }
+
+        crate::SettingsAction::Diff { file } => {
+            let changes = client.plan_from_file(&file).await?;
+            print_changes(&changes);
+        }
+
+        crate::SettingsAction::Apply { file, dry_run } => {
+            let changes = client.plan_from_file(&file).await?;
+
+            if changes.is_empty() {
+                println!("Already matches.");
+                return Ok(());
+            }
+
+            print_changes(&changes);
+
+            if dry_run {
+                println!("\nDry run. Nothing was sent.");
+                return Ok(());
+            }
+
+            println!();
+            let mut applied = 0;
+            for change in &changes {
+                if let Some(why) = &change.refused {
+                    println!("  skip  {}: {why}", change.id);
+                    continue;
+                }
+
+                let reply = client.exec(&change.command).await?;
+                // The gamemode refuses an unknown id or an out-of-bounds value
+                // by name and without writing anything, so its own words are
+                // the most useful thing to show.
+                let refused = reply.iter().any(|line| {
+                    let lower = line.to_ascii_lowercase();
+                    lower.contains("refus")
+                        || lower.contains("not a valid")
+                        || lower.contains("unknown")
+                });
+
+                if refused {
+                    println!("  FAIL  {}: {}", change.id, reply.join(" "));
+                } else {
+                    applied += 1;
+                    println!("  ok    {} -> {}", change.id, change.to);
+                }
+            }
+
+            println!("\nApplied {applied} of {}.", changes.len());
+
+            if changes.iter().any(|change| change.needs_restart) {
+                println!("Some of these are read once at boot; restart for them to take effect.");
+            }
+        }
+
+        crate::SettingsAction::Set { id, value } => {
+            let snapshot = client.capture("").await?;
+
+            // Which command depends on which catalogue the id is in, and asking
+            // the server beats guessing from the id's shape.
+            let command = if snapshot.feature(&id).is_some() {
+                let enabled = matches!(
+                    value.to_ascii_lowercase().as_str(),
+                    "on" | "true" | "1" | "enabled"
+                );
+                convar::feature_command(&id, enabled)
+            } else if snapshot.setting(&id).is_some() {
+                convar::setting_command(&id, &value)
+            } else {
+                anyhow::bail!("this server has no feature or setting called '{id}'");
+            };
+
+            println!("> {command}");
+            for line in client.exec(&command).await? {
+                println!("  {line}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn print_changes(changes: &[cellar_core::convar::Change]) {
+    if changes.is_empty() {
+        println!("No changes.");
+        return;
+    }
+
+    for change in changes {
+        let note = match (&change.refused, change.needs_restart) {
+            (Some(why), _) => format!("  ({why})"),
+            (None, true) => "  (needs a restart)".to_owned(),
+            (None, false) => String::new(),
+        };
+        println!("  {:<34} {} -> {}{note}", change.id, change.from, change.to);
+    }
+}
+
+/// The running `cellar run`, reached through its web API.
+struct LiveServer {
+    client: reqwest::Client,
+    base: String,
+}
+
+impl LiveServer {
+    async fn connect(config: &Config) -> Result<Self> {
+        if !config.web.enabled {
+            anyhow::bail!(
+                "these commands talk to a running `cellar run` through its web API, and \
+                 web.enabled is false in this config"
+            );
+        }
+
+        let base = format!("http://{}", config.web.bind.replace("0.0.0.0", "127.0.0.1"));
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .cookie_store(true)
+            .build()?;
+
+        // A password is only needed when the web UI has one, which the config
+        // layer only permits off loopback.
+        if config.web.password_hash.is_some() {
+            let password = std::env::var("CELLAR_WEB_PASSWORD").context(
+                "this server's web UI has a password; set CELLAR_WEB_PASSWORD to use these commands",
+            )?;
+
+            let response = client
+                .post(format!("{base}/api/login"))
+                .json(&serde_json::json!({ "password": password }))
+                .send()
+                .await
+                .with_context(|| format!("reaching {base}"))?;
+
+            if !response.status().is_success() {
+                anyhow::bail!("CELLAR_WEB_PASSWORD was not accepted");
+            }
+        }
+
+        let server = Self { client, base };
+
+        server
+            .client
+            .get(format!("{}/api/status", server.base))
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "no running Cellar at {}. Start one with `cellar run`.",
+                    server.base
+                )
+            })?
+            .error_for_status()
+            .context("the running Cellar refused the request")?;
+
+        Ok(server)
+    }
+
+    async fn exec(&self, command: &str) -> Result<Vec<String>> {
+        let response = self
+            .client
+            .post(format!("{}/api/exec", self.base))
+            .json(&serde_json::json!({ "command": command }))
+            .send()
+            .await?;
+
+        let body: serde_json::Value = response.json().await?;
+
+        if let Some(error) = body.get("error").and_then(|e| e.as_str()) {
+            anyhow::bail!("{error}");
+        }
+
+        Ok(body
+            .get("reply")
+            .and_then(|reply| reply.as_array())
+            .map(|lines| {
+                lines
+                    .iter()
+                    .filter_map(|line| line.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Ask the server for everything it is set to.
+    async fn capture(&self, find: &str) -> Result<cellar_core::convar::Snapshot> {
+        use cellar_core::convar;
+
+        let features = convar::parse_features(&self.exec("applejack_features").await?);
+        let settings = convar::parse_settings(&self.exec("applejack_settings").await?);
+
+        let convars = if find.is_empty() {
+            Vec::new()
+        } else {
+            convar::parse_convars(&self.exec(&format!("find {find}")).await?)
+        };
+
+        Ok(convar::Snapshot {
+            captured_at: None,
+            hostname: None,
+            features,
+            settings,
+            convars,
+        })
+    }
+
+    async fn plan_from_file(&self, file: &Path) -> Result<Vec<cellar_core::convar::Change>> {
+        let text =
+            std::fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
+
+        let desired = cellar_core::convar::Snapshot::parse(&text).map_err(anyhow::Error::msg)?;
+        let current = self.capture("").await?;
+
+        Ok(cellar_core::convar::plan(&current, &desired))
+    }
+}
+
 /// Update Cellar itself.
 ///
 /// Distinct from `cellar update`, which updates the *game*. This one replaces

@@ -20,6 +20,36 @@
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
+/// The feature catalogue, in the shape `applejack_features` prints.
+const FEATURES: &[(&str, &str, &str)] = &[
+    ("ui.menu.admin", "live", "Admin panel"),
+    ("ui.menu.devmenu", "live", "Developer menu"),
+    ("economy.manufacture", "core", "Manufacture"),
+    ("world.daynight", "boot", "Day and night cycle"),
+];
+
+/// The setting catalogue: id, default, bounds, source.
+const SETTINGS: &[(&str, &str, &str, &str)] = &[
+    (
+        "combat.respawn_wait_seconds",
+        "30",
+        "[0, 600]",
+        "sh_config.lua Spawn Time",
+    ),
+    (
+        "crime.arrest_seconds",
+        "300",
+        "[0, 3600]",
+        "sh_config.lua Arrest Time",
+    ),
+    (
+        "chat.talk_radius",
+        "256",
+        "[0, 4096]",
+        "sh_config.lua Talk Radius",
+    ),
+];
+
 struct Options {
     log_file: Option<PathBuf>,
     crash_after: Option<u64>,
@@ -84,6 +114,11 @@ fn main() -> std::process::ExitCode {
     let stdin = std::io::stdin();
     let mut connected = options.players;
 
+    // Feature and setting state, so a write is observable by the next read.
+    // Without that, `settings apply` cannot be tested end to end.
+    let mut features: Vec<String> = vec!["economy.manufacture".to_owned()];
+    let mut settings: Vec<(String, String)> = Vec::new();
+
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         let command = line.trim();
@@ -124,25 +159,90 @@ fn main() -> std::process::ExitCode {
             "applejack_features" => {
                 // The fixed-width shape FeatureDirector.cs prints.
                 emit(&mut log, "Features", "[Features] 41 feature(s)");
-                for (id, state, class, title) in [
-                    ("ui.menu.admin", "off (default off)", "live", "Admin panel"),
-                    (
-                        "ui.menu.devmenu",
-                        "off (default off)",
-                        "live",
-                        "Developer menu",
-                    ),
-                    (
-                        "economy.manufacture",
-                        "on (default on)",
-                        "core",
-                        "Manufacture",
-                    ),
-                ] {
+                for (id, class, title) in FEATURES {
+                    let on = features.iter().any(|held| held == id);
+                    let default_on = *id == "economy.manufacture";
+                    let state = format!(
+                        "{} (default {})",
+                        if on { "on" } else { "off" },
+                        if default_on { "on" } else { "off" }
+                    );
                     emit(
                         &mut log,
                         "Features",
                         &format!("{id:<28} {state:<36} {class:<5} {title}"),
+                    );
+                }
+            }
+            "applejack_settings" => {
+                emit(
+                    &mut log,
+                    "Settings",
+                    "[Settings] a value takes effect where its call site reads it",
+                );
+                for (id, default, bounds, source) in SETTINGS {
+                    let value = settings
+                        .iter()
+                        .find(|(key, _)| key == id)
+                        .map(|(_, value)| value.clone())
+                        .unwrap_or_else(|| (*default).to_owned());
+                    emit(
+                        &mut log,
+                        "Settings",
+                        &format!(
+                            "{id:<34} {value:<10} default {default:<10} {bounds:<18} {source}"
+                        ),
+                    );
+                }
+            }
+            other if other.starts_with("applejack_feature_set ") => {
+                let mut words = other.split_whitespace().skip(1);
+                let id = words.next().unwrap_or_default().to_owned();
+                let state = words.next().unwrap_or_default().to_owned();
+
+                match FEATURES.iter().find(|(known, _, _)| *known == id) {
+                    // A core feature refuses by name and writes nothing.
+                    Some((_, "core", _)) => emit(
+                        &mut log,
+                        "Features",
+                        &format!("[Features] refused: '{id}' is core and cannot be toggled"),
+                    ),
+                    Some(_) => {
+                        features.retain(|held| *held != id);
+                        if state == "on" {
+                            features.push(id.clone());
+                        }
+                        emit(
+                            &mut log,
+                            "Features",
+                            &format!("[Features] {id} is now {state}"),
+                        );
+                    }
+                    None => emit(
+                        &mut log,
+                        "Features",
+                        &format!("[Features] refused: '{id}' is not a feature this build declares"),
+                    ),
+                }
+            }
+            other if other.starts_with("applejack_setting_set ") => {
+                let mut words = other.split_whitespace().skip(1);
+                let id = words.next().unwrap_or_default().to_owned();
+                let value = words.next().unwrap_or_default().to_owned();
+
+                if SETTINGS.iter().any(|(known, _, _, _)| *known == id) {
+                    settings.retain(|(key, _)| *key != id);
+                    settings.push((id.clone(), value.clone()));
+                    emit(
+                        &mut log,
+                        "Settings",
+                        &format!("[Settings] {id} is now {value}"),
+                    );
+                } else {
+                    emit(
+                        &mut log,
+                        "Settings",
+                        &format!("[Settings] refused: '{id}' is not a catalogued setting"),
                     );
                 }
             }

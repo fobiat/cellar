@@ -88,6 +88,12 @@ enum Command {
         action: DocAction,
     },
 
+    /// Read and write the running server's configuration.
+    Settings {
+        #[command(subcommand)]
+        action: SettingsAction,
+    },
+
     /// Update Cellar itself from the published releases.
     SelfUpdate {
         /// Report what is available without installing it.
@@ -107,6 +113,41 @@ enum DbAction {
     Status,
     /// Delete events older than the configured retention.
     Prune,
+}
+
+#[derive(Subcommand)]
+pub enum SettingsAction {
+    /// Capture the running server's features, settings and convars.
+    Dump {
+        /// Write YAML instead of TOML.
+        #[arg(long)]
+        yaml: bool,
+        /// Write to a file instead of standard output.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Only what an operator changed away from the defaults.
+        ///
+        /// The shape worth committing: a full dump is mostly defaults.
+        #[arg(long)]
+        overrides: bool,
+        /// Include the engine's own convars, discovered with `find`.
+        #[arg(long, default_value = "applejack")]
+        find: String,
+    },
+
+    /// Show what a file would change, without changing it.
+    Diff { file: PathBuf },
+
+    /// Apply a file to the running server.
+    Apply {
+        file: PathBuf,
+        /// Print the commands instead of sending them.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Set one feature or setting.
+    Set { id: String, value: String },
 }
 
 #[derive(Subcommand)]
@@ -147,6 +188,7 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Db { action } => commands::db(&cli.config, action).await,
         Command::Doc { action } => commands::doc(&cli.config, action).await,
+        Command::Settings { action } => commands::settings(&cli.config, action).await,
         Command::SelfUpdate { check } => commands::self_update(check).await,
         Command::HashPassword => commands::hash_password(),
     };

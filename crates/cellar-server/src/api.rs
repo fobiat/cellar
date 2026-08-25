@@ -29,8 +29,161 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/db/tables", get(db_tables))
         .route("/api/db/table/{table}", get(db_browse))
         .route("/api/db/query", post(db_query))
+        .route("/api/settings", get(settings).post(set_setting))
+        .route("/api/settings/export", get(export_settings))
         .route("/api/versions", get(versions))
         .route("/api/changelog", get(changelog))
+}
+
+/// Everything the server is currently set to.
+///
+/// Asked of the running server every time rather than cached: a feature toggled
+/// from the in-game admin panel is exactly the change an operator most wants
+/// this screen to be honest about.
+async fn settings(State(state): State<Arc<AppState>>, _: Operator) -> Response {
+    let Some(supervisor) = &state.supervisor else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no server is being supervised",
+        );
+    };
+
+    let features = match supervisor.exec("applejack_features", "web").await {
+        Ok(reply) => cellar_core::convar::parse_features(&reply),
+        Err(why) => return error(StatusCode::BAD_GATEWAY, why),
+    };
+
+    let settings = match supervisor.exec("applejack_settings", "web").await {
+        Ok(reply) => cellar_core::convar::parse_settings(&reply),
+        Err(why) => return error(StatusCode::BAD_GATEWAY, why),
+    };
+
+    Json(serde_json::json!({ "features": features, "settings": settings })).into_response()
+}
+
+#[derive(Deserialize)]
+struct SetRequest {
+    id: String,
+    value: String,
+    /// `feature` or `setting`. Sent by the UI, which already knows which table
+    /// the row came from, rather than guessed from the id's shape here.
+    kind: String,
+}
+
+/// Change one feature or setting.
+async fn set_setting(
+    State(state): State<Arc<AppState>>,
+    operator: Operator,
+    Json(request): Json<SetRequest>,
+) -> Response {
+    let Some(supervisor) = &state.supervisor else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no server is being supervised",
+        );
+    };
+
+    // The id and the value both reach a console that runs at full engine
+    // privilege, so neither may carry a second command.
+    for field in [&request.id, &request.value] {
+        if field.contains(char::is_whitespace) || field.contains(['\n', '\r', ';']) {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "an id and a value are single words",
+            );
+        }
+    }
+
+    let command = match request.kind.as_str() {
+        "feature" => cellar_core::convar::feature_command(
+            &request.id,
+            matches!(request.value.as_str(), "on" | "true" | "1"),
+        ),
+        "setting" => cellar_core::convar::setting_command(&request.id, &request.value),
+        other => return error(StatusCode::BAD_REQUEST, format!("unknown kind '{other}'")),
+    };
+
+    match supervisor.exec(&command, &operator.name).await {
+        Ok(reply) => {
+            if let Some(pool) = &state.pool
+                && let Err(why) = cellar_store::ops::record_command(
+                    pool,
+                    None,
+                    &operator.name,
+                    &command,
+                    &reply,
+                    true,
+                )
+                .await
+            {
+                tracing::warn!("could not record the change: {why}");
+            }
+            Json(serde_json::json!({ "command": command, "reply": reply })).into_response()
+        }
+        Err(why) => error(StatusCode::BAD_GATEWAY, why),
+    }
+}
+
+#[derive(Deserialize)]
+struct ExportQuery {
+    #[serde(default)]
+    format: Option<String>,
+    #[serde(default)]
+    overrides: Option<bool>,
+}
+
+/// The configuration as a file, for committing or for applying elsewhere.
+async fn export_settings(
+    State(state): State<Arc<AppState>>,
+    _: Operator,
+    Query(query): Query<ExportQuery>,
+) -> Response {
+    let Some(supervisor) = &state.supervisor else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no server is being supervised",
+        );
+    };
+
+    let mut snapshot = cellar_core::convar::Snapshot {
+        captured_at: Some(chrono::Utc::now().to_rfc3339()),
+        hostname: supervisor.snapshot().await.map(|s| s.hostname),
+        features: supervisor
+            .exec("applejack_features", "web")
+            .await
+            .map(|reply| cellar_core::convar::parse_features(&reply))
+            .unwrap_or_default(),
+        settings: supervisor
+            .exec("applejack_settings", "web")
+            .await
+            .map(|reply| cellar_core::convar::parse_settings(&reply))
+            .unwrap_or_default(),
+        convars: Vec::new(),
+    };
+
+    if query.overrides.unwrap_or(false) {
+        snapshot = snapshot.overrides_only();
+    }
+
+    let yaml = query.format.as_deref() == Some("yaml");
+    let body = if yaml {
+        snapshot.to_yaml()
+    } else {
+        snapshot.to_toml()
+    };
+
+    match body {
+        Ok(text) => (
+            StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            )],
+            text,
+        )
+            .into_response(),
+        Err(why) => error(StatusCode::INTERNAL_SERVER_ERROR, why),
+    }
 }
 
 /// Installed and available versions, plus what the updater would do about them.

@@ -37,6 +37,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   git checkout against its remote, and the Steam build id of the dedicated
   server. The updater defaults to `notify`, refuses a dirty checkout, refuses
   while anybody is connected, and respects a maintenance window.
+- **The server's configuration as a file.** The 41 features, the 7 catalogued
+  settings and the engine's convars captured to TOML or YAML, diffed against a
+  running server, and applied to one. A partial file sets what it names and
+  never resets what it omits, and the live catalogue decides what is writable
+  rather than the file: a `core` feature is refused and a `boot` one is flagged
+  as needing a restart. `cellar settings dump|diff|apply|set`, and the same
+  thing clickable in the web UI.
 - **Batched Discord webhooks** in the Applejack palette, with player names
   escaped so a display name cannot format the channel.
 - **`cellar-fake-server`**, a stand-in that emits the engine's real log formats,

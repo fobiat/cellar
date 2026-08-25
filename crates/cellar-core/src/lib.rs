@@ -9,6 +9,7 @@
 
 pub mod ansi;
 pub mod config;
+pub mod convar;
 pub mod doc_key;
 pub mod event;
 pub mod grammar;

@@ -110,11 +110,51 @@ log path, and tells you what is wrong rather than failing at startup.
 | `cellar version [--json]` | Installed and available versions. |
 | `cellar changelog [--limit N]` | The gamemode's changelog. |
 | `cellar update [--check\|--now\|--force]` | Check for updates, or take them. |
+| `cellar settings dump\|diff\|apply\|set` | The running server's configuration, as a file. |
 | `cellar db migrate\|status\|prune` | Schema and retention. |
 | `cellar doc ls\|get\|put\|history` | Bridge documents from the shell. |
 | `cellar hash-password` | An argon2 hash for the web UI. |
 
 ---
+
+## Server configuration as a file
+
+Today the only record of how a server is configured is the server. Cellar
+captures the whole thing to TOML or YAML, so it can be committed, diffed and
+applied somewhere else.
+
+```sh
+# What is this server set to?
+cellar settings dump
+
+# Just what somebody changed. This is the shape worth committing: a full dump
+# is mostly defaults.
+cellar settings dump --overrides -o server.toml
+
+# What would this file change?
+cellar settings diff server.toml
+
+# Change it.
+cellar settings apply server.toml
+cellar settings set ui.menu.admin on
+```
+
+Three things share the screen because to an operator they are one question,
+even though the engine keeps them apart: the 41 **features**, the 7 catalogued
+**settings** with their bounds and documented sources, and the engine's own
+**convars**.
+
+Two behaviours worth knowing:
+
+- **A partial file sets what it names and nothing else.** It is not a request to
+  reset everything it omits, because that reading turns a three-line file into a
+  way to wipe a server's configuration.
+- **The live server's catalogue decides what is writable, not the file.** A file
+  claiming a `core` feature is toggleable is still refused, and `boot` features
+  are applied but flagged as needing a restart.
+
+The same thing is clickable in the web UI's Ordinance tab, with an export
+button for each format.
 
 ## The bridge
 

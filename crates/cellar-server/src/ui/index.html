@@ -49,6 +49,7 @@
     <button data-tab="dispatch" aria-selected="true">Dispatch</button>
     <button data-tab="roster">Roster</button>
     <button data-tab="precinct">Precinct</button>
+    <button data-tab="ordinance">Ordinance</button>
     <button data-tab="records">Records</button>
     <button data-tab="players">Registry</button>
     <button data-tab="database">Database</button>
@@ -140,6 +141,47 @@
               <code>ConsoleSystem.Run</code> will not run a protected command.
             </p>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Ordinance: what the server is set to. -->
+    <section id="tab-ordinance" hidden>
+      <div class="panel">
+        <h2>Export</h2>
+        <div class="body">
+          <div class="row">
+            <button class="chip" onclick="exportSettings('toml', false)">whole config, TOML</button>
+            <button class="chip" onclick="exportSettings('yaml', false)">whole config, YAML</button>
+            <button class="chip" onclick="exportSettings('toml', true)">overrides only, TOML</button>
+            <button class="chip" onclick="exportSettings('yaml', true)">overrides only, YAML</button>
+            <button class="action" onclick="loadSettings()">Refresh</button>
+          </div>
+          <p class="muted small" style="margin-top:10px">
+            Overrides only is the shape worth committing: a whole dump is mostly defaults.
+            Apply a file elsewhere with <code>cellar settings apply &lt;file&gt;</code>.
+          </p>
+          <pre id="export" class="small" style="max-height:240px;overflow:auto"></pre>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Features</h2>
+        <div class="body scroll">
+          <table>
+            <thead><tr><th>Feature</th><th>State</th><th>Class</th><th></th></tr></thead>
+            <tbody id="features"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Settings</h2>
+        <div class="body scroll">
+          <table>
+            <thead><tr><th>Setting</th><th>Value</th><th>Default</th><th>Bounds</th><th></th></tr></thead>
+            <tbody id="settings"></tbody>
+          </table>
         </div>
       </div>
     </section>
