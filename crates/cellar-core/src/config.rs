@@ -112,7 +112,7 @@ pub struct ServerConfig {
     #[serde(default)]
     pub game: Option<String>,
 
-    /// The map ident handed to `+map`, for example `thieves.rpdowntown3t`.
+    /// The map ident appended after a published `+game` ident.
     #[serde(default)]
     pub map: Option<String>,
 

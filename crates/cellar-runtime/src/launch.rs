@@ -68,15 +68,14 @@ pub fn command_for(config: &ServerConfig, bridge_needs_local_http: bool) -> Comm
             .unwrap_or_else(|| path_string(&config.project)),
     );
 
-    args.push("+hostname".to_owned());
-    args.push(config.hostname.clone());
-
     if let Some(map) = &config.map
         && !map.trim().is_empty()
     {
-        args.push("+map".to_owned());
         args.push(map.clone());
     }
+
+    args.push("+hostname".to_owned());
+    args.push(config.hostname.clone());
 
     // Deliberately no `+maxplayers`. There is no such convar or launch switch in
     // the engine: `LaunchArguments.MaxPlayers` exists but nothing on the command
@@ -204,10 +203,8 @@ mod tests {
 
         let command = command_for(&config, false);
         let game = command.args.iter().position(|arg| arg == "+game").unwrap();
-        let map = command.args.iter().position(|arg| arg == "+map").unwrap();
-
         assert_eq!(command.args[game + 1], "fobiat.applejackrp");
-        assert_eq!(command.args[map + 1], "thieves.rpdowntown3t");
+        assert_eq!(command.args[game + 2], "thieves.rpdowntown3t");
     }
 
     /// The correction: the deployed entrypoint passes `+maxplayers` today and

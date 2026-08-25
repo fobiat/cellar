@@ -38,7 +38,7 @@ serialisation path, so a config dump or a crash log cannot leak one.
 | `executable` | *required* | Path to `sbox-server.exe`. |
 | `project` | *required unless `game` is set* | Path to the local `.sbproj`. |
 | `game` | unset | Published package ident such as `fobiat.applejackrp`. |
-| `map` | unset | Map ident passed to the engine, such as `thieves.rpdowntown3t`. |
+| `map` | unset | Map ident appended to a published game ident, such as `thieves.rpdowntown3t`. |
 | `launcher` | `wine` | `wine` or `native`. `native` on Windows. |
 | `hostname` | `"AppleJackRP Dev"` | Server name, and what the status bar shows. |
 | `working_dir` | executable's directory | Working directory for the child. |
