@@ -1,0 +1,130 @@
+# Cellar. Copy to cellar.toml and edit.
+#
+# Secrets are never in this file. They come from the environment:
+#
+#   CELLAR_DATABASE_URL         mysql://user:password@host/database
+#   CELLAR_GSLT                 Steam Game Server Login Token
+#   CELLAR_BRIDGE_SECRET        for bridge.auth = "shared_secret"
+#   CELLAR_WEB_PASSWORD_HASH    from `cellar hash-password`
+#   CELLAR_DISCORD_WEBHOOK_URL  Discord notifications
+#   CELLAR_WEBHOOK_URL          generic JSON notifications
+
+[server]
+# Linux, in the container image built from AppleJackRP's server/Dockerfile:
+executable = "/home/container/sbox/sbox-server.exe"
+project = "/home/container/projects/applejackrp/applejackrp.sbproj"
+launcher = "wine"
+
+# Windows, natively:
+# executable = 'C:\sbox\sbox-server.exe'
+# project = 'C:\Users\Shadow\Desktop\Projects\AppleJackRP-sandbox\applejackrp.sbproj'
+# launcher = "native"
+
+hostname = "AppleJackRP Dev"
+
+# The engine's data directory, beside features.json and permissions.json.
+# Cellar writes hosting.json here before starting the server. Required when the
+# bridge is enabled: without it the gamemode silently keeps using local files.
+# data_dir = "/home/container/.local/share/sbox/data"
+
+# Where the engine writes its log. Defaults to <executable dir>/logs/sbox-server.log,
+# which is what the engine does unless FACEPUNCH_ENGINE says otherwise.
+# log_file = "/home/container/sbox/logs/sbox-server.log"
+
+# Off by default, matching the deployed server: players route through Steam's
+# relay and no inbound port is needed. Turn on only if you want the real address
+# exposed.
+direct_connect = false
+port = 27015
+query_port = 27016
+
+# The log line that means "serving". This default is AppleJackRP's own, from
+# Code/NetworkBootstrap.cs.
+ready_pattern = "Lobby created - session is joinable"
+
+# Note: no maxplayers. The engine has no such convar or launch switch; the real
+# ceiling is applejackrp.sbproj's Metadata.MaxPlayers.
+
+[supervisor]
+# never | always | on_failure
+restart = "on_failure"
+
+# How long a graceful stop waits after `quit` before killing. The engine has
+# nine shutdown steps to get through, including the Steam logoff. Kubernetes
+# needs terminationGracePeriodSeconds at least this large.
+graceful_timeout_seconds = 30
+sample_interval_seconds = 2
+
+[supervisor.backoff]
+initial = 2
+maximum = 120
+multiplier = 2.0
+crash_loop_threshold = 5
+window = 300
+healthy_after = 60
+
+[database]
+enabled = true
+max_connections = 8
+migrate_on_start = true
+event_retention_days = 90
+
+[bridge]
+enabled = true
+
+# Loopback, which is what makes "trusted" auth defensible. Cellar refuses to
+# start trusted auth on any other address.
+bind = "127.0.0.1:8080"
+
+# What gets written into hosting.json for the gamemode to dial. Must be the
+# final URL: the engine strips Authorization on every redirect hop.
+public_url = "http://127.0.0.1:8080"
+
+# The Auth.GetToken service name. HostingConfigStore refuses a document without one.
+auth_audience = "applejack-bridge"
+
+# trusted | shared_secret | facepunch
+#
+# "trusted" does not verify the token; there is no published endpoint that can.
+# It leans on the bridge being unreachable from anywhere but the game host.
+# "facepunch" is refused at startup rather than silently downgraded.
+auth = "trusted"
+
+# Which server's documents these are. One value today.
+scope = "applejackrp-dev"
+
+max_body_bytes = 1048576
+rate_limit_per_minute = 600
+
+[web]
+enabled = true
+bind = "127.0.0.1:8081"
+# On any non-loopback address, CELLAR_WEB_PASSWORD_HASH is required: the console
+# behind this runs at full engine privilege.
+
+[notify]
+enabled = false
+# Seconds to gather events before sending, so a join wave is one message.
+batch_seconds = 5
+# Empty means every notable kind.
+kinds = []
+
+[update]
+# off | notify | apply. Default is notify: taking an update is opt-in.
+policy = "notify"
+check_interval_minutes = 60
+check_remote = true
+
+# Leave this on. An updater that restarts a server with people on it is worse
+# than no updater.
+only_when_empty = true
+
+# Local-time hours. Equal values mean any time; 22 to 4 wraps midnight.
+window_start_hour = 0
+window_end_hour = 0
+
+update_gamemode = true
+update_engine = false
+# Needed for update_engine and for reading the installed build id.
+# steam_dir = "/home/container/sbox"
+# steamcmd = "/usr/bin/steamcmd"

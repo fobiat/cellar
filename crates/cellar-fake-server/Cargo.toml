@@ -1,0 +1,26 @@
+[package]
+name = "cellar-fake-server"
+description = "A stand-in for sbox-server.exe, so Cellar can be tested without Steam, Wine or s&box."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "cellar-fake-server"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { workspace = true }
+
+[dev-dependencies]
+cellar-core = { workspace = true }
+cellar-runtime = { workspace = true }
+tokio = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

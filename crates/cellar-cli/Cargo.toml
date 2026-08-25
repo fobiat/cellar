@@ -1,0 +1,36 @@
+[package]
+name = "cellar-cli"
+description = "Cellar: a dedicated server runner and manager for s&box / AppleJackRP."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "cellar"
+path = "src/main.rs"
+
+[dependencies]
+cellar-core = { workspace = true }
+cellar-runtime = { workspace = true }
+cellar-store = { workspace = true }
+cellar-server = { workspace = true }
+cellar-notify = { workspace = true }
+cellar-update = { workspace = true }
+cellar-tui = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+axum = { workspace = true }
+sqlx = { workspace = true }
+toml = { workspace = true }
+rpassword = "7"
+
+[lints]
+workspace = true
