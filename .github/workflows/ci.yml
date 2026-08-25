@@ -77,7 +77,13 @@ jobs:
 
   windows:
     name: windows build
-    runs-on: windows-latest
+    # GitHub-hosted by default, overridable to a self-hosted runner: there was
+    # no Windows runner to route to before, so this job pinned to
+    # windows-latest and stayed permanently red on the same billing block the
+    # `gate` job's comment above describes. `CI_WINDOWS_RUNNER` is separate
+    # from `CI_RUNNER` because they need different label sets (this one is a
+    # Windows label, not `cellar-runners`).
+    runs-on: ${{ vars.CI_WINDOWS_RUNNER || 'windows-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
