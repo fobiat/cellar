@@ -405,7 +405,7 @@ pub async fn doc(path: &Path, action: DocAction) -> Result<()> {
                     "r{:<6} {}  {}",
                     revision.revision,
                     revision.written_at.format("%Y-%m-%d %H:%M:%S"),
-                    revision.written_by.as_deref().unwrap_or("—")
+                    revision.written_by.as_deref().unwrap_or("unknown")
                 );
             }
         }
