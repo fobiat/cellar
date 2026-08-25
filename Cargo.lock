@@ -285,6 +285,7 @@ dependencies = [
  "cellar-update",
  "chrono",
  "clap",
+ "reqwest",
  "rpassword",
  "serde_json",
  "sqlx",

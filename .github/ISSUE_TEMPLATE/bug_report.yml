@@ -1,0 +1,82 @@
+name: Bug report
+description: Something Cellar does that it should not, or does not do that it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two things before you start.
+
+        **Do not paste secrets.** `cellar config` and `cellar status --json`
+        already redact them, but a raw `cellar.toml`, a systemd env file or an
+        engine stack trace can carry a database URL, a GSLT or a webhook URL.
+        Redact before pasting.
+
+        **`cellar doctor` first.** It checks the executable, the project, Wine,
+        the database and the log path, and it names the problem for most
+        configuration faults.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      placeholder: |
+        1. cellar run --config ...
+        2. join the server
+        3. the roster shows ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: cellar doctor
+      description: Its full output. It names paths, not secrets.
+      render: text
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux, under Wine, in a container
+        - Linux, under Wine, on a host
+        - Linux, in Kubernetes
+        - Windows, native
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Cellar version
+      description: From `cellar --version`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: |
+        Cellar's own output, and the engine's, if the two disagree. If the
+        problem is a log line Cellar misread, the **raw line** from
+        `logs/sbox-server.log` is the single most useful thing you can include.
+      render: text
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have removed any database URL, GSLT, webhook URL or password from what I pasted.
+          required: true

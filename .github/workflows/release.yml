@@ -1,0 +1,140 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux x86_64
+            target: x86_64-unknown-linux-gnu
+            asset: x86_64-unknown-linux
+            archive: tar.gz
+            suffix: ""
+          - os: windows-latest
+            label: windows x86_64
+            target: x86_64-pc-windows-msvc
+            asset: x86_64-pc-windows
+            archive: zip
+            suffix: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: build
+        run: cargo build --release --target ${{ matrix.target }} -p cellar-cli -p cellar-fake-server
+
+      # Two artifacts per platform, deliberately.
+      #
+      # The archive is what the installer scripts take: it carries the example
+      # config as well as the binaries. The bare binary is what `cellar
+      # self-update` takes, so replacing the running binary needs no zip or tar
+      # reader inside a server manager.
+      - name: package (unix)
+        if: runner.os != 'Windows'
+        run: |
+          set -eu
+          staging=staging
+          mkdir -p "$staging" dist
+          cp "target/${{ matrix.target }}/release/cellar" "$staging/"
+          cp "target/${{ matrix.target }}/release/cellar-fake-server" "$staging/"
+          cp cellar.toml.example README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE "$staging/"
+
+          tar -czf "dist/cellar-${{ matrix.asset }}.tar.gz" -C "$staging" .
+          cp "target/${{ matrix.target }}/release/cellar" "dist/cellar-${{ matrix.asset }}"
+
+          cd dist
+          for f in *; do
+            [ -f "$f" ] && [ "${f##*.}" != "sha256" ] && sha256sum "$f" > "$f.sha256"
+          done
+          ls -la
+
+      - name: package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force staging, dist | Out-Null
+
+          Copy-Item "target/${{ matrix.target }}/release/cellar.exe" staging/
+          Copy-Item "target/${{ matrix.target }}/release/cellar-fake-server.exe" staging/
+          Copy-Item cellar.toml.example, README.md, CHANGELOG.md, LICENSE-MIT, LICENSE-APACHE staging/
+
+          Compress-Archive -Path staging/* -DestinationPath "dist/cellar-${{ matrix.asset }}.zip" -Force
+          Copy-Item "target/${{ matrix.target }}/release/cellar.exe" "dist/cellar-${{ matrix.asset }}.exe"
+
+          Get-ChildItem dist -File | Where-Object { $_.Extension -ne '.sha256' } | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            # sha256sum's own format, so the installers parse one shape on both
+            # platforms.
+            "$hash  $($_.Name)" | Out-File -Encoding ascii "$($_.FullName).sha256"
+          }
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cellar-${{ matrix.asset }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: collect
+        run: |
+          mkdir -p dist
+          find artifacts -type f -exec cp {} dist/ \;
+          ls -la dist
+
+      # Every archive and every bare binary must have a checksum beside it, or
+      # both installers and `self-update` refuse to install. Better to fail the
+      # release than to publish something nobody can take.
+      - name: every artifact has a checksum
+        run: |
+          set -eu
+          missing=0
+          for f in dist/*; do
+            case "$f" in *.sha256) continue ;; esac
+            [ -f "$f.sha256" ] || { echo "::error::no checksum for $(basename "$f")"; missing=1; }
+          done
+          exit "$missing"
+
+      - name: release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: ${{ inputs.tag || github.ref_name }}
+          body_path: CHANGELOG.md
+          files: dist/*
+          draft: false
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}

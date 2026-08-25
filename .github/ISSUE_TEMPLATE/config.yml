@@ -1,0 +1,19 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Something security-sensitive
+    url: https://github.com/fobiat/cellar/security/advisories/new
+    about: >-
+      Report it privately, not as an issue. Cellar holds a database credential,
+      a Steam token and a console that runs at full engine privilege.
+
+  - name: AppleJackRP itself
+    url: https://fobiat.dev/applejack
+    about: >-
+      Gameplay, the gamemode's own commands, or anything inside the game rather
+      than the manager around it.
+
+  - name: How the persistence bridge is meant to work
+    url: https://fobiat.dev/applejack/docs/design/20_persistence
+    about: >-
+      The contract Cellar implements, including why 404 is the only status that
+      may mean "absent".

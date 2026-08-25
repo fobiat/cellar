@@ -414,6 +414,109 @@ pub async fn doc(path: &Path, action: DocAction) -> Result<()> {
     Ok(())
 }
 
+/// Update Cellar itself.
+///
+/// Distinct from `cellar update`, which updates the *game*. This one replaces
+/// the running binary, and refuses to install anything whose SHA-256 does not
+/// match the checksum published beside it.
+pub async fn self_update(check_only: bool) -> Result<()> {
+    use cellar_update::selfupdate;
+
+    let running = std::env::current_exe().context("finding this binary")?;
+    // Sweep a `.old` left by a previous update. On Windows it is only
+    // deletable once the process that was running it has exited, which is why
+    // this happens here rather than at the end of the update.
+    selfupdate::sweep(&running);
+
+    let current = env!("CARGO_PKG_VERSION");
+    let target = selfupdate::current_target();
+
+    let client = reqwest_client()?;
+    let json: serde_json::Value = client
+        .get(selfupdate::DEFAULT_RELEASES_URL)
+        .header("User-Agent", "cellar")
+        .send()
+        .await
+        .context("reaching the release API")?
+        .json()
+        .await
+        .context("reading the release document")?;
+
+    let Some(release) = selfupdate::parse_release(&json) else {
+        anyhow::bail!("no releases published yet");
+    };
+
+    if !selfupdate::is_newer(current, &release.tag) {
+        println!("Cellar {current} is current.");
+        return Ok(());
+    }
+
+    println!("Cellar {} is available (running {current}).", release.tag);
+    if !release.notes.trim().is_empty() {
+        println!();
+        for line in release.notes.lines().take(20) {
+            println!("  {line}");
+        }
+    }
+
+    if check_only {
+        println!("\nRun `cellar self-update` to install it.");
+        return Ok(());
+    }
+
+    // The bare binary, not the archive: replacing one file needs no unpacking.
+    let asset = release
+        .binary_for(target)
+        .with_context(|| format!("no bare binary asset for {target} in {}", release.tag))?;
+
+    let checksum_asset = release
+        .checksum_for(asset)
+        .context("no published checksum; refusing to install an unverified binary")?;
+
+    println!("\nDownloading {}", asset.name);
+    let bytes = client
+        .get(&asset.url)
+        .header("User-Agent", "cellar")
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+
+    let checksum = client
+        .get(&checksum_asset.url)
+        .header("User-Agent", "cellar")
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+
+    selfupdate::verify(&bytes, &checksum).map_err(anyhow::Error::new)?;
+    println!("Checksum matches.");
+
+    let retired = selfupdate::install(&running, &bytes).map_err(anyhow::Error::new)?;
+
+    println!("Installed {} to {}.", release.tag, running.display());
+    if retired.exists() {
+        // Windows cannot delete the image it is executing. The next run sweeps it.
+        println!(
+            "The previous binary is at {}; it is removed on the next run.",
+            retired.display()
+        );
+    }
+    println!("\nRestart Cellar for the new version to take effect.");
+
+    Ok(())
+}
+
+fn reqwest_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .context("building an http client")
+}
+
 /// Hash a password so a plaintext one never has to be typed into a file.
 pub fn hash_password() -> Result<()> {
     let password = rpassword::prompt_password("Operator password: ")?;

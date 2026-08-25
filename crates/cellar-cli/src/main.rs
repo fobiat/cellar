@@ -88,6 +88,13 @@ enum Command {
         action: DocAction,
     },
 
+    /// Update Cellar itself from the published releases.
+    SelfUpdate {
+        /// Report what is available without installing it.
+        #[arg(long)]
+        check: bool,
+    },
+
     /// Hash an operator password for the web UI.
     HashPassword,
 }
@@ -140,6 +147,7 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Db { action } => commands::db(&cli.config, action).await,
         Command::Doc { action } => commands::doc(&cli.config, action).await,
+        Command::SelfUpdate { check } => commands::self_update(check).await,
         Command::HashPassword => commands::hash_password(),
     };
 

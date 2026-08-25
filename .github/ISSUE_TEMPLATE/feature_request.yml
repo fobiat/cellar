@@ -1,0 +1,48 @@
+name: Feature request
+description: Something Cellar should be able to do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: |
+        What you are trying to do, and what stops you. The problem is more
+        useful than a proposed solution, because it leaves room for a better one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: Optional. A shape, a command, a screen.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      options:
+        - Supervisor (spawning, restarts, shutdown)
+        - Console (commands, log parsing)
+        - Bridge (persistence, MySQL)
+        - Web UI
+        - TUI
+        - CLI
+        - Updater and versions
+        - Webhooks
+        - Packaging, installers, Kubernetes
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: engine
+    attributes:
+      label: Does the engine support it?
+      description: |
+        Optional, and genuinely useful. Several obvious features are impossible
+        rather than unimplemented: s&box has no RCON, gamemode code cannot open
+        a listening socket, and Steam A2S reports zero players because nothing
+        calls `BUpdateUserData`. If you know a request runs into one of those,
+        or know that it does not, say so.

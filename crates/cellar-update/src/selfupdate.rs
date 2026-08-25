@@ -42,11 +42,28 @@ pub struct Asset {
 }
 
 impl Release {
-    /// The asset for a platform, by the naming convention the release workflow uses.
+    /// The archive for a platform, which is what the installer scripts take.
     pub fn asset_for(&self, target: &str) -> Option<&Asset> {
-        self.assets
-            .iter()
-            .find(|asset| asset.name.contains(target) && !asset.name.ends_with(".sha256"))
+        self.assets.iter().find(|asset| {
+            asset.name.contains(target)
+                && !asset.name.ends_with(".sha256")
+                && (asset.name.ends_with(".zip") || asset.name.ends_with(".tar.gz"))
+        })
+    }
+
+    /// The bare binary for a platform.
+    ///
+    /// Published alongside the archive specifically so `self-update` can replace
+    /// the running binary without unpacking anything. Teaching a server manager
+    /// to read zip and tar formats, in-process, to update itself is a lot of
+    /// attack surface for a step that a single file makes unnecessary.
+    pub fn binary_for(&self, target: &str) -> Option<&Asset> {
+        self.assets.iter().find(|asset| {
+            asset.name.contains(target)
+                && !asset.name.ends_with(".sha256")
+                && !asset.name.ends_with(".zip")
+                && !asset.name.ends_with(".tar.gz")
+        })
     }
 
     /// The checksum file beside an asset.

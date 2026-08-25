@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  gate:
+    name: build, test, clippy, fmt
+    runs-on: ubuntu-latest
+
+    # The same MariaDB the integration tests expect. Without it they skip, which
+    # would quietly turn the SQL half of this project into untested code.
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: cellartest
+          MARIADB_DATABASE: cellar
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mariadb-admin ping -uroot -pcellartest --silent"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --all --check
+
+      - name: build
+        run: cargo build --workspace --all-targets
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test
+        env:
+          CELLAR_TEST_DATABASE_URL: mysql://root:cellartest@127.0.0.1:3306/cellar
+        run: cargo test --workspace
+
+      # The database tests skip themselves when no server is configured, which
+      # is right locally and wrong here. This proves they actually ran.
+      - name: prove the database tests were not skipped
+        env:
+          CELLAR_TEST_DATABASE_URL: mysql://root:cellartest@127.0.0.1:3306/cellar
+        run: |
+          output=$(cargo test -p cellar-store --test mysql -- --nocapture 2>&1)
+          echo "$output"
+          if echo "$output" | grep -q "skipping: CELLAR_TEST_DATABASE_URL is not set"; then
+            echo "::error::the database tests skipped despite a configured server"
+            exit 1
+          fi
+
+  windows:
+    name: windows build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The dedicated server is Windows-only, so this target is not optional.
+      # Tests too: the pty layer is ConPTY here and forkpty on Linux, and only
+      # one of those is exercised by the Linux job.
+      - name: build
+        run: cargo build --workspace --all-targets
+
+      - name: test
+        run: cargo test --workspace
+
+  notify-discord:
+    name: notify
+    runs-on: ubuntu-latest
+    needs: [gate, windows]
+    if: always()
+    steps:
+      - name: post the result
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          # A quiet no-op when the secret is unset, so a fork's CI does not fail
+          # on a credential it was never going to have.
+          if [ -z "${WEBHOOK}" ]; then
+            echo "no DISCORD_WEBHOOK_URL configured; skipping"
+            exit 0
+          fi
+
+          if [ "${{ needs.gate.result }}" = "success" ] && [ "${{ needs.windows.result }}" = "success" ]; then
+            colour=7317090   # orchard
+            state="passed"
+          else
+            colour=14310221  # russet
+            state="failed"
+          fi
+
+          jq -n \
+            --arg title "CI ${state}" \
+            --arg url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg desc "\`${{ github.ref_name }}\` · ${{ github.event_name }} · linux ${{ needs.gate.result }}, windows ${{ needs.windows.result }}" \
+            --argjson colour "${colour}" \
+            '{embeds:[{title:$title, url:$url, description:$desc, color:$colour}]}' \
+            | curl -sS -X POST -H 'content-type: application/json' -d @- "${WEBHOOK}"
