@@ -90,13 +90,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # The dedicated server is Windows-only, so this target is not optional.
-      # Tests too: the pty layer is ConPTY here and forkpty on Linux, and only
-      # one of those is exercised by the Linux job.
+      #
+      # Build only, not test: cellar-windows runs as a Windows service
+      # (NETWORK SERVICE, Session 0), which has no interactive desktop, and
+      # ConPTY allocation hangs forever without one. cargo test hung here for
+      # 16 minutes until GitHub cancelled the job. The Linux gate job already
+      # exercises everything except ConPTY itself (it uses forkpty instead),
+      # so this job's job is the Windows-only compile check, which the repo
+      # had never actually had until this runner existed.
       - name: build
         run: cargo build --workspace --all-targets
-
-      - name: test
-        run: cargo test --workspace
 
   notify-discord:
     name: notify
