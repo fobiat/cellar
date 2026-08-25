@@ -13,6 +13,9 @@
 # Linux, in the container image built from AppleJackRP's server/Dockerfile:
 executable = "/home/container/sbox/sbox-server.exe"
 project = "/home/container/projects/applejackrp/applejackrp.sbproj"
+# For a published package, use `game` instead of `project`:
+# game = "fobiat.applejackrp"
+# map = "thieves.rpdowntown3t"
 launcher = "wine"
 
 # Windows, natively:

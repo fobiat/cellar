@@ -689,6 +689,8 @@ mod tests {
             server: ServerConfig {
                 executable: PathBuf::from("/bin/true"),
                 project: PathBuf::from("/tmp/a.sbproj"),
+                game: None,
+                map: None,
                 launcher: Launcher::Native,
                 working_dir: None,
                 log_file: None,

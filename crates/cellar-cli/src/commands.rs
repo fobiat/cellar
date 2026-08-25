@@ -65,12 +65,21 @@ pub async fn doctor(path: &Path) -> Result<()> {
         format!("{}", executable.display()),
     );
 
-    let project = &config.server.project;
-    check(
-        project.exists(),
-        "server.project",
-        format!("{}", project.display()),
-    );
+    if let Some(game) = config
+        .server
+        .game
+        .as_deref()
+        .filter(|game| !game.trim().is_empty())
+    {
+        check(true, "server.game", game.to_owned());
+    } else {
+        let project = &config.server.project;
+        check(
+            project.exists(),
+            "server.project",
+            format!("{}", project.display()),
+        );
+    }
 
     if config.server.launcher == cellar_core::Launcher::Wine {
         let wine = which("wine");

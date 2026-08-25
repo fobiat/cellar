@@ -27,6 +27,8 @@ fn config(log_file: PathBuf, extra: &[&str]) -> Config {
         server: ServerConfig {
             executable: PathBuf::from(FAKE_SERVER),
             project: PathBuf::from("/tmp/applejackrp.sbproj"),
+            game: None,
+            map: None,
             launcher: Launcher::Native,
             working_dir: None,
             log_file: Some(log_file.clone()),

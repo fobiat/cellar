@@ -59,10 +59,24 @@ pub fn command_for(config: &ServerConfig, bridge_needs_local_http: bool) -> Comm
     // idles at the bare console without ever booting a map; `+game` with a local
     // .sbproj compiles it and loads the project's own default scene.
     args.push("+game".to_owned());
-    args.push(path_string(&config.project));
+    args.push(
+        config
+            .game
+            .as_deref()
+            .filter(|game| !game.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| path_string(&config.project)),
+    );
 
     args.push("+hostname".to_owned());
     args.push(config.hostname.clone());
+
+    if let Some(map) = &config.map
+        && !map.trim().is_empty()
+    {
+        args.push("+map".to_owned());
+        args.push(map.clone());
+    }
 
     // Deliberately no `+maxplayers`. There is no such convar or launch switch in
     // the engine: `LaunchArguments.MaxPlayers` exists but nothing on the command
@@ -138,6 +152,8 @@ mod tests {
         ServerConfig {
             executable: PathBuf::from("/home/container/sbox/sbox-server.exe"),
             project: PathBuf::from("/home/container/projects/applejackrp/applejackrp.sbproj"),
+            game: None,
+            map: None,
             launcher: Launcher::Wine,
             working_dir: None,
             log_file: None,
@@ -178,6 +194,20 @@ mod tests {
             !command.args.iter().any(|a| a == "+project"),
             "+project idles at the bare console instead of booting a map"
         );
+    }
+
+    #[test]
+    fn published_game_and_map_replace_the_local_project() {
+        let mut config = config();
+        config.game = Some("fobiat.applejackrp".into());
+        config.map = Some("thieves.rpdowntown3t".into());
+
+        let command = command_for(&config, false);
+        let game = command.args.iter().position(|arg| arg == "+game").unwrap();
+        let map = command.args.iter().position(|arg| arg == "+map").unwrap();
+
+        assert_eq!(command.args[game + 1], "fobiat.applejackrp");
+        assert_eq!(command.args[map + 1], "thieves.rpdowntown3t");
     }
 
     /// The correction: the deployed entrypoint passes `+maxplayers` today and

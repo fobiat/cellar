@@ -102,11 +102,19 @@ pub struct ServerConfig {
     /// Wine prefix's view on Linux.
     pub executable: PathBuf,
 
-    /// The `.sbproj` handed to `+game`.
+    /// The local `.sbproj` handed to `+game` when `game` is unset.
     ///
     /// `+game`, not `+project`: `+project` loads metadata and idles at the bare
     /// console without ever booting a map.
     pub project: PathBuf,
+
+    /// A published package ident such as `fobiat.applejackrp`.
+    #[serde(default)]
+    pub game: Option<String>,
+
+    /// The map ident handed to `+map`, for example `thieves.rpdowntown3t`.
+    #[serde(default)]
+    pub map: Option<String>,
 
     /// Launcher. `Native` on Windows, `Wine` on Linux.
     #[serde(default)]
@@ -514,8 +522,12 @@ impl Config {
             return Err(ConfigError::Invalid("server.executable is required".into()));
         }
 
-        if self.server.project.as_os_str().is_empty() {
-            return Err(ConfigError::Invalid("server.project is required".into()));
+        if self.server.project.as_os_str().is_empty()
+            && self.server.game.as_deref().is_none_or(str::is_empty)
+        {
+            return Err(ConfigError::Invalid(
+                "server.project or server.game is required".into(),
+            ));
         }
 
         if self.bridge.enabled {
@@ -678,6 +690,8 @@ mod tests {
             server: ServerConfig {
                 executable: PathBuf::from("/home/container/sbox/sbox-server.exe"),
                 project: PathBuf::from("/home/container/projects/applejackrp/applejackrp.sbproj"),
+                game: None,
+                map: None,
                 launcher: Launcher::Wine,
                 working_dir: None,
                 log_file: None,
