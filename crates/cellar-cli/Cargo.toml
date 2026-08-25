@@ -20,6 +20,7 @@ cellar-server = { workspace = true }
 cellar-notify = { workspace = true }
 cellar-update = { workspace = true }
 cellar-tui = { workspace = true }
+cellar-mariadb = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

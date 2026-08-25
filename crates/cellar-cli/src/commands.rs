@@ -9,7 +9,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use cellar_core::config::Config;
 
-use crate::{DbAction, DocAction};
+use crate::{DbAction, DocAction, MariadbAction};
 
 /// Print the resolved config, with every secret already redacted by its type.
 pub fn show_config(path: &Path) -> Result<()> {
@@ -332,6 +332,61 @@ pub async fn db(path: &Path, action: DbAction) -> Result<()> {
                 cellar_store::ops::prune_events(&pool, config.database.event_retention_days)
                     .await?;
             println!("Removed {removed} event(s).");
+        }
+    }
+
+    Ok(())
+}
+
+/// Provision or report on the locally-hosted MariaDB.
+///
+/// Distinct from `db` above, which operates on whatever `database.url`
+/// already points at, local or remote, and needs no `[mariadb]` section to
+/// do it. This only makes sense when Cellar is hosting the instance itself.
+pub async fn mariadb(path: &Path, action: MariadbAction) -> Result<()> {
+    let config = Config::load(path)?;
+    let mariadb = &config.mariadb;
+
+    if !mariadb.managed {
+        anyhow::bail!(
+            "mariadb.managed is not set; Cellar is not configured to host its own database. \
+             See the [mariadb] section in cellar.toml."
+        );
+    }
+
+    match action {
+        MariadbAction::Provision => {
+            let client = reqwest_client()?;
+            let url = cellar_mariadb::provision(mariadb, &client).await?;
+
+            println!(
+                "Provisioned mariadb {} on 127.0.0.1:{}.",
+                mariadb.version, mariadb.port
+            );
+            println!("\nCELLAR_DATABASE_URL='{url}'");
+            println!("\nSet this in your environment before running `cellar run`.");
+        }
+        MariadbAction::Status => {
+            let installed = mariadb
+                .install_dir
+                .as_deref()
+                .is_some_and(cellar_mariadb::release::already_installed);
+
+            println!("version      {}", mariadb.version);
+            println!("installed    {}", if installed { "yes" } else { "no" });
+            println!("port         {}", mariadb.port);
+
+            match mariadb
+                .data_dir
+                .as_deref()
+                .and_then(cellar_mariadb::read_marker)
+            {
+                Some(marker) => println!(
+                    "provisioned  yes (database `{}`, user `{}`)",
+                    marker.database, marker.username
+                ),
+                None => println!("provisioned  no; run `cellar mariadb provision`"),
+            }
         }
     }
 

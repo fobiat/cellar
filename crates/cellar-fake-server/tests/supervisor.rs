@@ -49,6 +49,7 @@ fn config(log_file: PathBuf, extra: &[&str]) -> Config {
         web: Default::default(),
         notify: Default::default(),
         update: Default::default(),
+        mariadb: Default::default(),
     }
 }
 

@@ -113,6 +113,61 @@ that bite are recorded in [Troubleshooting](TROUBLESHOOTING.md#mariadb-and-mysql
 
 ---
 
+## `[mariadb]`
+
+Cellar hosting its own MariaDB, rather than only connecting to one running
+elsewhere. Independent of `[database]`: this section only decides whether
+`cellar run` also downloads (if needed), initializes (if needed) and
+supervises a `mariadbd` process. `database.url`/`CELLAR_DATABASE_URL` is
+still the one source of the connection string either way; `cellar mariadb
+provision` prints one for you to set, it does not write one anywhere itself.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `managed` | `false` | Download, initialize and supervise a local instance. |
+| `version` | *(none)* | Exact version, e.g. `"11.4.5"`. Never `"latest"`. |
+| `sha256` | *(none)* | sha256 of the official win64 archive for `version`, checked once by hand against MariaDB's published hashes at [mariadb.org/download](https://mariadb.org/download/). Required when `managed`. |
+| `install_dir` | *(none)* | Where the binaries are unpacked. Required when `managed`. |
+| `data_dir` | *(none)* | Where the data directory lives, independent of `install_dir` so a version upgrade never touches it. Required when `managed`. |
+| `port` | `33306` | Loopback port. Not 3306, so a stray existing MySQL/MariaDB install on this machine is never silently collided with. |
+| `database` | `cellar` | Created during provisioning. Must match `[A-Za-z_][A-Za-z0-9_]*`. |
+| `username` | `cellar` | Same charset restriction; both are interpolated into the bootstrap SQL. |
+| `restart` / `backoff` | same shape as `[supervisor]` | The restart policy for the `mariadbd` child. |
+| `graceful_timeout_seconds` | `30` | How long a clean `mariadb-admin shutdown` is given before killing the process. |
+
+There is deliberately no `bind` key. The listener is hardcoded to `127.0.0.1`
+in the supervisor itself, not offered as a config choice: this server has no
+legitimate reason to be reachable off this machine, and not exposing the
+setting is a stronger guarantee than validating against a bad value.
+
+**Why a bundled binary and not a container.** The obvious alternative is a
+Docker/Podman container, and that is deliberately not what this does: see
+[Architecture](ARCHITECTURE.md#hosting-mariadb-natively-not-in-a-container)
+for why.
+
+### Provisioning
+
+```
+cellar mariadb provision
+```
+
+Downloads the archive for `mariadb.version` (skipped if already installed),
+initializes `mariadb.data_dir` (skipped if already initialized), then always
+(re-)creates the database, user and a freshly generated password, printing:
+
+```
+CELLAR_DATABASE_URL='mysql://cellar:...@127.0.0.1:33306/cellar'
+```
+
+Set that in your environment before `cellar run`. The password is never
+written to any file Cellar controls; if it is lost, running `provision` again
+is how it is recovered, since the app user's grant is always reissued.
+`cellar mariadb status` reports what is installed and provisioned without
+starting anything. See [Installation](INSTALLATION.md#hosting-mariadb-locally)
+for the full walkthrough.
+
+---
+
 ## `[bridge]`
 
 The half of AppleJackRP's storage contract that nothing implemented until now.

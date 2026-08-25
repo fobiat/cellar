@@ -13,6 +13,7 @@ cellar-core = { workspace = true }
 cellar-store = { workspace = true }
 cellar-runtime = { workspace = true }
 cellar-update = { workspace = true }
+cellar-mariadb = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
 tokio = { workspace = true }

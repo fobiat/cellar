@@ -20,7 +20,7 @@ Three groups, and mixing them up is the most common confusion:
 
 | Group | Commands | Needs |
 | --- | --- | --- |
-| **Standalone** | `run`, `doctor`, `config`, `hash-password`, `self-update` | Nothing running. |
+| **Standalone** | `run`, `doctor`, `config`, `hash-password`, `self-update`, `mariadb *` | Nothing running. |
 | **Database** | `db *`, `doc *` | `CELLAR_DATABASE_URL`. Not a running server. |
 | **Live server** | `settings *`, and `version`/`changelog` for live figures | A `cellar run` with `web.enabled = true`. |
 
@@ -165,6 +165,26 @@ cellar db prune       # delete events older than the configured retention
 
 `prune` honours `database.event_retention_days`. It deletes operational events
 only. It never touches `aj_document` or its revision history.
+
+---
+
+## `cellar mariadb`
+
+Only does anything with `[mariadb]` `managed = true`. Separate from `db`
+above: that operates on whatever `database.url` already points at, local or
+remote, and needs no `[mariadb]` section to do it.
+
+```
+cellar mariadb provision   # download, initialize, and (re-)create the database, user and password
+cellar mariadb status      # report install/data-directory state without starting anything
+```
+
+`provision` is safe to run repeatedly, including to recover a lost password:
+installing and initializing are skipped once already done, but the database,
+user and password are always (re-)applied, and a fresh
+`CELLAR_DATABASE_URL` is printed every time. There is deliberately no
+`start`/`stop`/`restart` here; `cellar run` is the only thing that supervises
+the instance, the same way it is the only thing that starts the game server.
 
 ---
 

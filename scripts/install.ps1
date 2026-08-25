@@ -201,6 +201,7 @@ try {
 
         Write-Done 'Service registered. Start it with: sc.exe start Cellar'
         Write-Note 'Set CELLAR_DATABASE_URL as a machine environment variable first, or the bridge will not start.'
+        Write-Note 'No MySQL/MariaDB available? `cellar mariadb provision` hosts one locally and prints a CELLAR_DATABASE_URL for you.'
     }
 
     # -------------------------------------------------------------------- done

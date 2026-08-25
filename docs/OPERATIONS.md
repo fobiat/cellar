@@ -165,6 +165,13 @@ Steam build id side by side. That comparison is how the stale
 Engine updates through SteamCMD are off by default and need `steam_dir` and
 `steamcmd` set.
 
+A locally-hosted MariaDB (`[mariadb]` `managed = true`) is not covered by any
+of this: bumping `mariadb.version` and its pinned `mariadb.sha256` is a
+manual, deliberate edit, the same reasoning `update.policy` never defaults to
+tracking "latest". After bumping the version, run `cellar mariadb provision`
+again; a major version jump against an existing data directory may also need
+`mariadb-upgrade` run once by hand, which Cellar does not automate.
+
 ---
 
 ## Backups
@@ -187,6 +194,12 @@ done
 `aj_document_revision` is append-only, so it grows. It is also the only thing
 that can answer "who overwrote my character", so prune it deliberately or not at
 all. `cellar db prune` does not touch it.
+
+A locally-hosted MariaDB's `mariadb.data_dir` is an ordinary MariaDB data
+directory; standard tooling applies unchanged. Stop `cellar run` first (a
+filesystem snapshot of a live InnoDB data directory is not a consistent
+backup), or use `mariadb-dump` against the running instance the same as
+against any other MySQL/MariaDB server.
 
 ---
 
@@ -214,6 +227,7 @@ Cellar does not schedule it for you.
 | Bridge health | `/readyz`, webhooks | The database is unreachable. Writes are being refused, not lost. |
 | Crash loop | logs, webhooks | `crash_loop_threshold` failures inside `window`. Cellar has given up restarting. |
 | Revision conflicts | `cellar db status` | Real concurrent writers exist. Relevant before enabling optimistic concurrency. |
+| MariaDB lamp | web UI, `cellar mariadb status` | Only present with `[mariadb]` `managed = true`. Down or crash-looping means the game server is about to lose its own database, not just the browser. |
 
 The unparsed counter is worth a dashboard. A parser that quietly stops matching
 is the failure mode this whole design is built against: an unmatched line is

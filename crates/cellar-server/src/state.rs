@@ -135,6 +135,10 @@ pub struct AppState {
     pub supervisor: Option<Handle>,
     /// The operations database, when configured.
     pub pool: Option<MySqlPool>,
+    /// The locally-hosted MariaDB supervisor, when `[mariadb].managed` is on.
+    /// Absent for a remote database, same as `pool` above but one layer up:
+    /// this is about who is running the server, not how Cellar talks to it.
+    pub mariadb: Option<cellar_mariadb::Handle>,
     /// Argon2 hash of the web UI password, when the web UI is exposed.
     pub web_password_hash: Option<cellar_core::Secret>,
     /// Live web sessions.
@@ -162,6 +166,7 @@ impl AppState {
             rate_limiter: RateLimiter::new(600),
             supervisor: None,
             pool: None,
+            mariadb: None,
             web_password_hash: None,
             sessions: crate::session::Sessions::new(),
             version_probe: None,

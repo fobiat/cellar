@@ -69,6 +69,19 @@ max_connections = 8
 migrate_on_start = true
 event_retention_days = 90
 
+# Uncomment to have Cellar download, initialize and supervise its own MariaDB
+# instead of only connecting to one already running somewhere. `database.url`
+# (CELLAR_DATABASE_URL) is unaffected either way; run `cellar mariadb
+# provision` once to get a value for it. See docs/CONFIGURATION.md#mariadb.
+#
+# [mariadb]
+# managed = true
+# version = "11.4.5"
+# sha256 = "…"                    # checked by hand against mariadb.org/download
+# install_dir = "C:\\ProgramData\\Cellar\\mariadb\\11.4.5"
+# data_dir = "C:\\ProgramData\\Cellar\\mariadb\\data"
+# port = 33306
+
 [bridge]
 enabled = true
 

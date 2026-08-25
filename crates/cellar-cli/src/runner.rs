@@ -31,8 +31,14 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         Err(why) => tracing::error!("hosting.json: {why}"),
     }
 
+    // Started before the database connects, and given a moment to come up:
+    // connecting while `mariadbd` is still initializing would just be the
+    // first of a string of retries. `database.url` is unchanged either way,
+    // see `[mariadb]` in cellar-core::config for why the two stay decoupled.
+    let mariadb = start_mariadb(&config).await?;
+
     let pool = open_database(&config).await?;
-    let state = build_state(&config, pool.clone(), handle.clone())?;
+    let state = build_state(&config, pool.clone(), handle.clone(), mariadb.clone())?;
 
     let mut servers = Vec::new();
 
@@ -81,13 +87,53 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         server.abort();
     }
 
+    // Stopped last: nothing above needs the database once it has stopped
+    // accepting requests, and stopping it earlier would just make the game
+    // server's own shutdown, and any in-flight bridge write, fail instead.
+    if let Some(mariadb) = &mariadb {
+        tracing::info!("stopping mariadb");
+        mariadb.stop().await;
+    }
+
     Ok(())
+}
+
+/// Start and wait for the locally-hosted MariaDB, when `[mariadb].managed`.
+///
+/// Absent otherwise: `database.url` already works unchanged for a remote
+/// database, and this is the only thing that differs.
+async fn start_mariadb(config: &Config) -> Result<Option<cellar_mariadb::Handle>> {
+    if !config.mariadb.managed {
+        return Ok(None);
+    }
+
+    let url = config.database.url.as_ref().context(
+        "mariadb.managed needs CELLAR_DATABASE_URL; run `cellar mariadb provision` to get one",
+    )?;
+
+    let password = cellar_mariadb::credentials::password_from_database_url(url.expose())
+        .context("could not read a password out of CELLAR_DATABASE_URL")?;
+
+    let (supervisor, handle, control) =
+        cellar_mariadb::Supervisor::new(config.mariadb.clone(), password);
+    tokio::spawn(supervisor.run(control));
+
+    if !handle.wait_ready(std::time::Duration::from_secs(60)).await {
+        anyhow::bail!(
+            "mariadb did not start accepting connections within 60s on 127.0.0.1:{}",
+            config.mariadb.port
+        );
+    }
+
+    tracing::info!("mariadb is up on 127.0.0.1:{}", config.mariadb.port);
+    Ok(Some(handle))
 }
 
 fn build_state(
     config: &Config,
     pool: Option<sqlx::MySqlPool>,
     handle: Handle,
+    mariadb: Option<cellar_mariadb::Handle>,
 ) -> Result<Arc<AppState>> {
     let documents = match &pool {
         Some(pool) => Documents::MySql(pool.clone()),
@@ -105,6 +151,7 @@ fn build_state(
     state.rate_limiter = RateLimiter::new(config.bridge.rate_limit_per_minute);
     state.supervisor = Some(handle);
     state.pool = pool;
+    state.mariadb = mariadb;
     state.web_password_hash = config.web.password_hash.clone();
     state.update_config = config.update.clone();
     state.version_probe = Some(cellar_update::Probe {

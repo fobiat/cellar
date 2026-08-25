@@ -18,6 +18,7 @@ cellar-server = { path = "crates/cellar-server", version = "0.1.0" }
 cellar-notify = { path = "crates/cellar-notify", version = "0.1.0" }
 cellar-update = { path = "crates/cellar-update", version = "0.1.0" }
 cellar-tui = { path = "crates/cellar-tui", version = "0.1.0" }
+cellar-mariadb = { path = "crates/cellar-mariadb", version = "0.1.0" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -51,6 +52,13 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 argon2 = "0.5"
 rand = "0.8"
 tempfile = "3"
+# Extracting the archive a downloaded MariaDB release ships as. Cellar's own
+# self-update deliberately avoids an in-process archive reader (see
+# cellar-update's selfupdate.rs) by publishing a bare binary alongside the
+# zip; MariaDB has no such bare-binary option, it is a directory tree of
+# binaries, libraries and shared data, so there is no single-file
+# alternative here.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Enforced workspace-wide; each crate opts in with `[lints] workspace = true`.
 # This process supervises a game server and a database, so every interesting

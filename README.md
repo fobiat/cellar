@@ -100,6 +100,9 @@ There is no RCON in s&box. This is the substitute, and it is a better one.
   snapshot so they cannot disagree.
 - **Browses the database**: a small read-only phpMyAdmin in the web UI, plus a
   document browser with revision history.
+- **Can host the database itself**: downloads, initializes and supervises a
+  local MariaDB (`cellar mariadb provision`), for machines with no MySQL
+  already available and no Docker to run one in. See [Configuration](docs/CONFIGURATION.md#mariadb).
 - **Captures configuration as a file**: the 41 features, the 7 catalogued
   settings and the engine's convars, dumped to TOML or YAML, diffed and applied.
 - **Checks versions and updates**: the gamemode's build stamp, the git checkout

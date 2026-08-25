@@ -1,0 +1,27 @@
+[package]
+name = "cellar-mariadb"
+description = "Downloads, initializes and supervises a local MariaDB, when Cellar is asked to host its own instead of only connecting to one."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+cellar-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { workspace = true }
+rand = { workspace = true }
+zip = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -30,6 +30,8 @@ pub struct Config {
     pub notify: NotifyConfig,
     #[serde(default)]
     pub update: UpdateConfig,
+    #[serde(default)]
+    pub mariadb: MariaDbConfig,
 }
 
 /// What Cellar is allowed to do about a new version.
@@ -352,6 +354,78 @@ impl Default for NotifyConfig {
     }
 }
 
+/// A MariaDB server Cellar downloads, initializes, and supervises itself,
+/// rather than only connecting to one hosted elsewhere.
+///
+/// Deliberately independent of `[database]`: this section only decides
+/// whether `cellar run` also spawns and supervises a `mariadbd` process.
+/// `database.url` (`CELLAR_DATABASE_URL`) is still the one source of the
+/// connection string everything else uses, whether it points at a managed
+/// instance or a remote one — `cellar mariadb provision` prints a URL for
+/// the operator to set, it does not write one anywhere itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct MariaDbConfig {
+    /// Download (if needed), initialize (if needed), and supervise a local
+    /// instance for the lifetime of `cellar run`.
+    pub managed: bool,
+
+    /// Exact version to install, e.g. "11.4.5". Never resolved from
+    /// "latest": a server manager that silently tracks a moving target is a
+    /// supply-chain surprise, the same reasoning `update.policy` defaults
+    /// away from `Apply` for the game itself.
+    pub version: String,
+
+    /// sha256 of the official win64 archive for `version`, checked once by
+    /// whoever sets `version` against MariaDB's own published hashes. The
+    /// download is verified only against this pinned value, never against a
+    /// checksum fetched over the same connection as the archive.
+    pub sha256: Option<String>,
+
+    /// Where the versioned binaries are unpacked. Required when `managed`.
+    pub install_dir: Option<PathBuf>,
+
+    /// Where the data directory lives, independent of `install_dir` so a
+    /// version upgrade never touches it. Required when `managed`.
+    pub data_dir: Option<PathBuf>,
+
+    /// Loopback port. Not 3306: a machine that already has something bound
+    /// there, a stray prior MariaDB or MySQL install, should not collide
+    /// with a managed instance silently choosing the same port.
+    pub port: u16,
+
+    /// Database and user created during provisioning. Restricted to
+    /// `[A-Za-z_][A-Za-z0-9_]*` by `validate()`, since both are interpolated
+    /// into the bootstrap `CREATE DATABASE`/`CREATE USER` statements.
+    pub database: String,
+    pub username: String,
+
+    pub restart: RestartPolicy,
+    pub backoff: BackoffPolicy,
+
+    /// How long a graceful stop waits for `mariadb-admin shutdown` to finish
+    /// before killing the process outright.
+    pub graceful_timeout_seconds: u64,
+}
+
+impl Default for MariaDbConfig {
+    fn default() -> Self {
+        Self {
+            managed: false,
+            version: String::new(),
+            sha256: None,
+            install_dir: None,
+            data_dir: None,
+            port: 33306,
+            database: "cellar".to_owned(),
+            username: "cellar".to_owned(),
+            restart: RestartPolicy::default(),
+            backoff: BackoffPolicy::default(),
+            graceful_timeout_seconds: 30,
+        }
+    }
+}
+
 fn default_hostname() -> String {
     "AppleJackRP Dev".to_owned()
 }
@@ -380,7 +454,11 @@ pub enum ConfigError {
     #[error("{path} is not valid TOML: {source}")]
     Parse {
         path: PathBuf,
-        source: toml::de::Error,
+        // Boxed: `toml::de::Error` alone pushes this variant past clippy's
+        // `result_large_err` threshold, which would otherwise flag every
+        // `Result<_, ConfigError>` in this module, `load` and `validate`
+        // included.
+        source: Box<toml::de::Error>,
     },
 
     #[error("{0}")]
@@ -397,7 +475,7 @@ impl Config {
 
         let mut config: Config = toml::from_str(&text).map_err(|source| ConfigError::Parse {
             path: path.to_owned(),
-            source,
+            source: Box::new(source),
         })?;
 
         config.overlay_env();
@@ -499,8 +577,81 @@ impl Config {
             ));
         }
 
+        if self.mariadb.managed {
+            if self.mariadb.version.trim().is_empty() {
+                return Err(ConfigError::Invalid(
+                    "mariadb.managed needs mariadb.version: never resolved from \"latest\"".into(),
+                ));
+            }
+
+            let checksum_looks_right = self.mariadb.sha256.as_deref().is_some_and(|sha256| {
+                sha256.len() == 64 && sha256.bytes().all(|b| b.is_ascii_hexdigit())
+            });
+            if !checksum_looks_right {
+                return Err(ConfigError::Invalid(
+                    "mariadb.managed needs mariadb.sha256: a 64-character hex sha256 of the pinned \
+                     version's official win64 archive, checked once against MariaDB's published \
+                     hashes"
+                        .into(),
+                ));
+            }
+
+            if self.mariadb.install_dir.is_none() {
+                return Err(ConfigError::Invalid(
+                    "mariadb.managed needs mariadb.install_dir".into(),
+                ));
+            }
+
+            if self.mariadb.data_dir.is_none() {
+                return Err(ConfigError::Invalid(
+                    "mariadb.managed needs mariadb.data_dir".into(),
+                ));
+            }
+
+            if !self.database.enabled {
+                return Err(ConfigError::Invalid(
+                    "mariadb.managed needs database.enabled: a hosted instance with nothing \
+                     configured to use it is not doing anything"
+                        .into(),
+                ));
+            }
+
+            if !is_valid_identifier(&self.mariadb.database) {
+                return Err(ConfigError::Invalid(
+                    "mariadb.database must match [A-Za-z_][A-Za-z0-9_]*: it is interpolated into \
+                     a CREATE DATABASE statement during provisioning"
+                        .into(),
+                ));
+            }
+
+            if !is_valid_identifier(&self.mariadb.username) {
+                return Err(ConfigError::Invalid(
+                    "mariadb.username must match [A-Za-z_][A-Za-z0-9_]*: it is interpolated into \
+                     a CREATE USER statement during provisioning"
+                        .into(),
+                ));
+            }
+        }
+
         Ok(())
     }
+}
+
+/// Whether a name is safe to interpolate into a bootstrap SQL statement.
+///
+/// `mariadb.database`/`mariadb.username` can't be bind parameters: MariaDB
+/// has no placeholder syntax for identifiers in `CREATE DATABASE`/`CREATE
+/// USER`. Restricting the charset before the name ever reaches a query is
+/// what makes that interpolation safe, the same reasoning `admin.rs`'s table
+/// browser uses for validating a table name against `tables()` before
+/// interpolating it.
+fn is_valid_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Whether an address is only reachable from this machine.
@@ -545,6 +696,18 @@ mod tests {
             web: WebConfig::default(),
             notify: NotifyConfig::default(),
             update: UpdateConfig::default(),
+            mariadb: MariaDbConfig::default(),
+        }
+    }
+
+    fn managed_mariadb() -> MariaDbConfig {
+        MariaDbConfig {
+            managed: true,
+            version: "11.4.5".to_owned(),
+            sha256: Some("a".repeat(64)),
+            install_dir: Some(PathBuf::from("/var/lib/cellar/mariadb/11.4.5")),
+            data_dir: Some(PathBuf::from("/var/lib/cellar/mariadb/data")),
+            ..MariaDbConfig::default()
         }
     }
 
@@ -622,6 +785,115 @@ mod tests {
                 .to_string()
                 .contains("PASSWORD_HASH")
         );
+    }
+
+    #[test]
+    fn managed_mariadb_needs_a_pinned_version_and_checksum() {
+        let mut config = minimal();
+        config.mariadb = managed_mariadb();
+        config.database.enabled = true;
+        config.validate().unwrap();
+
+        let mut missing_version = config.clone();
+        missing_version.mariadb.version = String::new();
+        assert!(
+            missing_version
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("mariadb.version")
+        );
+
+        let mut missing_checksum = config.clone();
+        missing_checksum.mariadb.sha256 = None;
+        assert!(
+            missing_checksum
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("mariadb.sha256")
+        );
+
+        let mut short_checksum = config;
+        short_checksum.mariadb.sha256 = Some("not-a-real-sha256".to_owned());
+        assert!(
+            short_checksum
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("mariadb.sha256")
+        );
+    }
+
+    #[test]
+    fn managed_mariadb_needs_install_and_data_dirs() {
+        let mut config = minimal();
+        config.mariadb = managed_mariadb();
+        config.database.enabled = true;
+
+        let mut no_install_dir = config.clone();
+        no_install_dir.mariadb.install_dir = None;
+        assert!(
+            no_install_dir
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("install_dir")
+        );
+
+        let mut no_data_dir = config.clone();
+        no_data_dir.mariadb.data_dir = None;
+        assert!(
+            no_data_dir
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("data_dir")
+        );
+
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn managed_mariadb_needs_database_enabled() {
+        let mut config = minimal();
+        config.mariadb = managed_mariadb();
+        config.database.enabled = false;
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("database.enabled"), "{error}");
+
+        config.database.enabled = true;
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn mariadb_identifiers_are_restricted_to_a_safe_charset() {
+        let mut config = minimal();
+        config.mariadb = managed_mariadb();
+        config.database.enabled = true;
+
+        for bad in ["1cellar", "cellar-rp", "cellar db", "cellar;drop"] {
+            let mut with_bad_database = config.clone();
+            with_bad_database.mariadb.database = bad.to_owned();
+            assert!(
+                with_bad_database.validate().is_err(),
+                "{bad:?} should be refused as a database name"
+            );
+
+            let mut with_bad_username = config.clone();
+            with_bad_username.mariadb.username = bad.to_owned();
+            assert!(
+                with_bad_username.validate().is_err(),
+                "{bad:?} should be refused as a username"
+            );
+        }
+
+        for good in ["cellar", "cellar_rp", "_cellar", "Cellar2"] {
+            config.mariadb.database = good.to_owned();
+            config.mariadb.username = good.to_owned();
+            config.validate().unwrap();
+        }
     }
 
     #[test]

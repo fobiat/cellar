@@ -4,6 +4,22 @@ All notable changes to Cellar are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Cellar can host its own MariaDB.** `[mariadb]` (`managed = true`) downloads
+  an official MariaDB release, verifies it against a pinned checksum,
+  initializes a data directory and supervises `mariadbd` as a child process of
+  `cellar run`, the same way Cellar already supervises the game server. Built
+  for machines with no MySQL already available and no Docker to run one in.
+  `cellar mariadb provision` does the one-time setup and prints
+  `CELLAR_DATABASE_URL`; `cellar mariadb status` reports what is there. The
+  existing read-only database browser in the web UI needed no changes: it
+  already just reads whatever `database.url` points at. See
+  [Configuration](docs/CONFIGURATION.md#mariadb) and
+  [Installation](docs/INSTALLATION.md#hosting-mariadb-locally).
+
 ## [0.1.3] - 2026-08-25
 
 ### Fixed

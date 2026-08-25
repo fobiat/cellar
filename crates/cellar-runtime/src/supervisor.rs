@@ -707,6 +707,7 @@ mod tests {
             web: Default::default(),
             notify: Default::default(),
             update: Default::default(),
+            mariadb: Default::default(),
         }
     }
 

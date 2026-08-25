@@ -82,6 +82,16 @@ enum Command {
         action: DbAction,
     },
 
+    /// Manage the locally-hosted MariaDB, when `[mariadb].managed = true`.
+    ///
+    /// Separate from `db`: that operates on whatever `database.url` already
+    /// points at, local or remote, and works the same either way. This only
+    /// makes sense when Cellar is hosting the instance itself.
+    Mariadb {
+        #[command(subcommand)]
+        action: MariadbAction,
+    },
+
     /// Read and write bridge documents from the command line.
     Doc {
         #[command(subcommand)]
@@ -113,6 +123,22 @@ enum DbAction {
     Status,
     /// Delete events older than the configured retention.
     Prune,
+}
+
+#[derive(Subcommand)]
+enum MariadbAction {
+    /// Download (if needed), initialize (if needed), and (re-)create the
+    /// database, user and password. Prints `CELLAR_DATABASE_URL` to set in
+    /// your environment. Safe to re-run, including to recover a lost
+    /// password: each install/init step is skipped once already done, but
+    /// the database, user and password are always (re-)applied.
+    Provision,
+    /// Report install and data-directory state without starting anything.
+    ///
+    /// Deliberately no `start`/`stop`/`restart` here: `cellar run` is the
+    /// only thing that supervises the instance, the same way it is the only
+    /// thing that starts the game server.
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -187,6 +213,7 @@ async fn main() -> std::process::ExitCode {
             commands::update(&cli.config, check, now, force).await
         }
         Command::Db { action } => commands::db(&cli.config, action).await,
+        Command::Mariadb { action } => commands::mariadb(&cli.config, action).await,
         Command::Doc { action } => commands::doc(&cli.config, action).await,
         Command::Settings { action } => commands::settings(&cli.config, action).await,
         Command::SelfUpdate { check } => commands::self_update(check).await,

@@ -37,6 +37,40 @@ Manual instead: download `cellar-x86_64-pc-windows.zip` from the
 and run `cellar.exe`. The zip carries `cellar.toml.example` with the Windows
 paths already commented in.
 
+### Hosting MariaDB locally
+
+Cellar needs a MySQL/MariaDB it can reach at `CELLAR_DATABASE_URL` for the
+bridge and its own operations tables. If nothing is already running on this
+machine (or the network), Cellar can host one itself instead: set
+`[mariadb]` `managed = true`, `version` and `sha256` in `cellar.toml` (see
+[Configuration](CONFIGURATION.md#mariadb)), then:
+
+```powershell
+cellar mariadb provision
+```
+
+This downloads MariaDB's official archive for `version`, verifies it against
+the pinned `sha256`, unpacks it, initializes a data directory, and creates
+the `cellar` database, user and a generated password, printing:
+
+```
+CELLAR_DATABASE_URL='mysql://cellar:...@127.0.0.1:33306/cellar'
+```
+
+Set that in your environment (for `-Service`, add it to the service's
+environment) before running `cellar run`, which starts and supervises
+`mariadbd` itself from then on, alongside the game server.
+
+**Why not Docker.** This is the path built for machines that cannot run
+Docker at all, a Shadow PC or similar cloud-gaming VM being the case that
+motivated it: no Docker installed, and turning on Hyper-V/WSL2 to get one is
+an elevated, disruptive change that nested-virtualization cloud hosts often
+block outright. See [Architecture](ARCHITECTURE.md#hosting-mariadb-natively-not-in-a-container)
+for the full reasoning. If Docker already works on your machine, running
+MariaDB in a container you manage yourself and pointing `CELLAR_DATABASE_URL`
+at it works exactly the same as any other externally-hosted database; `cellar
+mariadb` is only for hosts where that is not an option.
+
 ## Linux
 
 ```sh

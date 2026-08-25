@@ -313,6 +313,14 @@ async function refreshStatus() {
     `${bridge.reads} read · ${bridge.writes} write · ${bridge.absent} absent · ${bridge.refused} refused`;
   $("#bridge-conflicts").textContent = bridge.would_conflict;
   $("#bridge-error").textContent = text(bridge.last_error);
+
+  const mariadb = data.mariadb;
+  if (!mariadb) {
+    setLamp($("#stat-mariadb"), "wait", "off");
+  } else {
+    const lamps = { running: "up", starting: "wait", stopping: "wait", backoff: "wait" };
+    setLamp($("#stat-mariadb"), lamps[mariadb.state] || "down", mariadb.state.replace("_", " "));
+  }
 }
 
 function setLamp(node, state, label) {

@@ -185,16 +185,47 @@ cellar-server     axum: bridge, health, websocket, embedded web UI
 cellar-notify     Discord and generic webhooks, batched and rate-limit aware
 cellar-tui        ratatui dashboard
 cellar-update     version checking and self-update
+cellar-mariadb    downloads, provisions and supervises a local MariaDB
 cellar-cli        the `cellar` binary
 cellar-fake-server  a stand-in for sbox-server.exe, for tests
 ```
 
-`core` depends on nothing of ours. `runtime`, `store`, `notify` depend on `core`.
-`server` and `tui` depend on those. `cli` depends on all.
+`core` depends on nothing of ours. `runtime`, `store`, `notify`, `mariadb`
+depend on `core`. `server` and `tui` depend on those. `cli` depends on all.
 
 The parts that are easy to get quietly wrong (what counts as a player joining,
 when to stop restarting, which document keys are legal, what a secret must never
 do) are all functions over data in `core`.
+
+`cellar-mariadb` sits beside `cellar-runtime` rather than inside it: the game
+server needs a pty (see above), `mariadbd` is a normal console process that
+needs none of that machinery, and bolting it onto the crate that exists
+specifically for the PTY quirk would blur why that crate exists. It also
+never depends on `cellar-store`: the one-time bootstrap in `provision.rs`
+shells out to the bundled `mariadb`/`mariadb-admin`/`mariadb-install-db`
+client tools rather than adding a second `sqlx` connection path, so
+`cellar-store` stays the only crate that speaks the MySQL wire protocol.
+
+---
+
+## Hosting MariaDB natively, not in a container
+
+`[mariadb]` (`managed = true`) downloads an official MariaDB release,
+initializes a data directory and supervises `mariadbd` as a child process of
+`cellar run`, the same way Cellar already supervises the game server. The
+obvious alternative, a Docker or Podman container, was deliberately not
+built: Cellar's own reference deployment target for this feature is a Shadow
+PC cloud-gaming Windows VM, which has no Docker installed, and getting one
+there means enabling Hyper-V or WSL2, an elevated, disruptive system-settings
+change that is frequently unsupported or blocked outright by a cloud-gaming
+host's nested-virtualization policy. A bundled binary needs neither: it is
+the same trust model Cellar already uses for the game server itself.
+
+The listener binds `127.0.0.1` unconditionally, hardcoded in
+`cellar-mariadb::supervisor`, not exposed as a `[mariadb]` config key at all.
+Unlike `bridge.bind`/`web.bind`, there is no legitimate reason for this one to
+be reachable off the host, so the stronger guarantee (no code path can set it
+wrong) was chosen over the weaker one (validate against a bad value).
 
 ---
 

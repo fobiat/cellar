@@ -252,11 +252,16 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         Some(pool) => cellar_store::ping(pool).await.is_ok(),
         None => false,
     };
+    let mariadb = match &state.mariadb {
+        Some(handle) => handle.snapshot().await,
+        None => None,
+    };
 
     Json(serde_json::json!({
         "server": snapshot,
         "bridge": bridge,
         "database": database,
+        "mariadb": mariadb,
         "scope": state.scope,
     }))
     .into_response()
