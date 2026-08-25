@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-08-25
+
+### Fixed
+
+- **Windows reinstall no longer fails on a stale executable backup.** The
+  installer now stops the matching Cellar process, removes an old backup with
+  an actionable error path, and falls back to a unique retired filename when
+  that backup is locked.
+
 ## [0.1.4] - 2026-08-25
 
 ### Added

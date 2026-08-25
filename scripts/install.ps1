@@ -43,6 +43,31 @@ function Write-Step { param([string] $Message) Write-Host "  $Message" -Foregrou
 function Write-Done { param([string] $Message) Write-Host "  $Message" -ForegroundColor Green }
 function Write-Note { param([string] $Message) Write-Host "  $Message" -ForegroundColor DarkGray }
 
+function Stop-InstalledCellar([string] $Executable) {
+    $running = @(Get-Process -Name 'cellar' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -eq $Executable })
+    if (-not $running) { return }
+
+    Write-Step 'Stopping the running Cellar process before replacement'
+    try {
+        Invoke-WebRequest -Uri 'http://127.0.0.1:8081/api/control/stop' -Method Post `
+            -UseBasicParsing -TimeoutSec 5 | Out-Null
+    } catch {
+        Write-Note 'The web control endpoint was unavailable; waiting for the process to exit.'
+    }
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    do {
+        Start-Sleep -Milliseconds 250
+        $running = @(Get-Process -Name 'cellar' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -eq $Executable })
+    } while ($running -and [DateTime]::UtcNow -lt $deadline)
+
+    if ($running) {
+        throw 'Cellar is still running and its executable cannot be replaced. Stop it from the tray or run the installer again.'
+    }
+}
+
 Write-Host ''
 Write-Host '  * CELLAR' -ForegroundColor Blue
 Write-Host '    a dedicated server manager for s&box' -ForegroundColor DarkGray
@@ -153,14 +178,25 @@ try {
     # A running cellar.exe cannot be overwritten, but it can be renamed. Same
     # trick `cellar self-update` uses, for the same reason.
     $exe = Join-Path $installDir 'cellar.exe'
+    $retired = $null
     if (Test-Path $exe) {
+        Stop-InstalledCellar $exe
         $retired = "$exe.old"
-        Remove-Item -Force -ErrorAction SilentlyContinue $retired
-        Rename-Item -Path $exe -NewName "cellar.exe.old" -Force
+        if (Test-Path -LiteralPath $retired) {
+            try {
+                Remove-Item -LiteralPath $retired -Force -ErrorAction Stop
+            } catch {
+                $retired = "$exe.$([Guid]::NewGuid().ToString('N')).old"
+                Write-Note "The previous backup is locked; using $([IO.Path]::GetFileName($retired)) for this update."
+            }
+        }
+        Move-Item -LiteralPath $exe -Destination $retired
     }
 
     Expand-Archive -Path $zip -DestinationPath $installDir -Force
-    Remove-Item -Force -ErrorAction SilentlyContinue "$exe.old"
+    if ($retired -and (Test-Path -LiteralPath $retired)) {
+        Remove-Item -LiteralPath $retired -Force -ErrorAction Stop
+    }
 
     # -------------------------------------------------------------------- PATH
 
