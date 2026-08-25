@@ -43,7 +43,7 @@ $stop = $menu.Items.Add('Stop server')
 $stop.Add_Click({ Invoke-Cellar 'stop' })
 $menu.Items.Add('-') | Out-Null
 $exitCellar = $menu.Items.Add('Exit Cellar')
-$exitCellar.Add_Click({ Invoke-Cellar 'stop'; $notify.Visible = $false; $notify.Dispose(); [System.Windows.Forms.Application]::Exit() })
+$exitCellar.Add_Click({ Invoke-Cellar 'exit'; $notify.Visible = $false; $notify.Dispose(); [System.Windows.Forms.Application]::Exit() })
 $exitTray = $menu.Items.Add('Exit tray')
 $exitTray.Add_Click({ $notify.Visible = $false; $notify.Dispose(); [System.Windows.Forms.Application]::Exit() })
 

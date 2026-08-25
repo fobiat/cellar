@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-08-25
+
+### Fixed
+
+- **Cellar can now exit cleanly for upgrades.** The tray and Windows installer
+  use the new exit control, which gracefully stops the game and MariaDB before
+  releasing the executable lock. Older managers fall back to the compatibility
+  stop path.
+
 ## [0.1.5] - 2026-08-25
 
 ### Fixed

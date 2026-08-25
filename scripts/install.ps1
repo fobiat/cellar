@@ -50,10 +50,14 @@ function Stop-InstalledCellar([string] $Executable) {
 
     Write-Step 'Stopping the running Cellar process before replacement'
     try {
-        Invoke-WebRequest -Uri 'http://127.0.0.1:8081/api/control/stop' -Method Post `
+        Invoke-WebRequest -Uri 'http://127.0.0.1:8081/api/control/exit' -Method Post `
             -UseBasicParsing -TimeoutSec 5 | Out-Null
     } catch {
-        Write-Note 'The web control endpoint was unavailable; waiting for the process to exit.'
+        Write-Note 'The Cellar exit endpoint was unavailable; requesting a graceful server stop.'
+        try {
+            Invoke-WebRequest -Uri 'http://127.0.0.1:8081/api/control/stop' -Method Post `
+                -UseBasicParsing -TimeoutSec 5 | Out-Null
+        } catch { }
     }
 
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
@@ -64,7 +68,14 @@ function Stop-InstalledCellar([string] $Executable) {
     } while ($running -and [DateTime]::UtcNow -lt $deadline)
 
     if ($running) {
-        throw 'Cellar is still running and its executable cannot be replaced. Stop it from the tray or run the installer again.'
+        Write-Note 'The installed Cellar predates the exit endpoint; terminating it after the graceful stop.'
+        $running | Stop-Process -Force
+        Start-Sleep -Seconds 1
+        $running = @(Get-Process -Name 'cellar' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -eq $Executable })
+        if ($running) {
+            throw 'Cellar is still running and its executable cannot be replaced. Stop it from the tray or run the installer again.'
+        }
     }
 }
 

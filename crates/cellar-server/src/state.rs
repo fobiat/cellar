@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use cellar_core::snapshot::BridgeStats;
@@ -151,6 +151,7 @@ pub struct AppState {
     pub log_file: Option<PathBuf>,
     pub configured_map: Option<String>,
     pub game_data_dir: Option<PathBuf>,
+    pub shutdown_requested: std::sync::Arc<AtomicBool>,
 
     reads: AtomicU64,
     writes: AtomicU64,
@@ -180,6 +181,7 @@ impl AppState {
             log_file: None,
             configured_map: None,
             game_data_dir: None,
+            shutdown_requested: std::sync::Arc::new(AtomicBool::new(false)),
             reads: AtomicU64::new(0),
             writes: AtomicU64::new(0),
             absent: AtomicU64::new(0),

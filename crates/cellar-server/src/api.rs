@@ -660,6 +660,17 @@ async fn control(
             supervisor.stop().await;
             Json(serde_json::json!({ "ok": true, "action": "stop" })).into_response()
         }
+        "exit" => {
+            tracing::info!(
+                "{} asked Cellar to exit after a graceful stop",
+                operator.name
+            );
+            supervisor.stop().await;
+            state
+                .shutdown_requested
+                .store(true, std::sync::atomic::Ordering::Release);
+            Json(serde_json::json!({ "ok": true, "action": "exit" })).into_response()
+        }
         "restart" => {
             tracing::info!("{} asked for a restart", operator.name);
             supervisor.restart().await;

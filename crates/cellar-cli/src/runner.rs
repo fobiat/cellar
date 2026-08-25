@@ -82,7 +82,7 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         cellar_tui::run(handle.clone()).await?;
         handle.stop().await;
     } else {
-        wait_for_shutdown().await;
+        wait_for_shutdown(state.shutdown_requested.clone()).await;
         tracing::info!("stopping the server gracefully");
         // `quit` through the console, not a signal: the engine installs no
         // SIGTERM handler, and a kill skips the Steam logoff and the convar save.
@@ -399,7 +399,7 @@ fn hostname() -> Option<String> {
 }
 
 /// Wait for the signal the platform sends to stop a service.
-async fn wait_for_shutdown() {
+async fn wait_for_shutdown(shutdown_requested: std::sync::Arc<std::sync::atomic::AtomicBool>) {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
@@ -416,12 +416,21 @@ async fn wait_for_shutdown() {
         tokio::select! {
             _ = term.recv() => tracing::info!("SIGTERM"),
             _ = tokio::signal::ctrl_c() => tracing::info!("interrupt"),
+            _ = wait_for_api_shutdown(shutdown_requested.clone()) => tracing::info!("API exit"),
         }
     }
 
     #[cfg(not(unix))]
     {
-        let _ = tokio::signal::ctrl_c().await;
-        tracing::info!("interrupt");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => tracing::info!("interrupt"),
+            _ = wait_for_api_shutdown(shutdown_requested) => tracing::info!("API exit"),
+        }
+    }
+}
+
+async fn wait_for_api_shutdown(requested: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    while !requested.load(std::sync::atomic::Ordering::Acquire) {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }
