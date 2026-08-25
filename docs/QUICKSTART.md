@@ -1,0 +1,227 @@
+# Quickstart
+
+A supervised server with a web dashboard, in about ten minutes. No database and
+no persistence yet: [step 6](#6-optional-turn-on-persistence) adds those once the
+basics work.
+
+You need an s&box dedicated server already installed (`sbox-server.exe` and a
+built `.sbproj`). Cellar supervises that; it does not install it.
+
+---
+
+## 1. Install Cellar
+
+**Windows** (PowerShell):
+
+```powershell
+$env:CELLAR_GITHUB_TOKEN = gh auth token   # the repo is private
+irm https://raw.githubusercontent.com/fobiat/cellar/main/scripts/install.ps1 | iex
+```
+
+**Linux**:
+
+```sh
+export CELLAR_GITHUB_TOKEN="$(gh auth token)"
+curl -fsSL https://raw.githubusercontent.com/fobiat/cellar/main/scripts/install.sh | sh
+```
+
+No `gh`? Download the archive for your platform from the
+[releases page](https://github.com/fobiat/cellar/releases), unpack it, and put
+`cellar` somewhere on your `PATH`. Full detail, including building from source,
+is in [Installation](INSTALLATION.md).
+
+Check it:
+
+```sh
+cellar --version
+```
+
+---
+
+## 2. Write a config
+
+Cellar reads `cellar.toml` from the working directory unless you pass
+`-c/--config`. Start from the shipped example, which is commented throughout:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/fobiat/cellar/main/cellar.toml.example
+cp cellar.toml.example cellar.toml
+```
+
+The smallest config that does something useful:
+
+```toml
+[server]
+executable = "/home/container/sbox/sbox-server.exe"
+project    = "/home/container/projects/applejackrp/applejackrp.sbproj"
+launcher   = "wine"          # "native" on Windows
+hostname   = "AppleJackRP Dev"
+
+[database]
+enabled = false              # turned on in step 6
+
+[bridge]
+enabled = false              # turned on in step 6
+
+[web]
+enabled = true
+bind    = "127.0.0.1:8081"
+```
+
+On Windows, the same three server lines with Windows paths:
+
+```toml
+[server]
+executable = 'C:\sbox\sbox-server.exe'
+project    = 'C:\Projects\AppleJackRP-sandbox\applejackrp.sbproj'
+launcher   = "native"
+```
+
+Every key is documented in [Configuration](CONFIGURATION.md).
+
+---
+
+## 3. Check it before starting anything
+
+```sh
+cellar doctor
+```
+
+`doctor` verifies the executable exists and is runnable, the project file parses,
+Wine is present when `launcher = "wine"`, the log path is writable, and the
+database is reachable when enabled. It reports what is wrong instead of letting
+the server fail at startup with something less clear.
+
+Fix anything it reports before continuing. [Troubleshooting](TROUBLESHOOTING.md)
+covers the common ones.
+
+---
+
+## 4. Start the server
+
+```sh
+cellar run
+```
+
+`run` is the foreground supervising mode, and it is what a container entrypoint
+should call. You should see the server start, then a readiness line once it is
+serving.
+
+Add the terminal dashboard if you have a real terminal:
+
+```sh
+cellar run --tui
+```
+
+Stop it with `Ctrl-C`. Cellar sends the engine a `quit` and waits up to
+`graceful_timeout_seconds` before killing it, so the nine shutdown steps
+(including the Steam logoff that removes the server from the master list)
+actually run. This is a genuine fix, not a nicety: the engine installs no
+SIGTERM handler at all, so anything that kills the process skips all of them.
+
+---
+
+## 5. Open the dashboard
+
+With `cellar run` still going, visit <http://127.0.0.1:8081>.
+
+You get the live console, the player roster, the feature and setting editors, a
+read-only database browser, and version information. Tabs are themed as a city
+RP dispatch board: Dispatch, Roster, Precinct, Ordinance, Records, Registry,
+Database, Releases.
+
+> **The web UI runs commands at full engine privilege.** On loopback that is
+> fine. Binding it anywhere else **requires** a password, and Cellar refuses to
+> start otherwise. See [step 7](#7-optional-expose-the-dashboard).
+
+While the server runs, a second terminal can drive it:
+
+```sh
+cellar settings dump                      # everything it is set to
+cellar settings dump --overrides -o server.toml   # just what was changed
+cellar settings diff server.toml          # what would this file change?
+cellar settings apply server.toml         # change it
+cellar settings set ui.menu.admin on      # one thing
+```
+
+These reach the running server through its web API, so `web.enabled` must be
+true. A partial file **sets what it names and nothing else**; it is not a request
+to reset what it omits.
+
+---
+
+## 6. Optional: turn on persistence
+
+Without this, characters live on the pod's disk and die with it. The bridge is
+the half of AppleJackRP's storage contract that nothing implemented until now.
+
+Start MariaDB or MySQL, then:
+
+```sh
+export CELLAR_DATABASE_URL='mysql://cellar:secret@127.0.0.1/cellar'
+```
+
+```toml
+[database]
+enabled = true
+migrate_on_start = true
+
+[bridge]
+enabled     = true
+bind        = "127.0.0.1:8080"
+public_url  = "http://127.0.0.1:8080"
+scope       = "applejackrp-dev"
+
+[server]
+# Required for the bridge. Cellar writes hosting.json here so the gamemode
+# dials the bridge. Without it the gamemode silently keeps using local files.
+data_dir = "/home/container/.local/share/sbox/data"
+```
+
+Apply the schema and restart:
+
+```sh
+cellar db migrate
+cellar db status
+cellar run
+```
+
+Confirm it is actually being used, rather than assuming:
+
+```sh
+cellar doc ls
+```
+
+Characters appear as `characters/<steamid>.json` once someone joins. Full detail,
+including the status codes that are load-bearing and why, is in
+[The bridge](BRIDGE.md).
+
+---
+
+## 7. Optional: expose the dashboard
+
+Only do this behind something that terminates TLS. The console behind this page
+runs arbitrary engine commands.
+
+```sh
+cellar hash-password                       # prompts, prints an argon2 hash
+export CELLAR_WEB_PASSWORD_HASH='$argon2id$v=19$...'
+```
+
+```toml
+[web]
+enabled = true
+bind    = "0.0.0.0:8081"
+```
+
+Cellar refuses to start on a non-loopback address without
+`CELLAR_WEB_PASSWORD_HASH`. That is deliberate and not overridable.
+
+---
+
+## Where to go next
+
+- Running it in Kubernetes, with probes and a grace period: [Operations](OPERATIONS.md)
+- Every config key: [Configuration](CONFIGURATION.md)
+- Every command: [CLI reference](CLI.md)
+- Something is wrong: [Troubleshooting](TROUBLESHOOTING.md)

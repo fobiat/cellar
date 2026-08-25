@@ -75,7 +75,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
                     "· {}/{} players · up {} ",
                     snapshot.players.len(),
                     if snapshot.max_players == 0 {
-                        "—".to_owned()
+                        "?".to_owned()
                     } else {
                         snapshot.max_players.to_string()
                     },

@@ -134,12 +134,13 @@ pub enum Event {
 
 /// The dedicated server console's status line, which is the only place the
 /// engine reports its own frame timings.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StatusBar {
     pub hostname: String,
     pub players: u32,
     pub max_players: u32,
-    /// Engine uptime as the status bar renders it.
+    /// True engine uptime, with the bar's rounded hour corrected. See
+    /// [`crate::statusbar`].
     pub uptime_seconds: u64,
     pub network_ms: Option<f32>,
     pub physics_ms: Option<f32>,

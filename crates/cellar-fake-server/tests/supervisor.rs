@@ -172,8 +172,20 @@ async fn a_console_command_returns_its_reply() {
     })
     .await;
 
+    let dispatched = std::time::Instant::now();
     let reply = handle.exec("applejack_features", "test").await.unwrap();
+    let elapsed = dispatched.elapsed();
     let text = reply.join("\n");
+
+    // The reply is bracketed, not timed. `ConsoleInput.OnEnter` echoes
+    // `> {command}` before dispatching and `RedrawInputLine` repaints the status
+    // block once the ConCmd returns, so the answer arrives as soon as the server
+    // is done. If this ever creeps up to REPLY_TIMEOUT the brackets have stopped
+    // being recognised and the backstop is silently doing the work.
+    assert!(
+        elapsed < Duration::from_millis(1500),
+        "the reply should be bracketed, not waited out; took {elapsed:?}"
+    );
 
     assert!(text.contains("ui.menu.admin"), "reply was: {text}");
     assert!(text.contains("41 feature(s)"), "reply was: {text}");

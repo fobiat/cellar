@@ -83,15 +83,16 @@ impl Release {
 }
 
 /// The target triple this build was compiled for.
+///
+/// Only the two targets releases actually carry are named. Anything else
+/// answers `"unknown"` and self-update reports that no build is published for
+/// this platform, which is the truth; naming a triple that is never uploaded
+/// turns a clear message into a 404 partway through the download.
 pub const fn current_target() -> &'static str {
     if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
         "x86_64-pc-windows"
     } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
         "x86_64-unknown-linux"
-    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-        "aarch64-unknown-linux"
-    } else if cfg!(target_os = "macos") {
-        "apple-darwin"
     } else {
         "unknown"
     }

@@ -16,6 +16,7 @@ pub mod grammar;
 pub mod lifecycle;
 pub mod secret;
 pub mod snapshot;
+pub mod statusbar;
 pub mod theme;
 
 pub use config::{AuthMode, Config, ConfigError, Launcher};

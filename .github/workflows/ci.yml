@@ -48,6 +48,9 @@ jobs:
       - name: fmt
         run: cargo fmt --all --check
 
+      - name: docs
+        run: ./scripts/check-docs.sh
+
       - name: build
         run: cargo build --workspace --all-targets
 

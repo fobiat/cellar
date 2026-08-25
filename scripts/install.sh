@@ -52,9 +52,14 @@ mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
 
 # Architecture, because an aarch64 box downloading an x86_64 binary produces a
 # confusing "not found" from the kernel rather than anything useful.
+#
+# Only x86_64 is published. The dedicated server is a Windows x86_64 binary run
+# under Wine, so an arm64 host cannot run the thing Cellar supervises anyway.
 case "$(uname -m)" in
     x86_64|amd64) TARGET="x86_64-unknown-linux" ;;
-    aarch64|arm64) TARGET="aarch64-unknown-linux" ;;
+    aarch64|arm64)
+        die "no arm64 build is published: the s&box server is x86_64-only under Wine.
+     Build the CLI from source with 'cargo build --release' if you want it here." ;;
     *) die "unsupported architecture: $(uname -m)" ;;
 esac
 

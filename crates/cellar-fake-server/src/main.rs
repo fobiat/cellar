@@ -20,6 +20,9 @@
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
+use cellar_core::event::StatusBar;
+use cellar_core::statusbar;
+
 /// The feature catalogue, in the shape `applejack_features` prints.
 const FEATURES: &[(&str, &str, &str)] = &[
     ("ui.menu.admin", "live", "Admin panel"),
@@ -122,6 +125,14 @@ fn main() -> std::process::ExitCode {
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         let command = line.trim();
+
+        // `ConsoleInput.OnEnter` writes the echo before dispatching, and it is
+        // what brackets the start of a reply. Cellar depends on it, so the fake
+        // has to produce it.
+        if !command.is_empty() {
+            print!("> {command}\r\n");
+            let _ = std::io::stdout().flush();
+        }
 
         if let Some(after) = options.crash_after
             && started.elapsed().as_secs() >= after
@@ -323,12 +334,31 @@ fn emit(log: &mut Option<std::fs::File>, logger: &str, message: &str) {
     }
 }
 
-/// The in-place status bar, carriage-returned the way the console redraws it.
+/// The status block, drawn the way `ConsoleInput.RedrawInputLine` draws it.
+///
+/// Four lines every time: a blank input line, the unset `statusText[0]`, then
+/// the two halves of the bar, each right-padded to the console width. Rendered
+/// by `cellar_core::statusbar` so the fake cannot drift from the format Cellar
+/// parses; both are transcriptions of `DedicatedServerConsole.UpdateStatus`.
 fn status_bar(options: &Options, players: u32, uptime: u64) {
-    let (h, m, s) = (uptime / 3600, (uptime % 3600) / 60, uptime % 60);
+    let bar = StatusBar {
+        hostname: options.hostname.clone(),
+        players,
+        max_players: options.max_players,
+        uptime_seconds: uptime,
+        network_ms: Some(0.42),
+        physics_ms: Some(1.10),
+        navmesh_ms: Some(0.05),
+        animation_ms: Some(0.31),
+        update_ms: Some(3.75),
+    };
+
+    let width = 100;
+    let [a, b] = statusbar::render(&bar, width);
     print!(
-        "\r{} ({}/{}) [{h:02}:{m:02}:{s:02}]  Network: 0.42ms  Physics: 1.10ms  Update: 3.75ms\r\n",
-        options.hostname, players, options.max_players
+        "{}\r\n{}\r\n{a}\r\n{b}\r\n",
+        " ".repeat(width),
+        " ".repeat(width)
     );
     let _ = std::io::stdout().flush();
 }
