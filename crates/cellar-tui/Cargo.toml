@@ -1,0 +1,20 @@
+[package]
+name = "cellar-tui"
+description = "Cellar's terminal dashboard: htop for an s&box dedicated server."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+cellar-core = { workspace = true }
+cellar-runtime = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+
+[lints]
+workspace = true

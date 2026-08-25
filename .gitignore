@@ -1,0 +1,17 @@
+/target
+/target-windows
+/dist
+Cargo.lock.orig
+
+# Assistant working files live in agents-configs, never here.
+AGENTS.md
+CLAUDE.md
+tasks.md
+handoverdaily.md
+roadmap.md
+.claude/
+
+# An operator's real config, which holds paths and may hold a scope name.
+# cellar.toml.example is the committed one.
+/cellar.toml
+/logs

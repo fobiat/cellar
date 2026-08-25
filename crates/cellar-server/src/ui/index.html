@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cellar · dispatch</title>
+<style>/*PALETTE*/</style>
+<style>/*STYLE*/</style>
+</head>
+<body>
+
+<div class="gate" id="gate" hidden>
+  <form class="panel" id="login">
+    <h2>Cellar</h2>
+    <div class="body">
+      <div class="row">
+        <span class="mark">★</span>
+        <span class="wordmark">A P P L E J A C K</span>
+      </div>
+      <p class="muted small">Operator sign in. The console behind this runs at full engine privilege.</p>
+      <input type="password" id="password" placeholder="operator password" autocomplete="current-password" required>
+      <button class="action" type="submit">Sign in</button>
+      <p class="notice" id="gate-notice"></p>
+    </div>
+  </form>
+</div>
+
+<div id="app" hidden>
+
+  <header class="masthead">
+    <span class="mark">★</span>
+    <span class="wordmark">A P P L E J A C K</span>
+    <span class="tagline">dispatch</span>
+    <span class="spacer"></span>
+    <button class="action" id="restart">Restart</button>
+    <button class="action danger" id="stop">Stop</button>
+  </header>
+
+  <div class="strip">
+    <div class="stat"><div class="label">Server</div><div class="value lamp wait" id="stat-state">…</div></div>
+    <div class="stat"><div class="label">Players</div><div class="value" id="stat-players">—</div></div>
+    <div class="stat"><div class="label">Uptime</div><div class="value" id="stat-uptime">—</div></div>
+    <div class="stat"><div class="label">Memory</div><div class="value" id="stat-memory">—</div></div>
+    <div class="stat"><div class="label">CPU</div><div class="value" id="stat-cpu">—</div></div>
+    <div class="stat"><div class="label">Bridge</div><div class="value lamp wait" id="stat-bridge">…</div></div>
+  </div>
+
+  <nav class="tabs">
+    <button data-tab="dispatch" aria-selected="true">Dispatch</button>
+    <button data-tab="roster">Roster</button>
+    <button data-tab="precinct">Precinct</button>
+    <button data-tab="records">Records</button>
+    <button data-tab="players">Registry</button>
+    <button data-tab="database">Database</button>
+    <button data-tab="releases">Releases</button>
+  </nav>
+
+  <main>
+
+    <!-- Dispatch: the live console. -->
+    <section id="tab-dispatch">
+      <div class="panel">
+        <h2>Console</h2>
+        <div class="body">
+          <div class="console" id="console"></div>
+          <div class="prompt">
+            <span class="caret">&gt;</span>
+            <input type="text" id="command" placeholder="type a command, for example applejack_features"
+                   autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Load</h2>
+          <div class="body">
+            <svg class="spark live" id="spark-cpu" viewBox="0 0 300 40" preserveAspectRatio="none"></svg>
+            <p class="muted small">CPU across the whole process tree. Under Wine that is the wine
+            process and sbox-server.exe beneath it.</p>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Frame timings</h2>
+          <div class="body scroll" id="timings"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Roster: who is on the server now. -->
+    <section id="tab-roster" hidden>
+      <div class="panel">
+        <h2>Connected now</h2>
+        <div class="body scroll">
+          <table>
+            <thead><tr><th>Name</th><th>Steam ID</th><th>Connected</th><th></th></tr></thead>
+            <tbody id="roster"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Precinct: the admin and developer surface. -->
+    <section id="tab-precinct" hidden>
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Features and settings</h2>
+          <div class="body">
+            <div class="chips">
+              <button class="chip" data-command="applejack_features">list features</button>
+              <button class="chip" data-command="applejack_settings">list settings</button>
+              <button class="chip" data-command="applejack_storage">storage</button>
+              <button class="chip" data-command="applejack_feature_set ui.menu.admin on">admin tab on</button>
+              <button class="chip" data-command="applejack_feature_set ui.menu.admin off">admin tab off</button>
+              <button class="chip" data-command="applejack_feature_set ui.menu.devmenu on">dev menu on</button>
+              <button class="chip" data-command="applejack_feature_set ui.menu.devmenu off">dev menu off</button>
+            </div>
+            <p class="muted small" style="margin-top:12px">
+              Output lands in the Dispatch console. Every one of these is a
+              <code>ConVarFlags.Admin</code> command the host console already accepts, so nothing
+              here needs a gamemode change.
+            </p>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Engine</h2>
+          <div class="body">
+            <div class="chips">
+              <button class="chip" data-command="status">status</button>
+              <button class="chip" data-command="find applejack">find applejack_*</button>
+              <button class="chip" data-command="applejack_dev_doors">doors</button>
+              <button class="chip" data-command="applejack_dev_warrants">warrants</button>
+              <button class="chip" data-command="applejack_dev_vehicle_roster">vehicles</button>
+              <button class="chip" data-command="applejack_dev_evidence">evidence</button>
+            </div>
+            <p class="muted small" style="margin-top:12px">
+              <code>status</code> and <code>find</code> are native engine commands. They work here
+              because the console is a real terminal, and refuse from gamemode code because
+              <code>ConsoleSystem.Run</code> will not run a protected command.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Records: the bridge's documents. -->
+    <section id="tab-records" hidden>
+      <div class="panel">
+        <h2>Documents</h2>
+        <div class="body">
+          <div class="row" style="margin-bottom:12px">
+            <input type="text" id="doc-prefix" placeholder="key prefix, for example characters/">
+            <button class="action" id="doc-search">Search</button>
+          </div>
+          <div class="scroll">
+            <table>
+              <thead><tr><th>Key</th><th>Revision</th><th>Size</th><th></th></tr></thead>
+              <tbody id="documents"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2 id="doc-title">No document open</h2>
+          <div class="body scroll"><pre id="doc-body" class="small"></pre></div>
+        </div>
+        <div class="panel">
+          <h2>Revisions</h2>
+          <div class="body scroll">
+            <table>
+              <thead><tr><th>Rev</th><th>Written</th><th>By</th></tr></thead>
+              <tbody id="doc-history"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Registry: every account ever seen. -->
+    <section id="tab-players" hidden>
+      <div class="panel">
+        <h2>Everyone who has played here</h2>
+        <div class="body scroll">
+          <table>
+            <thead><tr><th>Name</th><th>Steam ID</th><th>Playtime</th><th>Visits</th><th>Last seen</th></tr></thead>
+            <tbody id="players"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Database: the read-only browser. -->
+    <section id="tab-database" hidden>
+      <div class="panel">
+        <h2>Tables</h2>
+        <div class="body"><div class="chips" id="tables"></div></div>
+      </div>
+
+      <div class="panel">
+        <h2>Query</h2>
+        <div class="body">
+          <textarea id="sql" spellcheck="false">SELECT doc_key, revision, updated_at FROM aj_document ORDER BY updated_at DESC</textarea>
+          <div class="row" style="margin-top:10px">
+            <button class="action" id="run-query">Run</button>
+            <span class="muted small">SELECT, SHOW, DESCRIBE and EXPLAIN only.</span>
+          </div>
+          <p class="notice" id="db-notice"></p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2 id="db-title">Result</h2>
+        <div class="body scroll">
+          <table>
+            <thead id="db-head"></thead>
+            <tbody id="db-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Releases: what is installed, what is available, what changed. -->
+    <section id="tab-releases" hidden>
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Installed</h2>
+          <div class="body scroll">
+            <table>
+              <tbody id="versions"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Updates</h2>
+          <div class="body">
+            <p id="update-state" class="muted">Checking…</p>
+            <ul id="update-what" class="small"></ul>
+            <p class="muted small">
+              The updater never restarts a populated server. Policy, the maintenance
+              window and the only-when-empty gate all live in <code>cellar.toml</code>.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Changelog</h2>
+        <div class="body" id="changelog"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="masthead" style="border-top:1px solid color-mix(in srgb, var(--aj-frost) 22%, transparent); border-bottom:0">
+    <span class="tagline">city roleplay for s&amp;box</span>
+    <span class="spacer"></span>
+    <span class="muted small">
+      bridge <span id="bridge-detail">—</span> ·
+      conflicts <span id="bridge-conflicts">0</span> ·
+      unparsed <span id="stat-unparsed">0</span>
+      <span class="down" id="bridge-error"></span>
+    </span>
+  </footer>
+
+</div>
+
+<script>/*APP*/</script>
+</body>
+</html>

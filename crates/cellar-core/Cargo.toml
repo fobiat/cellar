@@ -1,0 +1,21 @@
+[package]
+name = "cellar-core"
+description = "Pure logic for Cellar: config, log grammar, lifecycle, document keys."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# No tokio, no I/O, no engine. Everything here is a function over data, so the
+# grammar that decides "a player joined" is testable without a game server.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+
+[lints]
+workspace = true

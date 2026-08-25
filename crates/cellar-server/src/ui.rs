@@ -1,0 +1,202 @@
+//! The web UI, assembled at compile time.
+//!
+//! Three files embedded in the binary and stitched together once: a server
+//! manager that needs a node toolchain to render its own status page has a
+//! second thing to keep working, and it is always the one that breaks during an
+//! incident.
+//!
+//! The palette is not written into the stylesheet. It is generated from
+//! `cellar_core::theme`, which states the Applejack tokens once, so a brand
+//! change upstream is one edit rather than a search through CSS.
+
+use std::sync::Arc;
+use std::sync::OnceLock;
+
+use axum::extract::State;
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde::Deserialize;
+
+use crate::session::{self, COOKIE};
+use crate::state::AppState;
+
+const HTML: &str = include_str!("ui/index.html");
+const CSS: &str = include_str!("ui/style.css");
+const JS: &str = include_str!("ui/app.js");
+
+/// The finished page, built once.
+fn page() -> &'static str {
+    static PAGE: OnceLock<String> = OnceLock::new();
+    PAGE.get_or_init(|| {
+        HTML.replace("/*PALETTE*/", &cellar_core::theme::css_variables())
+            .replace("/*STYLE*/", CSS)
+            .replace("/*APP*/", JS)
+    })
+}
+
+pub fn routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/", get(index))
+        .route("/api/login", post(login))
+        .route("/api/logout", post(logout))
+}
+
+async fn index() -> Response {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            // Everything is inline and same-origin, so the policy can be strict.
+            // `unsafe-inline` is needed only because the page is one file.
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; \
+                 connect-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'",
+            ),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        page(),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct Login {
+    password: String,
+}
+
+async fn login(State(state): State<Arc<AppState>>, Json(login): Json<Login>) -> Response {
+    let Some(hash) = &state.web_password_hash else {
+        // No password configured means loopback only, which the config layer
+        // enforces. Nothing to sign in to.
+        return Json(serde_json::json!({ "ok": true })).into_response();
+    };
+
+    if !session::verify_password(&login.password, hash.expose()) {
+        // No detail: "wrong password" and "no operator configured" must look the
+        // same from outside.
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false })),
+        )
+            .into_response();
+    }
+
+    let token = state.sessions.create("operator");
+
+    (
+        StatusCode::OK,
+        [(
+            header::SET_COOKIE,
+            // `Secure` is deliberately absent: this is commonly reached over
+            // plain http on a private address or through a port-forward, and a
+            // Secure cookie there is a cookie the browser silently drops.
+            format!("{COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200"),
+        )],
+        Json(serde_json::json!({ "ok": true })),
+    )
+        .into_response()
+}
+
+async fn logout(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> Response {
+    if let Some(cookie) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
+        for pair in cookie.split(';') {
+            if let Some((key, value)) = pair.split_once('=')
+                && key.trim() == COOKIE
+            {
+                state.sessions.destroy(value.trim());
+            }
+        }
+    }
+
+    (
+        StatusCode::OK,
+        [(
+            header::SET_COOKIE,
+            format!("{COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"),
+        )],
+        Json(serde_json::json!({ "ok": true })),
+    )
+        .into_response()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_page_is_assembled_with_no_placeholders_left() {
+        let page = page();
+        assert!(!page.contains("/*PALETTE*/"));
+        assert!(!page.contains("/*STYLE*/"));
+        assert!(!page.contains("/*APP*/"));
+    }
+
+    #[test]
+    fn the_palette_reaches_the_page_from_the_theme_module() {
+        let page = page();
+        // Applejack is blue by standing rule; the page must be serving that blue
+        // and not a hex somebody typed into the stylesheet.
+        assert!(page.contains("--aj-azure: #2F8FE0"));
+        assert!(page.contains("--aj-russet: #DA5B4D"));
+        assert!(page.contains("--aj-orchard: #6FA862"));
+    }
+
+    #[test]
+    fn no_colour_is_hardcoded_in_the_stylesheet() {
+        // Every colour must arrive as a custom property. A literal hex here is a
+        // second copy of the palette, and BRANDING.md is explicit that a second
+        // copy is one that goes stale.
+        let offenders: Vec<&str> = CSS
+            .lines()
+            .filter(|line| line.contains('#') && !line.trim_start().starts_with('*'))
+            .filter(|line| {
+                line.split('#')
+                    .skip(1)
+                    .any(|rest| rest.chars().take(3).all(|c| c.is_ascii_hexdigit()))
+            })
+            .collect();
+
+        assert!(offenders.is_empty(), "hardcoded colours: {offenders:?}");
+    }
+
+    #[test]
+    fn the_page_loads_nothing_from_the_network() {
+        // A dashboard for a server that is down must not need a CDN to render.
+        assert!(!HTML.contains("http://"));
+        assert!(!HTML.contains("//cdn"));
+        assert!(!HTML.contains("<script src"));
+        assert!(!HTML.contains("<link rel=\"stylesheet\""));
+    }
+
+    #[test]
+    fn the_script_never_assigns_untrusted_text_as_markup() {
+        // A player's display name reaches this page through the log. Rendering
+        // it as HTML would be stored cross-site scripting with a Steam profile
+        // as the input field.
+        assert!(!JS.contains("innerHTML"));
+        assert!(!JS.contains("outerHTML"));
+        assert!(!JS.contains("insertAdjacentHTML"));
+        assert!(!JS.contains("document.write"));
+    }
+
+    #[test]
+    fn every_tab_in_the_nav_has_a_section() {
+        let tabs: Vec<&str> = HTML
+            .split("data-tab=\"")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+            .collect();
+
+        assert!(!tabs.is_empty());
+        for tab in tabs {
+            assert!(
+                HTML.contains(&format!("id=\"tab-{tab}\"")),
+                "no section for {tab}"
+            );
+        }
+    }
+}
