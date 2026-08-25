@@ -10,10 +10,11 @@ use std::time::{Duration, Instant};
 
 use cellar_core::ansi::LineAssembler;
 use cellar_core::config::Config;
-use cellar_core::event::{Event, Origin};
+use cellar_core::event::{Event, Origin, StatusBar};
 use cellar_core::grammar::{self, Line};
 use cellar_core::lifecycle::{Decision, RestartTracker, State};
 use cellar_core::snapshot::{Snapshot, Tracker};
+use cellar_core::statusbar;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::logfile::Tailer;
@@ -21,13 +22,13 @@ use crate::metrics::Sampler;
 use crate::process::{self, Child, Output};
 use crate::{hosting, launch};
 
-/// How long to gather console output after dispatching a command.
+/// Backstop for a command whose reply is never bracketed.
 ///
-/// The engine has no command terminator and no echo Cellar can rely on, so a
-/// reply is "the lines that arrived shortly after". Phase 0 replaces this with a
-/// sentinel if the live console turns out to offer one; until then the window is
-/// the honest mechanism and it is stated rather than hidden.
-const REPLY_WINDOW: Duration = Duration::from_millis(750);
+/// The console brackets a reply exactly (see [`PendingReply`]), so this fires
+/// only when the child has no usable terminal and the markers never arrive. It
+/// is longer than the old blind window because it is no longer the mechanism,
+/// just the way a degraded console still answers instead of hanging.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// How long the console is held before it is allowed to be the event source.
 ///
@@ -35,14 +36,45 @@ const REPLY_WINDOW: Duration = Duration::from_millis(750);
 /// reasoning where it is used in `run_once`.
 const CONSOLE_GRACE: Duration = Duration::from_secs(2);
 
-/// A command awaiting its reply: what was sent, what has arrived since, when it
-/// was dispatched, and who is waiting.
-type ReplyCollector = Option<(
-    String,
-    Vec<String>,
-    Instant,
-    oneshot::Sender<Result<Vec<String>, String>>,
-)>;
+/// A command awaiting its reply.
+///
+/// The engine brackets console output precisely, which is worth stating because
+/// the obvious reading is that it does not. `ConsoleInput.OnEnter` writes
+/// `"> " + inputString` *before* calling `OnInputText`, and `RedrawInputLine`
+/// repaints the status block *after* `ConVarSystem.Run` returns. A reply is
+/// therefore exactly the lines between the echo and the next status line, with
+/// no timing guess involved.
+///
+/// Those markers exist only on the pty, never in the log file, so `bracketed` is
+/// filled from the console whatever channel is otherwise authoritative. That
+/// also means a reply is never double-counted: the log file supplies events, the
+/// console supplies replies.
+struct PendingReply {
+    command: String,
+    /// Lines between the `> {command}` echo and the status redraw.
+    bracketed: Vec<String>,
+    /// Everything seen since dispatch, used only if the echo never arrives.
+    fallback: Vec<String>,
+    /// Set by the echo, cleared by sending. While false, arriving console lines
+    /// belong to whatever the server was already saying.
+    open: bool,
+    started: Instant,
+    reply: oneshot::Sender<Result<Vec<String>, String>>,
+}
+
+impl PendingReply {
+    /// Answer the caller with the bracketed reply, or the unbracketed fallback
+    /// when the console never echoed.
+    fn complete(self) -> (String, Vec<String>) {
+        let lines = if self.open || !self.bracketed.is_empty() {
+            self.bracketed
+        } else {
+            self.fallback
+        };
+        let _ = self.reply.send(Ok(lines.clone()));
+        (self.command, lines)
+    }
+}
 
 /// What an outside caller can ask the supervisor to do.
 #[derive(Debug)]
@@ -118,6 +150,9 @@ pub struct Supervisor {
     sampler: Sampler,
     events: broadcast::Sender<Event>,
     started: Instant,
+    /// The two halves of the status bar, merged as they arrive. The engine draws
+    /// them as separate lines, so neither is ever a whole bar on its own.
+    status: StatusBar,
 }
 
 impl Supervisor {
@@ -141,6 +176,7 @@ impl Supervisor {
                 sampler: Sampler::new(),
                 events,
                 started: Instant::now(),
+                status: StatusBar::default(),
             },
             handle,
             control_rx,
@@ -300,8 +336,8 @@ impl Supervisor {
         let run_started = Instant::now();
         let mut requested_stop = false;
         let mut restart_requested = false;
-        // Lines seen since the last dispatched command, for reply correlation.
-        let mut collecting: ReplyCollector = None;
+        // The command awaiting its reply, if any.
+        let mut collecting: Option<PendingReply> = None;
 
         let exit_code = loop {
             tokio::select! {
@@ -343,13 +379,14 @@ impl Supervisor {
                         }
                     }
 
-                    // Close a reply window that has gone quiet.
-                    if let Some((_, _, started, _)) = &collecting
-                        && started.elapsed() >= REPLY_WINDOW
-                        && let Some((command, lines, _, reply)) = collecting.take()
+                    // Backstop only: a bracketed reply has already been sent by
+                    // the status line that terminated it.
+                    if let Some(p) = &collecting
+                        && p.started.elapsed() >= REPLY_TIMEOUT
+                        && let Some(p) = collecting.take()
                     {
-                        let _ = reply.send(Ok(lines.clone()));
-                        self.publish(Event::CommandReplied { command, reply: lines, ok: true });
+                        let (command, reply) = p.complete();
+                        self.publish(Event::CommandReplied { command, reply, ok: true });
                     }
                 }
 
@@ -381,15 +418,22 @@ impl Supervisor {
                                     });
                                     // Replace any in-flight collection; the newer
                                     // command is the one the caller is waiting on.
-                                    if let Some((old, lines, _, old_reply)) = collecting.take() {
-                                        let _ = old_reply.send(Ok(lines.clone()));
+                                    if let Some(previous) = collecting.take() {
+                                        let (old, lines) = previous.complete();
                                         self.publish(Event::CommandReplied {
                                             command: old,
                                             reply: lines,
                                             ok: true,
                                         });
                                     }
-                                    collecting = Some((command, Vec::new(), Instant::now(), reply));
+                                    collecting = Some(PendingReply {
+                                        command,
+                                        bracketed: Vec::new(),
+                                        fallback: Vec::new(),
+                                        open: false,
+                                        started: Instant::now(),
+                                        reply,
+                                    });
                                 }
                                 Err(error) => {
                                     let _ = reply.send(Err(format!("could not reach the console: {error}")));
@@ -436,11 +480,11 @@ impl Supervisor {
                 true,
             );
         }
-        if let Some((command, lines, _, reply)) = collecting.take() {
-            let _ = reply.send(Ok(lines.clone()));
+        if let Some(pending) = collecting.take() {
+            let (command, reply) = pending.complete();
             self.publish(Event::CommandReplied {
                 command,
-                reply: lines,
+                reply,
                 ok: true,
             });
         }
@@ -557,37 +601,67 @@ impl Supervisor {
         raw: &str,
         origin: Origin,
         ready_pattern: &str,
-        collecting: &mut ReplyCollector,
+        pending: &mut Option<PendingReply>,
         emit: bool,
     ) {
-        let line = match origin {
-            Origin::LogFile => Line::log_file(raw),
-            _ => Line::console(raw),
+        let from_console = origin != Origin::LogFile;
+        let line = if from_console {
+            Line::console(raw)
+        } else {
+            Line::log_file(raw)
         };
 
         let Some(parsed) = grammar::parse_line(line) else {
             return;
         };
 
-        // The status bar is identified by shape rather than by tracking cursor
-        // movement, which needs no terminal emulator and survives the engine
-        // changing where it draws the bar. Always read, from either channel.
-        if let Some(bar) = grammar::parse_status_bar(&parsed.message) {
-            self.publish(Event::Status(bar));
-            return;
+        if from_console {
+            // The status bar is drawn straight to the terminal and never
+            // reaches the log file, so it is read from the console only. It is
+            // also the terminator for a command's reply.
+            if let Some(fragment) = grammar::parse_status_fragment(&parsed.message) {
+                fragment.apply(&mut self.status);
+                let bar = self.status.clone();
+                self.publish(Event::Status(bar));
+
+                if let Some(p) = pending.take() {
+                    if p.open {
+                        let (command, reply) = p.complete();
+                        self.publish(Event::CommandReplied {
+                            command,
+                            reply,
+                            ok: true,
+                        });
+                    } else {
+                        *pending = Some(p);
+                    }
+                }
+                return;
+            }
+
+            // `> {command}`, written before the ConCmd runs. Not output.
+            if let Some(echoed) = statusbar::parse_command_echo(&parsed.message) {
+                if let Some(p) = pending.as_mut()
+                    && echoed.trim() == p.command.trim()
+                {
+                    p.open = true;
+                }
+                return;
+            }
+
+            if let Some(p) = pending.as_mut()
+                && !statusbar::is_blank_chrome(&parsed.message)
+            {
+                if p.open {
+                    p.bracketed.push(parsed.message.clone());
+                } else {
+                    p.fallback.push(parsed.message.clone());
+                }
+            }
         }
 
         if !emit {
             return;
-        }
-
-        if let Some((command, lines, _, _)) = collecting.as_mut() {
-            // A pty echoes what was typed into it, and ConPTY does the same, so
-            // the command comes back as the first line of its own reply. Nobody
-            // wants to read their own question.
-            if parsed.message.trim() != command.trim() {
-                lines.push(parsed.message.clone());
-            }
         }
 
         let event = grammar::classify(&parsed, origin, ready_pattern);

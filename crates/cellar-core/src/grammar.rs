@@ -20,7 +20,8 @@
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 
-use crate::event::{Event, LeaveReason, Level, LogLine, Origin, StatusBar, SteamId};
+use crate::event::{Event, LeaveReason, Level, LogLine, Origin, SteamId};
+use crate::statusbar;
 
 /// Width the console pads or truncates a logger name to.
 const CONSOLE_LOGGER_WIDTH: usize = 8;
@@ -318,77 +319,16 @@ fn split_trailing_steam_id(head: &str) -> Option<(SteamId, String)> {
     Some((steam_id, head[..open].to_owned()))
 }
 
-/// Parse the dedicated console's status bar.
+/// Parse either half of the dedicated console's status bar.
 ///
-/// The engine renders `{name} ({players}/{max}) [{h:mm:ss}]` followed by frame
-/// timings. The timing layout is read from a description of
-/// `DedicatedServerConsole.UpdateStatus` rather than from a captured sample, so
-/// this parser is deliberately tolerant: it finds the parts it recognises by
-/// shape and leaves the rest `None` instead of refusing the whole line. Phase 0
-/// replaces the tolerance with a fixture.
-pub fn parse_status_bar(text: &str) -> Option<StatusBar> {
-    let (players, max_players, counter_start) = find_player_counter(text)?;
-    let hostname = text[..counter_start].trim().to_owned();
-    let tail = &text[counter_start..];
-
-    Some(StatusBar {
-        hostname,
-        players,
-        max_players,
-        uptime_seconds: find_bracketed_clock(tail).unwrap_or(0),
-        network_ms: find_timing(tail, "network"),
-        physics_ms: find_timing(tail, "physics"),
-        navmesh_ms: find_timing(tail, "navmesh"),
-        animation_ms: find_timing(tail, "animation"),
-        update_ms: find_timing(tail, "update"),
-    })
-}
-
-fn find_player_counter(text: &str) -> Option<(u32, u32, usize)> {
-    let mut search = 0usize;
-    while let Some(open) = text[search..].find('(') {
-        let open = search + open;
-        if let Some(close) = text[open..].find(')') {
-            let close = open + close;
-            let inner = &text[open + 1..close];
-            if let Some((left, right)) = inner.split_once('/')
-                && let (Ok(players), Ok(max)) =
-                    (left.trim().parse::<u32>(), right.trim().parse::<u32>())
-            {
-                return Some((players, max, open));
-            }
-            search = close + 1;
-        } else {
-            break;
-        }
-    }
-    None
-}
-
-fn find_bracketed_clock(text: &str) -> Option<u64> {
-    let open = text.find('[')?;
-    let close = text[open..].find(']')? + open;
-    let mut parts = text[open + 1..close].split(':');
-    let hours: u64 = parts.next()?.trim().parse().ok()?;
-    let minutes: u64 = parts.next()?.trim().parse().ok()?;
-    let seconds: u64 = parts.next()?.trim().parse().ok()?;
-    Some(hours * 3600 + minutes * 60 + seconds)
+/// The engine draws it as two lines, so this answers a [`statusbar::Fragment`]
+/// and the caller merges. See [`crate::statusbar`] for the rendering it is
+/// anchored to.
+pub fn parse_status_fragment(text: &str) -> Option<statusbar::Fragment> {
+    statusbar::parse(text)
 }
 
 // `Network: 1.23ms`, `network 1.23`, `Network=1.23ms` all read the same.
-fn find_timing(text: &str, label: &str) -> Option<f32> {
-    let lowered = text.to_ascii_lowercase();
-    let at = lowered.find(label)?;
-    let rest = &text[at + label.len()..];
-
-    let digits: String = rest
-        .chars()
-        .skip_while(|c| !c.is_ascii_digit() && *c != '.' && *c != '-')
-        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
-        .collect();
-
-    digits.parse().ok()
-}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -515,34 +455,21 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_status_bar_shape() {
-        let bar = parse_status_bar(
-            "AppleJackRP Dev (7/64) [04:12:33]  Network: 0.42ms  Physics: 1.10ms  Update: 3.75ms",
-        )
-        .unwrap();
+    fn status_lines_are_recognised_from_either_half() {
+        // Both halves, as `DedicatedServerConsole` actually renders them. The
+        // format itself is tested in `crate::statusbar`; this only proves the
+        // grammar hands off to it.
+        let head = parse_status_fragment("AppleJackRP Dev (7/64) [4:12:33]     Network 0.42ms");
+        assert!(matches!(
+            head,
+            Some(statusbar::Fragment::Head { players: 7, .. })
+        ));
 
-        assert_eq!(bar.hostname, "AppleJackRP Dev");
-        assert_eq!(bar.players, 7);
-        assert_eq!(bar.max_players, 64);
-        assert_eq!(bar.uptime_seconds, 4 * 3600 + 12 * 60 + 33);
-        assert_eq!(bar.network_ms, Some(0.42));
-        assert_eq!(bar.physics_ms, Some(1.10));
-        assert_eq!(bar.update_ms, Some(3.75));
-        assert_eq!(bar.navmesh_ms, None);
-    }
+        let timings = parse_status_fragment(
+            "Physics 1.10ms, NavMesh 0.05ms, Animation 0.31ms   Update 3.75ms",
+        );
+        assert!(matches!(timings, Some(statusbar::Fragment::Timings { .. })));
 
-    #[test]
-    fn a_status_bar_without_timings_still_parses() {
-        let bar = parse_status_bar("Some Server (0/64) [00:00:05]").unwrap();
-        assert_eq!(bar.players, 0);
-        assert_eq!(bar.network_ms, None);
-    }
-
-    #[test]
-    fn a_hostname_containing_brackets_does_not_break_the_counter() {
-        let bar = parse_status_bar("Kyle's (test) server (3/32) [00:01:00]").unwrap();
-        assert_eq!(bar.players, 3);
-        assert_eq!(bar.max_players, 32);
-        assert_eq!(bar.hostname, "Kyle's (test) server");
+        assert!(parse_status_fragment("Loading assets for the map").is_none());
     }
 }

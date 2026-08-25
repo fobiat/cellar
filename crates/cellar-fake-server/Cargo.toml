@@ -14,10 +14,10 @@ name = "cellar-fake-server"
 path = "src/main.rs"
 
 [dependencies]
+cellar-core = { workspace = true }
 chrono = { workspace = true }
 
 [dev-dependencies]
-cellar-core = { workspace = true }
 cellar-runtime = { workspace = true }
 tokio = { workspace = true }
 tempfile = { workspace = true }
