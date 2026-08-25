@@ -21,6 +21,9 @@ use crate::state::AppState;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/status", get(status))
+        .route("/api/access", get(access).post(change_access))
+        .route("/api/logs", get(logs))
+        .route("/api/release/{action}", post(release))
         .route("/api/exec", post(exec))
         .route("/api/control/{action}", post(control))
         .route("/api/players", get(players))
@@ -256,15 +259,327 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         Some(handle) => handle.snapshot().await,
         None => None,
     };
+    let map_log = match (&state.log_file, &state.configured_map) {
+        (Some(path), Some(map)) => tokio::fs::read_to_string(path)
+            .await
+            .map(|log| log.contains(map) && !log.contains("failed to load map"))
+            .unwrap_or(false),
+        (None, Some(_)) => false,
+        (_, None) => true,
+    };
+    let spawn_validation = state
+        .version_probe
+        .as_ref()
+        .map(|root| {
+            root.project_dir
+                .join("Code/Characters/CharacterDirector.cs")
+        })
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .is_some_and(|source| source.contains("TryGroundSpawn") && source.contains("Scene.Trace"));
 
     Json(serde_json::json!({
         "server": snapshot,
         "bridge": bridge,
         "database": database,
         "mariadb": mariadb,
+        "health": {
+            "map": map_log,
+            "spawn_validation": spawn_validation,
+            "console": state.log_file.as_ref().is_some_and(|path| path.exists()),
+        },
         "scope": state.scope,
     }))
     .into_response()
+}
+
+/// The AppleJack invite gate and its SteamID64 allowlist.
+async fn access(State(state): State<Arc<AppState>>, _: Operator) -> Response {
+    let (features, permissions) = match read_access_files(&state).await {
+        Ok(files) => files,
+        Err(why) => return error(StatusCode::BAD_GATEWAY, why),
+    };
+
+    Json(serde_json::json!({
+        "invite_only": feature_enabled(&features, "admin.inviteonly"),
+        "allowlist": allowed_ids(&permissions),
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct LogsQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// Return the tail of the current engine log so a freshly opened dashboard has context.
+async fn logs(
+    State(state): State<Arc<AppState>>,
+    _: Operator,
+    Query(query): Query<LogsQuery>,
+) -> Response {
+    let Some(path) = &state.log_file else {
+        return Json(serde_json::json!([])).into_response();
+    };
+    let limit = query.limit.unwrap_or(250).clamp(1, 1000);
+    let text = match tokio::fs::read_to_string(path).await {
+        Ok(text) => text,
+        Err(_) => return Json(serde_json::json!([])).into_response(),
+    };
+    let lines = text
+        .lines()
+        .rev()
+        .take(limit)
+        .map(str::to_owned)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+    Json(lines).into_response()
+}
+
+/// Run a configured build or publish command for the game checkout.
+async fn release(
+    State(state): State<Arc<AppState>>,
+    operator: Operator,
+    Path(action): Path<String>,
+) -> Response {
+    let Some(probe) = &state.version_probe else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no project directory is configured",
+        );
+    };
+    if !matches!(action.as_str(), "build" | "publish") {
+        return error(StatusCode::BAD_REQUEST, "action must be build or publish");
+    }
+
+    tracing::warn!(
+        "{} started the configured release {action} pipeline",
+        operator.name
+    );
+    let result =
+        cellar_update::pipeline::run(&state.release_config, &action, &probe.project_dir).await;
+    let code = if result.ok {
+        StatusCode::OK
+    } else {
+        StatusCode::BAD_GATEWAY
+    };
+    (code, Json(result)).into_response()
+}
+
+#[derive(Deserialize)]
+struct AccessRequest {
+    action: String,
+    steam_id: Option<String>,
+    enabled: Option<bool>,
+}
+
+/// Change one invite gate setting or one allowlist entry.
+async fn change_access(
+    State(state): State<Arc<AppState>>,
+    operator: Operator,
+    Json(request): Json<AccessRequest>,
+) -> Response {
+    let result = match request.action.as_str() {
+        "allow" | "revoke" => {
+            let Some(steam_id) = request.steam_id.as_deref() else {
+                return error(StatusCode::BAD_REQUEST, "steam_id is required");
+            };
+            if !valid_steam_id(steam_id) {
+                return error(StatusCode::BAD_REQUEST, "steam_id must be a SteamID64");
+            }
+            edit_allowlist(&state, steam_id, request.action == "allow", &operator.name).await
+        }
+        "gate" => {
+            let Some(enabled) = request.enabled else {
+                return error(StatusCode::BAD_REQUEST, "enabled is required");
+            };
+            edit_gate(&state, enabled, &operator.name).await
+        }
+        other => Err(format!("unknown access action '{other}'")),
+    };
+
+    match result {
+        Ok(()) => access(State(state), operator).await,
+        Err(why) => error(StatusCode::BAD_GATEWAY, why),
+    }
+}
+
+async fn edit_allowlist(
+    state: &AppState,
+    steam_id: &str,
+    allow: bool,
+    operator: &str,
+) -> Result<(), String> {
+    let (_, mut permissions) = read_access_files(state).await?;
+    let grants = permissions
+        .as_object_mut()
+        .ok_or_else(|| "permissions.json is not an object".to_owned())?
+        .entry("Grants")
+        .or_insert_with(|| serde_json::json!({}));
+    let grants = grants
+        .as_object_mut()
+        .ok_or_else(|| "permissions.json Grants is not an object".to_owned())?;
+
+    if allow {
+        let grant = grants
+            .entry(steam_id.to_owned())
+            .or_insert_with(|| serde_json::json!({ "Bundles": [], "Permissions": [] }));
+        let grant = grant
+            .as_object_mut()
+            .ok_or_else(|| "the selected grant is not an object".to_owned())?;
+        let permissions = grant
+            .entry("Permissions")
+            .or_insert_with(|| serde_json::json!([]));
+        let permissions = permissions
+            .as_array_mut()
+            .ok_or_else(|| "the selected grant Permissions is not an array".to_owned())?;
+        if !permissions
+            .iter()
+            .any(|value| value.as_str() == Some("admin.connect"))
+        {
+            permissions.push(serde_json::Value::String("admin.connect".to_owned()));
+        }
+    } else if let Some(grant) = grants.get_mut(steam_id) {
+        let grant = grant
+            .as_object_mut()
+            .ok_or_else(|| "the selected grant is not an object".to_owned())?;
+        if let Some(values) = grant
+            .get_mut("Permissions")
+            .and_then(|value| value.as_array_mut())
+        {
+            values.retain(|value| value.as_str() != Some("admin.connect"));
+        }
+        let empty_permissions = grant
+            .get("Permissions")
+            .and_then(|value| value.as_array())
+            .is_none_or(Vec::is_empty);
+        let empty_bundles = grant
+            .get("Bundles")
+            .and_then(|value| value.as_array())
+            .is_none_or(Vec::is_empty);
+        if empty_permissions && empty_bundles {
+            grants.remove(steam_id);
+        }
+    }
+
+    write_access_file(state, "permissions.json", &permissions, operator).await
+}
+
+async fn edit_gate(state: &AppState, enabled: bool, operator: &str) -> Result<(), String> {
+    let (mut features, _) = read_access_files(state).await?;
+    let object = features
+        .as_object_mut()
+        .ok_or_else(|| "features.json is not an object".to_owned())?;
+    let values = object
+        .entry("Enabled")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .ok_or_else(|| "features.json Enabled is not an array".to_owned())?;
+    if enabled {
+        if !values
+            .iter()
+            .any(|value| value.as_str() == Some("admin.inviteonly"))
+        {
+            values.push(serde_json::Value::String("admin.inviteonly".to_owned()));
+        }
+    } else {
+        values.retain(|value| value.as_str() != Some("admin.inviteonly"));
+    }
+
+    write_access_file(state, "features.json", &features, operator).await
+}
+
+async fn read_access_files(
+    state: &AppState,
+) -> Result<(serde_json::Value, serde_json::Value), String> {
+    let Some(root) = &state.game_data_dir else {
+        return Ok((serde_json::json!({}), serde_json::json!({})));
+    };
+    let features = read_json_file(
+        &root.join("features.json"),
+        serde_json::json!({
+            "Version": 1,
+            "Enabled": []
+        }),
+    )
+    .await?;
+    let permissions = read_json_file(
+        &root.join("permissions.json"),
+        serde_json::json!({
+            "Version": 1,
+            "Grants": {}
+        }),
+    )
+    .await?;
+    Ok((features, permissions))
+}
+
+async fn read_json_file(
+    path: &std::path::Path,
+    fallback: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    match tokio::fs::read_to_string(path).await {
+        Ok(text) => {
+            serde_json::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(fallback),
+        Err(error) => Err(format!("{}: {error}", path.display())),
+    }
+}
+
+async fn write_access_file(
+    state: &AppState,
+    name: &str,
+    value: &serde_json::Value,
+    operator: &str,
+) -> Result<(), String> {
+    let Some(root) = &state.game_data_dir else {
+        return Err("the configured server has no game data directory".to_owned());
+    };
+    let path = root.join(name);
+    let text = serde_json::to_string_pretty(value).map_err(|error| error.to_string())?;
+    tokio::fs::write(&path, format!("{text}\n"))
+        .await
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    tracing::info!("{operator} updated {}", path.display());
+    Ok(())
+}
+
+fn valid_steam_id(value: &str) -> bool {
+    value.len() == 17
+        && value.starts_with("7656119")
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn feature_enabled(features: &serde_json::Value, feature: &str) -> bool {
+    features
+        .get("Enabled")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(feature)))
+}
+
+fn allowed_ids(permissions: &serde_json::Value) -> Vec<String> {
+    let mut ids = permissions
+        .get("Grants")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flat_map(|grants| grants.iter())
+        .filter_map(|(steam_id, grant)| {
+            let has_permission = grant
+                .get("Permissions")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|values| {
+                    values
+                        .iter()
+                        .any(|value| value.as_str() == Some("admin.connect"))
+                });
+            has_permission.then(|| steam_id.clone())
+        })
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
 }
 
 #[derive(Deserialize)]

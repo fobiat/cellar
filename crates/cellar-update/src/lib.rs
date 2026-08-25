@@ -6,6 +6,7 @@
 //! on it" a test rather than a hope.
 
 pub mod changelog;
+pub mod pipeline;
 pub mod selfupdate;
 pub mod updater;
 pub mod version;

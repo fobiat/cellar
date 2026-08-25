@@ -81,6 +81,29 @@ pub async fn doctor(path: &Path) -> Result<()> {
         );
     }
 
+    if let Some(map) = config.server.map.as_deref() {
+        check(
+            map.split('.').count() == 2
+                && map
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.'),
+            "server.map",
+            map.to_owned(),
+        );
+    }
+
+    let spawn_source = config
+        .server
+        .project
+        .parent()
+        .map(|path| path.join("Code/Characters/CharacterDirector.cs"));
+    if let Some(path) = spawn_source {
+        let grounded = std::fs::read_to_string(&path)
+            .map(|text| text.contains("TryGroundSpawn") && text.contains("Scene.Trace"))
+            .unwrap_or(false);
+        check(grounded, "spawn validation", format!("{}", path.display()));
+    }
+
     if config.server.launcher == cellar_core::Launcher::Wine {
         let wine = which("wine");
         check(
@@ -341,6 +364,11 @@ pub async fn db(path: &Path, action: DbAction) -> Result<()> {
                 cellar_store::ops::prune_events(&pool, config.database.event_retention_days)
                     .await?;
             println!("Removed {removed} event(s).");
+        }
+        DbAction::Backup => {
+            let output = cellar_mariadb::backup(url.expose(), &config.mariadb, &config.backup)
+                .map_err(|why| anyhow::anyhow!(why))?;
+            println!("Backup written to {}.", output.display());
         }
     }
 

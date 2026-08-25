@@ -64,6 +64,14 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         ));
     }
 
+    if config.backup.enabled {
+        if let Some(url) = config.database.url.clone() {
+            tokio::spawn(backup_loop(config.clone(), url.expose().to_owned()));
+        } else {
+            tracing::warn!("database backups enabled but CELLAR_DATABASE_URL is unset");
+        }
+    }
+
     if config.update.policy != UpdatePolicy::Off {
         tokio::spawn(watch_for_updates(config.clone(), handle.clone()));
     }
@@ -96,6 +104,17 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn backup_loop(config: Config, database_url: String) {
+    let interval = std::time::Duration::from_secs(config.backup.interval_hours.max(1) * 3600);
+    loop {
+        tokio::time::sleep(interval).await;
+        match cellar_mariadb::backup(&database_url, &config.mariadb, &config.backup) {
+            Ok(path) => tracing::info!("database backup written to {}", path.display()),
+            Err(why) => tracing::error!("database backup failed: {why}"),
+        }
+    }
 }
 
 /// Start and wait for the locally-hosted MariaDB, when `[mariadb].managed`.
@@ -154,6 +173,21 @@ fn build_state(
     state.mariadb = mariadb;
     state.web_password_hash = config.web.password_hash.clone();
     state.update_config = config.update.clone();
+    state.release_config = config.release.clone();
+    state.log_file = Some(cellar_runtime::log_file_for(&config.server));
+    state.configured_map = config.server.map.clone();
+    state.game_data_dir = config
+        .server
+        .executable
+        .parent()
+        .zip(config.server.game.as_deref())
+        .map(|(root, game)| {
+            let mut path = root.join("data");
+            for segment in game.split('.') {
+                path.push(segment);
+            }
+            path
+        });
     state.version_probe = Some(cellar_update::Probe {
         project_dir: project_dir(config),
         steam_dir: config.update.steam_dir.clone(),

@@ -123,6 +123,8 @@ enum DbAction {
     Status,
     /// Delete events older than the configured retention.
     Prune,
+    /// Create a timestamped logical dump and prune old dumps.
+    Backup,
 }
 
 #[derive(Subcommand)]

@@ -32,6 +32,10 @@ pub struct Config {
     pub update: UpdateConfig,
     #[serde(default)]
     pub mariadb: MariaDbConfig,
+    #[serde(default)]
+    pub backup: BackupConfig,
+    #[serde(default)]
+    pub release: ReleaseConfig,
 }
 
 /// What Cellar is allowed to do about a new version.
@@ -416,6 +420,39 @@ pub struct MariaDbConfig {
     pub graceful_timeout_seconds: u64,
 }
 
+/// Scheduled logical backups of the Cellar database.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct BackupConfig {
+    pub enabled: bool,
+    pub directory: Option<PathBuf>,
+    pub interval_hours: u64,
+    pub retain: usize,
+}
+
+/// Optional project-local commands for building and publishing the game.
+///
+/// Cellar never invents an s&box editor command. The editor owns the Steam
+/// session, so operators provide the exact commands their project supports.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ReleaseConfig {
+    pub build_command: Vec<String>,
+    pub publish_command: Vec<String>,
+    pub working_dir: Option<PathBuf>,
+}
+
+impl Default for BackupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            directory: None,
+            interval_hours: 24,
+            retain: 7,
+        }
+    }
+}
+
 impl Default for MariaDbConfig {
     fn default() -> Self {
         Self {
@@ -528,6 +565,37 @@ impl Config {
             return Err(ConfigError::Invalid(
                 "server.project or server.game is required".into(),
             ));
+        }
+
+        if let Some(map) = self
+            .server
+            .map
+            .as_deref()
+            .filter(|map| !map.trim().is_empty())
+        {
+            if self.server.game.as_deref().is_none_or(str::is_empty) {
+                return Err(ConfigError::Invalid(
+                    "server.map is only valid with a published server.game ident".into(),
+                ));
+            }
+            if !qualified_ident(map) {
+                return Err(ConfigError::Invalid(format!(
+                    "server.map '{map}' must use org.package form"
+                )));
+            }
+        }
+
+        if self.backup.enabled {
+            if !self.database.enabled || self.database.url.is_none() {
+                return Err(ConfigError::Invalid(
+                    "backup.enabled needs database.enabled and CELLAR_DATABASE_URL".into(),
+                ));
+            }
+            if self.backup.retain == 0 {
+                return Err(ConfigError::Invalid(
+                    "backup.retain must be at least 1 when backups are enabled".into(),
+                ));
+            }
         }
 
         if self.bridge.enabled {
@@ -680,6 +748,25 @@ pub fn binds_loopback(bind: &str) -> bool {
     }
 }
 
+fn qualified_ident(value: &str) -> bool {
+    let mut parts = value.split('.');
+    let Some(org) = parts.next() else {
+        return false;
+    };
+    let Some(package) = parts.next() else {
+        return false;
+    };
+    !org.is_empty()
+        && !package.is_empty()
+        && parts.next().is_none()
+        && org
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        && package
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.')
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -711,6 +798,8 @@ mod tests {
             notify: NotifyConfig::default(),
             update: UpdateConfig::default(),
             mariadb: MariaDbConfig::default(),
+            backup: BackupConfig::default(),
+            release: ReleaseConfig::default(),
         }
     }
 

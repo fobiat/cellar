@@ -72,6 +72,13 @@ max_connections = 8
 migrate_on_start = true
 event_retention_days = 90
 
+# Logical MariaDB dumps. The password is never put in the dump command line.
+[backup]
+enabled = false
+# directory = "C:\\ProgramData\\Cellar\\backups"
+interval_hours = 24
+retain = 7
+
 # Uncomment to have Cellar download, initialize and supervise its own MariaDB
 # instead of only connecting to one already running somewhere. `database.url`
 # (CELLAR_DATABASE_URL) is unaffected either way; run `cellar mariadb
@@ -144,3 +151,10 @@ update_engine = false
 # Needed for update_engine and for reading the installed build id.
 # steam_dir = "/home/container/sbox"
 # steamcmd = "/usr/bin/steamcmd"
+
+[release]
+# Cellar runs these without a shell from the configured working directory.
+# Supply the exact editor or wrapper commands used by this installation.
+# build_command = ["powershell.exe", "-NoProfile", "-File", "C:\\path\\to\\build.ps1"]
+# publish_command = ["powershell.exe", "-NoProfile", "-File", "C:\\path\\to\\publish.ps1"]
+# working_dir = "C:\\Users\\Shadow\\Desktop\\Projects\\AppleJackRP-sandbox"

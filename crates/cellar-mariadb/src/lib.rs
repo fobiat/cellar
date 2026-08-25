@@ -10,6 +10,7 @@
 //! managed instance or a remote one; see `[mariadb]` in
 //! `cellar_core::config` for why the two stay decoupled.
 
+pub mod backup;
 pub mod credentials;
 pub mod fetch;
 pub mod install;
@@ -17,5 +18,6 @@ pub mod provision;
 pub mod release;
 pub mod supervisor;
 
+pub use backup::{BackupError, create as backup};
 pub use provision::{Marker, ProvisionError, provision, read_marker};
 pub use supervisor::{Control, Handle, Status, Supervisor};

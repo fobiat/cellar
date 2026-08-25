@@ -710,6 +710,8 @@ mod tests {
             notify: Default::default(),
             update: Default::default(),
             mariadb: Default::default(),
+            backup: Default::default(),
+            release: Default::default(),
         }
     }
 

@@ -44,11 +44,13 @@
     <div class="stat"><div class="label">CPU</div><div class="value" id="stat-cpu">—</div></div>
     <div class="stat"><div class="label">Bridge</div><div class="value lamp wait" id="stat-bridge">…</div></div>
     <div class="stat"><div class="label">MariaDB</div><div class="value lamp wait" id="stat-mariadb">…</div></div>
+    <div class="stat"><div class="label">Map</div><div class="value lamp wait" id="stat-map">…</div></div>
   </div>
 
   <nav class="tabs">
     <button data-tab="dispatch" aria-selected="true">Dispatch</button>
     <button data-tab="roster">Roster</button>
+    <button data-tab="access">Access</button>
     <button data-tab="precinct">Precinct</button>
     <button data-tab="ordinance">Ordinance</button>
     <button data-tab="records">Records</button>
@@ -99,6 +101,34 @@
             <tbody id="roster"></tbody>
           </table>
         </div>
+      </div>
+    </section>
+
+    <!-- Access: AppleJack's invite-only gate and join allowlist. -->
+    <section id="tab-access" hidden>
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Invite gate</h2>
+          <div class="body">
+            <p id="access-gate" class="value lamp wait">Checking…</p>
+            <button class="action" id="access-toggle">Toggle gate</button>
+            <p class="muted small">Keep this on unless you intentionally want an open server.</p>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Add account</h2>
+          <div class="body">
+            <div class="row">
+              <input id="access-steam-id" inputmode="numeric" placeholder="SteamID64">
+              <button class="action" id="access-add">Invite</button>
+            </div>
+            <p class="notice" id="access-notice"></p>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Allowed accounts</h2>
+        <div class="body scroll"><table><thead><tr><th>Steam ID</th><th></th></tr></thead><tbody id="access-list"></tbody></table></div>
       </div>
     </section>
 
@@ -281,6 +311,11 @@
           <div class="body">
             <p id="update-state" class="muted">Checking…</p>
             <ul id="update-what" class="small"></ul>
+            <div class="row">
+              <button class="action" id="release-build">Build checkout</button>
+              <button class="action" id="release-publish">Publish package</button>
+            </div>
+            <p class="notice" id="release-notice"></p>
             <p class="muted small">
               The updater never restarts a populated server. Policy, the maintenance
               window and the only-when-empty gate all live in <code>cellar.toml</code>.

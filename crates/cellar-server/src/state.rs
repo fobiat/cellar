@@ -1,5 +1,6 @@
 //! Shared state for every route.
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -146,6 +147,10 @@ pub struct AppState {
     /// Where to look for versions, when version checking is configured.
     pub version_probe: Option<cellar_update::Probe>,
     pub update_config: cellar_core::config::UpdateConfig,
+    pub release_config: cellar_core::config::ReleaseConfig,
+    pub log_file: Option<PathBuf>,
+    pub configured_map: Option<String>,
+    pub game_data_dir: Option<PathBuf>,
 
     reads: AtomicU64,
     writes: AtomicU64,
@@ -171,6 +176,10 @@ impl AppState {
             sessions: crate::session::Sessions::new(),
             version_probe: None,
             update_config: Default::default(),
+            release_config: Default::default(),
+            log_file: None,
+            configured_map: None,
+            game_data_dir: None,
             reads: AtomicU64::new(0),
             writes: AtomicU64::new(0),
             absent: AtomicU64::new(0),

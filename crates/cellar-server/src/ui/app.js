@@ -35,8 +35,51 @@ function showTab(name) {
   if (name === "records") loadDocuments();
   if (name === "database") loadTables();
   if (name === "players") loadPlayers();
+  if (name === "access") loadAccess();
   if (name === "releases") loadReleases();
   if (name === "ordinance") loadSettings();
+}
+
+/* ---- access ------------------------------------------------------------- */
+
+async function loadAccess() {
+  const response = await fetch("/api/access");
+  const data = await response.json();
+  if (!response.ok) {
+    $("#access-notice").textContent = text(data.error);
+    return;
+  }
+
+  setLamp($("#access-gate"), data.invite_only ? "up" : "down", data.invite_only ? "invite-only" : "open");
+  const list = $("#access-list");
+  list.replaceChildren();
+  for (const steamId of data.allowlist || []) {
+    const row = el("tr");
+    const revoke = el("button", "chip", "revoke");
+    revoke.onclick = () => changeAccess({ action: "revoke", steam_id: steamId });
+    row.append(el("td", null, text(steamId)), el("td", null, revoke));
+    list.append(row);
+  }
+  if (!list.children.length) {
+    const row = el("tr");
+    const cell = el("td", "muted", "No invited accounts.");
+    cell.colSpan = 2;
+    row.append(cell);
+    list.append(row);
+  }
+  $("#access-toggle").textContent = data.invite_only ? "Turn gate off" : "Turn gate on";
+  $("#access-toggle").onclick = () => changeAccess({ action: "gate", enabled: !data.invite_only });
+}
+
+async function changeAccess(body) {
+  const response = await fetch("/api/access", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  $("#access-notice").textContent = response.ok ? "Saved." : text(data.error);
+  if (response.ok) loadAccess();
 }
 
 /* ---- ordinance: features and settings ----------------------------------- */
@@ -321,6 +364,10 @@ async function refreshStatus() {
     const lamps = { running: "up", starting: "wait", stopping: "wait", backoff: "wait" };
     setLamp($("#stat-mariadb"), lamps[mariadb.state] || "down", mariadb.state.replace("_", " "));
   }
+
+  const health = data.health || {};
+  setLamp($("#stat-map"), health.map && health.spawn_validation ? "up" : "down",
+    health.map && health.spawn_validation ? "validated" : "check needed");
 }
 
 function setLamp(node, state, label) {
@@ -706,9 +753,25 @@ let started = false;
 function start() {
   if (started) return;
   started = true;
+  loadLogs();
   connect();
   refreshStatus();
   setInterval(refreshStatus, 2000);
+}
+
+async function runRelease(action) {
+  const response = await fetch(`/api/release/${action}`, { method: "POST" });
+  const data = await response.json();
+  $("#release-notice").textContent = response.ok ? `${action} completed.` : text(data.output || data.error);
+  for (const line of String(data.output || "").split("\n").filter(Boolean)) appendLine("", now(), action, line);
+  loadReleases();
+}
+
+async function loadLogs() {
+  const response = await fetch("/api/logs?limit=250");
+  if (!response.ok) return;
+  const lines = await response.json();
+  for (const line of lines) appendLine("", now(), "history", text(line));
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -731,6 +794,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   $("#doc-search").onclick = loadDocuments;
   $("#run-query").onclick = runQuery;
+  $("#release-build").onclick = () => runRelease("build");
+  $("#release-publish").onclick = () => runRelease("publish");
+  $("#access-add").onclick = () => {
+    const steamId = $("#access-steam-id").value.trim();
+    if (!steamId) return;
+    changeAccess({ action: "allow", steam_id: steamId });
+    $("#access-steam-id").value = "";
+  };
 
   $("#stop").onclick = () => control("stop");
   $("#restart").onclick = () => control("restart");
