@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-25
+
 ### Added
 
 - **Cellar can host its own MariaDB.** `[mariadb]` (`managed = true`) downloads
@@ -19,6 +21,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   already just reads whatever `database.url` points at. See
   [Configuration](docs/CONFIGURATION.md#mariadb) and
   [Installation](docs/INSTALLATION.md#hosting-mariadb-locally).
+
+- **Server control plane integration.** The dashboard now manages the
+  AppleJack invite gate and SteamID64 allowlist, tails engine logs, reports
+  spawn and map health, and exposes build and publish actions.
+- **Database backups.** `cellar db backup` creates timestamped logical dumps;
+  `[backup]` can schedule them and prune old files.
+- **Windows tray controls.** `Cellar-Tray.ps1` provides start, stop, restart,
+  exit and web UI actions from the notification area.
+- **AppleJack release wrappers.** The Windows scripts open the project in the
+  installed s&box editor for build and editor-authenticated publishing.
 
 ## [0.1.3] - 2026-08-25
 
