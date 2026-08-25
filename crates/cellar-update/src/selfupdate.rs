@@ -37,6 +37,13 @@ pub struct Release {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Asset {
     pub name: String,
+    /// The API URL, not the browser one.
+    ///
+    /// `browser_download_url` needs a web session on a private repository,
+    /// where the API URL works with the same bearer token the rest of the call
+    /// already uses, given `Accept: application/octet-stream`. It also works
+    /// unauthenticated on a public repository, so there is one path rather than
+    /// two.
     pub url: String,
     pub size: u64,
 }
@@ -119,7 +126,15 @@ pub fn parse_release(json: &serde_json::Value) -> Option<Release> {
         .filter_map(|asset| {
             Some(Asset {
                 name: asset.get("name")?.as_str()?.to_owned(),
-                url: asset.get("browser_download_url")?.as_str()?.to_owned(),
+                url: asset
+                    .get("url")
+                    .and_then(|url| url.as_str())
+                    .or_else(|| {
+                        asset
+                            .get("browser_download_url")
+                            .and_then(|url| url.as_str())
+                    })?
+                    .to_owned(),
                 size: asset.get("size").and_then(|s| s.as_u64()).unwrap_or(0),
             })
         })
@@ -440,6 +455,7 @@ mod tests {
             "body": "the notes",
             "assets": [
                 { "name": "cellar-x86_64-pc-windows.zip",
+                  "url": "https://api.github.com/repos/x/y/releases/assets/1",
                   "browser_download_url": "https://example/1", "size": 4096 }
             ]
         });
@@ -448,6 +464,10 @@ mod tests {
         assert_eq!(release.tag, "v0.2.0");
         assert_eq!(release.notes, "the notes");
         assert_eq!(release.assets[0].size, 4096);
+        assert!(
+            release.assets[0].url.contains("api.github.com"),
+            "the API url is preferred: a private repo refuses the browser one"
+        );
     }
 
     /// The Windows dance, exercised on whatever platform the tests run on: the

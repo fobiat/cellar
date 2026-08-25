@@ -71,6 +71,36 @@ if [ -n "$FROM_FILE" ]; then
 else
     command -v curl >/dev/null 2>&1 || die "curl is needed"
 
+    # A private repository answers 404 to an anonymous caller, so a token is
+    # the difference between installing and appearing to have no releases.
+    # `gh auth token` prints one.
+    AUTH=""
+    if [ -n "${CELLAR_GITHUB_TOKEN:-}" ]; then
+        AUTH="Authorization: Bearer ${CELLAR_GITHUB_TOKEN}"
+    elif [ -n "${GITHUB_TOKEN:-}" ]; then
+        AUTH="Authorization: Bearer ${GITHUB_TOKEN}"
+    fi
+
+    curl_api() {
+        if [ -n "$AUTH" ]; then
+            curl -fsSL -H 'User-Agent: cellar-installer' -H "$AUTH" \
+                 -H 'Accept: application/vnd.github+json' "$@"
+        else
+            curl -fsSL -H 'User-Agent: cellar-installer' \
+                 -H 'Accept: application/vnd.github+json' "$@"
+        fi
+    }
+
+    curl_asset() {
+        if [ -n "$AUTH" ]; then
+            curl -fsSL -H 'User-Agent: cellar-installer' -H "$AUTH" \
+                 -H 'Accept: application/octet-stream' "$@"
+        else
+            curl -fsSL -H 'User-Agent: cellar-installer' \
+                 -H 'Accept: application/octet-stream' "$@"
+        fi
+    }
+
     if [ "$VERSION" = "latest" ]; then
         API="https://api.github.com/repos/${REPO}/releases/latest"
     else
@@ -78,20 +108,38 @@ else
     fi
 
     grey "  Looking up the release"
-    RELEASE="$(curl -fsSL -H 'User-Agent: cellar-installer' "$API")" \
-        || die "could not reach the release API"
+    RELEASE="$(curl_api "$API")" || die \
+        "no release visible. If the repository is private, set CELLAR_GITHUB_TOKEN (gh auth token)."
 
-    URL="$(printf '%s' "$RELEASE" \
-        | grep -o "https://[^\"]*${TARGET}[^\"]*\.tar\.gz" | head -n1)"
-    [ -n "$URL" ] || die "no ${TARGET} asset in that release"
+    # The asset id for the archive and for its checksum.
+    #
+    # Splitting the document on `{` puts each asset's `id` and `name` in one
+    # chunk, because GitHub emits both before the nested `uploader` object that
+    # would otherwise split it. That needs no json parser, which matters: this
+    # runs on minimal images with neither jq nor python.
+    #
+    # The API url is used rather than browser_download_url, which needs a web
+    # session on a private repository.
+    asset_id() {
+        printf '%s' "$RELEASE" | tr '{' '\n' \
+            | grep "\"name\": *\"$1\"" \
+            | grep -o '"id": *[0-9]*' | head -n1 | grep -o '[0-9]*'
+    }
 
-    grey "  Downloading $(basename "$URL")"
+    ARCHIVE="cellar-${TARGET}.tar.gz"
+    ASSET_ID="$(asset_id "$ARCHIVE")"
+    SUM_ID="$(asset_id "${ARCHIVE}.sha256")"
+
+    [ -n "$ASSET_ID" ] || die "no ${ARCHIVE} in that release"
+    [ -n "$SUM_ID" ] || die "no published checksum; refusing to install an unverified binary"
+
+    ASSETS="https://api.github.com/repos/${REPO}/releases/assets"
+
+    grey "  Downloading ${ARCHIVE}"
     TARBALL="${TEMP}/cellar.tar.gz"
-    curl -fsSL -o "$TARBALL" "$URL"
+    curl_asset -o "$TARBALL" "${ASSETS}/${ASSET_ID}"
 
-    # Refuse to install anything whose checksum was not published.
-    EXPECTED="$(curl -fsSL "${URL}.sha256" 2>/dev/null | awk '{print $1}')" \
-        || die "no published checksum; refusing to install an unverified binary"
+    EXPECTED="$(curl_asset "${ASSETS}/${SUM_ID}" | awk '{print $1}')"
     [ -n "$EXPECTED" ] || die "no published checksum; refusing to install an unverified binary"
 fi
 

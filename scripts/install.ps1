@@ -88,8 +88,19 @@ try {
             "https://api.github.com/repos/$repo/releases/tags/$Version"
         }
 
+        # A private repository answers 404 to an anonymous caller, so a token
+        # is the difference between installing and appearing to have no
+        # releases. `gh auth token` prints one.
+        $token = if ($env:CELLAR_GITHUB_TOKEN) { $env:CELLAR_GITHUB_TOKEN } else { $env:GITHUB_TOKEN }
+        $headers = @{ 'User-Agent' = 'cellar-installer'; 'Accept' = 'application/vnd.github+json' }
+        if ($token) { $headers['Authorization'] = "Bearer $token" }
+
         Write-Step 'Looking up the release'
-        $release = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'cellar-installer' }
+        try {
+            $release = Invoke-RestMethod -Uri $api -Headers $headers
+        } catch {
+            throw "No release visible at $api. If the repository is private, set CELLAR_GITHUB_TOKEN (gh auth token)."
+        }
 
         $asset = $release.assets | Where-Object { $_.name -like "*$target*.zip" } | Select-Object -First 1
         if (-not $asset) { throw "No $target asset in release $($release.tag_name)." }
@@ -100,10 +111,16 @@ try {
         }
 
         Write-Step "Downloading $($release.tag_name)"
-        $zip = Join-Path $temp $asset.name
-        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -UseBasicParsing
 
-        $checksumText = (Invoke-WebRequest -Uri $checksumAsset.browser_download_url -UseBasicParsing).Content
+        # The API url, not browser_download_url: the latter needs a web session
+        # on a private repository, where this works with the same token.
+        $assetHeaders = $headers.Clone()
+        $assetHeaders['Accept'] = 'application/octet-stream'
+
+        $zip = Join-Path $temp $asset.name
+        Invoke-WebRequest -Uri $asset.url -Headers $assetHeaders -OutFile $zip -UseBasicParsing
+
+        $checksumText = (Invoke-WebRequest -Uri $checksumAsset.url -Headers $assetHeaders -UseBasicParsing).Content
         $expected = ($checksumText -split '\s+')[0].ToLower()
     }
 

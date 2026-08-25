@@ -87,6 +87,43 @@ with **zero changes to the gamemode**. Gamemode C# itself cannot do this;
 
 ---
 
+## Install
+
+The repository is **private**, so every download needs a token. `gh auth token`
+prints one, and both installers and `cellar self-update` read it from
+`CELLAR_GITHUB_TOKEN`. Without it GitHub answers 404 and the tools say so
+rather than reporting "no releases".
+
+**Windows**
+
+```powershell
+$env:CELLAR_GITHUB_TOKEN = gh auth token
+irm https://raw.githubusercontent.com/fobiat/cellar/main/scripts/install.ps1 -Headers @{Authorization="Bearer $env:CELLAR_GITHUB_TOKEN"} | iex
+```
+
+Per-user by default, into `%LOCALAPPDATA%\Programs\Cellar`, needing no
+administrator. Add `-System -Service` from an elevated shell to install for all
+users and register a Windows service.
+
+**Linux**
+
+```sh
+export CELLAR_GITHUB_TOKEN="$(gh auth token)"
+curl -fsSL -H "Authorization: Bearer $CELLAR_GITHUB_TOKEN" \
+  https://raw.githubusercontent.com/fobiat/cellar/main/scripts/install.sh | sh
+```
+
+Per-user into `~/.local/bin`. Add `--system --service` as root for
+`/usr/local/bin` plus a systemd unit whose `TimeoutStopSec` is long enough for
+the engine's own shutdown.
+
+Both verify the published SHA-256 before installing anything, and both refuse
+when no checksum was published. `cellar self-update` does the same, and takes
+the bare binary rather than the archive so replacing the running binary needs no
+zip or tar reader.
+
+If the repository is ever made public, every token above becomes unnecessary.
+
 ## Quick start
 
 ```sh

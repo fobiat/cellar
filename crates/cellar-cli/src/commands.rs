@@ -698,18 +698,32 @@ pub async fn self_update(check_only: bool) -> Result<()> {
     let target = selfupdate::current_target();
 
     let client = reqwest_client()?;
-    let json: serde_json::Value = client
-        .get(selfupdate::DEFAULT_RELEASES_URL)
-        .header("User-Agent", "cellar")
+    let response = github(client.get(selfupdate::DEFAULT_RELEASES_URL))
         .send()
         .await
-        .context("reaching the release API")?
+        .context("reaching the release API")?;
+
+    // 404 means either "no releases" or "this repository is not visible to
+    // you", and those need different actions. Saying which one is the whole
+    // difference between a useful message and a confusing one.
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        anyhow::bail!(
+            "no release visible at {}.\n\
+             If the repository is private, set CELLAR_GITHUB_TOKEN to a token with `repo` scope \
+             (`gh auth token` prints one). Otherwise there is no release published yet.",
+            selfupdate::DEFAULT_RELEASES_URL
+        );
+    }
+
+    let json: serde_json::Value = response
+        .error_for_status()
+        .context("the release API refused the request")?
         .json()
         .await
         .context("reading the release document")?;
 
     let Some(release) = selfupdate::parse_release(&json) else {
-        anyhow::bail!("no releases published yet");
+        anyhow::bail!("the release API answered with something this build cannot read");
     };
 
     if !selfupdate::is_newer(current, &release.tag) {
@@ -740,18 +754,16 @@ pub async fn self_update(check_only: bool) -> Result<()> {
         .context("no published checksum; refusing to install an unverified binary")?;
 
     println!("\nDownloading {}", asset.name);
-    let bytes = client
-        .get(&asset.url)
-        .header("User-Agent", "cellar")
+    let bytes = github(client.get(&asset.url))
+        .header("Accept", "application/octet-stream")
         .send()
         .await?
         .error_for_status()?
         .bytes()
         .await?;
 
-    let checksum = client
-        .get(&checksum_asset.url)
-        .header("User-Agent", "cellar")
+    let checksum = github(client.get(&checksum_asset.url))
+        .header("Accept", "application/octet-stream")
         .send()
         .await?
         .error_for_status()?
@@ -774,6 +786,25 @@ pub async fn self_update(check_only: bool) -> Result<()> {
     println!("\nRestart Cellar for the new version to take effect.");
 
     Ok(())
+}
+
+/// Add the headers GitHub wants, including a token when one is configured.
+///
+/// A private repository answers 404 to an anonymous caller, so a token is the
+/// difference between self-update working and appearing to have no releases.
+fn github(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    let request = request
+        .header("User-Agent", "cellar")
+        .header("Accept", "application/vnd.github+json");
+
+    match std::env::var("CELLAR_GITHUB_TOKEN")
+        .or_else(|_| std::env::var("GITHUB_TOKEN"))
+        .ok()
+        .filter(|token| !token.trim().is_empty())
+    {
+        Some(token) => request.header("Authorization", format!("Bearer {token}")),
+        None => request,
+    }
 }
 
 fn reqwest_client() -> Result<reqwest::Client> {
