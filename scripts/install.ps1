@@ -120,12 +120,25 @@ try {
         $zip = Join-Path $temp $asset.name
         Invoke-WebRequest -Uri $asset.url -Headers $assetHeaders -OutFile $zip -UseBasicParsing
 
-        $checksumText = (Invoke-WebRequest -Uri $checksumAsset.url -Headers $assetHeaders -UseBasicParsing).Content
-        $expected = ($checksumText -split '\s+')[0].ToLower()
+        # -OutFile rather than .Content. `Accept: application/octet-stream`
+        # makes the response binary, so .Content is a Byte[]; `-split` then
+        # splits the array and returns the first byte's decimal value ("57")
+        # instead of the digest, which fails every install as a mismatch.
+        $checksumFile = "$zip.sha256"
+        Invoke-WebRequest -Uri $checksumAsset.url -Headers $assetHeaders -OutFile $checksumFile -UseBasicParsing
+        $expected = ((Get-Content -Path $checksumFile -Raw) -split '\s+')[0].ToLower()
     }
 
     if ($expected) {
         Write-Step 'Verifying the checksum'
+
+        # The guard `cellar self-update` already applies. A checksum that failed
+        # to parse otherwise arrives as a mismatch, which reads as a corrupt
+        # download and sends you looking at the wrong thing.
+        if ($expected -notmatch '^[0-9a-f]{64}$') {
+            throw "The published checksum did not parse as a sha256 digest (got '$expected'). Not installing."
+        }
+
         $actual = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLower()
         if ($actual -ne $expected) {
             throw "Checksum mismatch. Expected $expected, got $actual. Not installing."

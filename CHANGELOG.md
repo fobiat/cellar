@@ -4,6 +4,22 @@ All notable changes to Cellar are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The Windows installer could never verify a download.** `install.ps1` asked
+  for the checksum with `Accept: application/octet-stream`, which makes
+  `Invoke-WebRequest` return `.Content` as a `Byte[]`. `-split` then split the
+  array rather than the text, so the parsed digest was the first byte's decimal
+  value, `57`, and every install died on a checksum mismatch that looked like a
+  corrupt download. The checksum is now written to a file and read back as
+  text. Present since v0.1.1; the published artifacts were always correct.
+- **A checksum that fails to parse now says so.** `install.ps1` applies the same
+  64 hex digit guard `cellar self-update` already had, so a parsing fault
+  reports itself instead of surfacing as a mismatch and sending you to look at
+  the download.
+
 ## [0.1.2] - 2026-08-25
 
 ### Fixed
