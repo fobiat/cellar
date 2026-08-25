@@ -4,6 +4,56 @@ All notable changes to Cellar are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-08-25
+
+### Fixed
+
+- **The status bar is two lines, and only one of them was read.**
+  `SetStatus(1, ..)` carries the name, player counter, clock and Network
+  timing; `SetStatus(2, ..)` carries Physics, NavMesh, Animation and Update and
+  has no player counter at all. The parser anchored on the counter, so line B
+  never matched and the frame timings never arrived. The two fragments are now
+  parsed separately and merged.
+- **A command reply is bracketed exactly, so it no longer waits out a timer.**
+  `ConsoleInput.OnEnter` writes `"> " + inputString` before `OnInputText`, and
+  `RedrawInputLine` repaints the status block after `ConVarSystem.Run` returns,
+  so the reply is the lines between those two markers. The 750ms window is
+  demoted to a 3s backstop for a console that never echoes: 0.15s bracketed
+  against the fake server, 3.23s only when the echo is suppressed.
+- **Uptime was reported an hour ahead.** The engine renders the bar with
+  `{TotalHours:n0}`, which rounds where `mm\:ss` truncates, so 40 minutes shows
+  as `1:40:00`. The error is exactly `minutes >= 30`, so it is inverted on the
+  way in and Cellar reports true uptime.
+- **`aarch64-unknown-linux` was offered and has never existed.** `install.sh`
+  and `current_target` both named a target no release carries, turning an
+  unsupported platform into a 404 midway through a download. The installer now
+  says the server is a Windows x86_64 binary under Wine and points at
+  `cargo build`.
+
+### Added
+
+- **Eight guides under `docs/`**: QUICKSTART, INSTALLATION, CONFIGURATION, CLI,
+  BRIDGE, OPERATIONS, TROUBLESHOOTING and ARCHITECTURE. The README is cut back
+  to a front door that links to them instead of restating them. Written against
+  the shipped binary, which caught four things the docs would have stated
+  wrongly, including that `web.enabled` defaults to false and that `/healthz`
+  and `/readyz` are served on both the bridge and the web listener.
+- **`scripts/check-docs.sh`**, a documentation gate in CI: every relative `.md`
+  link resolves, every `#anchor` matches a real heading, and no em dash appears
+  anywhere. Falsified on a deliberately broken link and anchor before it was
+  trusted.
+
+### Changed
+
+- **A missing value says what it means.** An unknown revision author prints
+  `unknown` and an unknown player ceiling prints `?`, where both previously
+  printed an em dash.
+- **The release build runs on a self-hosted runner.** Actions minutes are billed
+  on a private repository and every hosted run has failed before starting, so
+  `Release` routes to `vars.CI_RUNNER` the way `CI` already did, and the Windows
+  binaries are cross-compiled there in the container `scripts/` already
+  provided rather than on a Windows runner.
+
 ## [0.1.1] - 2026-08-25
 
 ### Added
