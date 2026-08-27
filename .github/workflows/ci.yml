@@ -13,7 +13,8 @@ env:
 jobs:
   gate:
     name: build, test, clippy, fmt
-    # GitHub-hosted by default, overridable to a self-hosted runner.
+    # Never run fork pull requests on a private self-hosted runner. Public pull
+    # requests can execute arbitrary checked-out code during the build.
     #
     # Actions minutes are billed on a private repository, and on 2026-08-25
     # every run here failed before starting on "recent account payments have
@@ -21,7 +22,7 @@ jobs:
     # variable `CI_RUNNER` to a self-hosted label to route around that, the same
     # way AppleJackRP pins to `kyle-x1carbon`. Making the repository public also
     # resolves it, since public repos are not billed.
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
 
     # The same MariaDB the integration tests expect. Without it they skip, which
     # would quietly turn the SQL half of this project into untested code.
@@ -83,7 +84,7 @@ jobs:
     # `gate` job's comment above describes. `CI_WINDOWS_RUNNER` is separate
     # from `CI_RUNNER` because they need different label sets (this one is a
     # Windows label, not `cellar-runners`).
-    runs-on: ${{ vars.CI_WINDOWS_RUNNER || 'windows-latest' }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'windows-latest' || vars.CI_WINDOWS_RUNNER || 'windows-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -103,7 +104,7 @@ jobs:
 
   notify-discord:
     name: notify
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     needs: [gate, windows]
     if: always()
     steps:

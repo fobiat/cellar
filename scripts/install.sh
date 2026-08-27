@@ -1,7 +1,10 @@
 #!/usr/bin/env sh
 # Install Cellar on Linux.
 #
-#   curl -fsSL https://raw.githubusercontent.com/fobiat/cellar/main/scripts/install.sh | sh
+#   version=v0.1.6
+#   curl -fsSLO "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.sh"
+#   less install.sh && sh install.sh --version "$version"
+#   rm install.sh
 #   ./install.sh --system --service      # /usr/local/bin plus a systemd unit
 #   ./install.sh --run                   # install, doctor, and start Cellar
 #   ./install.sh --from-file cellar.tar.gz

@@ -12,7 +12,11 @@
     install, which does need an elevated shell.
 
 .EXAMPLE
-    irm https://raw.githubusercontent.com/fobiat/cellar/main/scripts/install.ps1 | iex
+    $version = 'v0.1.6'
+    Invoke-WebRequest "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.ps1" -OutFile install-cellar.ps1
+    Get-Content .\install-cellar.ps1
+    .\install-cellar.ps1 -Version $version
+    Remove-Item .\install-cellar.ps1
 
 .EXAMPLE
     .\install.ps1 -Version v0.1.0 -Service

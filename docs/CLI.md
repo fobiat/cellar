@@ -144,9 +144,8 @@ Downloads the release asset for this platform, verifies its published SHA-256,
 and installs it by renaming the running binary aside rather than writing over it,
 so a failed update leaves a working Cellar in place.
 
-The repository is private, so this needs `CELLAR_GITHUB_TOKEN` or `GITHUB_TOKEN`.
-Without one it reports that no release is visible to you, which is different from
-there being none.
+Public releases need no token. Set `CELLAR_GITHUB_TOKEN` or `GITHUB_TOKEN` when
+using a private fork.
 
 ---
 

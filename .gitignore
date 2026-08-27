@@ -15,3 +15,10 @@ roadmap.md
 # cellar.toml.example is the committed one.
 /cellar.toml
 /logs
+
+# Local credentials and signing material. Keep examples explicit and tracked.
+.env
+.env.*
+!.env.example
+*.pem
+*.key

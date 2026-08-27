@@ -153,9 +153,9 @@ localised.
 
 ## Self-update says there are no releases
 
-The repository is private, so GitHub answers `404` to an anonymous caller rather
-than `403`. Cellar distinguishes the two cases in its message: "no releases
-published" is different from "no releases visible to you".
+Public releases need no token. A private fork answers `404` to an anonymous
+caller rather than `403`. Cellar distinguishes the two cases in its message:
+"no releases published" is different from "no releases visible to you".
 
 Set `CELLAR_GITHUB_TOKEN` or `GITHUB_TOKEN`.
 

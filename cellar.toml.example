@@ -128,6 +128,10 @@ bind = "127.0.0.1:8081"
 # auto uses the password when configured, password always requires it, and
 # none is accepted only on loopback. Create a hash with `cellar hash-password`.
 auth = "auto"
+# A remote UI must sit behind a TLS reverse proxy. These explicit acknowledgements
+# allow its internal HTTP hop and keep the browser session cookie Secure.
+allow_insecure_http = false
+secure_cookies = false
 
 [notify]
 enabled = false

@@ -23,7 +23,7 @@ No secret is ever read from `cellar.toml`, and none is ever written back to it.
 | `CELLAR_DISCORD_WEBHOOK_URL` | Discord notifications. |
 | `CELLAR_WEBHOOK_URL` | Generic JSON notifications. |
 | `CELLAR_WEB_PASSWORD` | The plain password, so the CLI's live-server commands can log in. |
-| `CELLAR_GITHUB_TOKEN` / `GITHUB_TOKEN` | Reading releases from the private repository. |
+| `CELLAR_GITHUB_TOKEN` / `GITHUB_TOKEN` | Reading releases from a private fork. |
 | `CELLAR_LOG` | Log filter. Same as `--log`. |
 
 Secrets are held in a type that prints as `***` in every debug, display and
@@ -216,6 +216,8 @@ security claim is worse than an absent one.
 | `enabled` | `false` | Serve the dashboard and the control API. The shipped example turns this on. |
 | `bind` | `127.0.0.1:8081` | Listen address. |
 | `auth` | `auto` | `auto` uses a password when configured, `password` always requires one, and `none` is loopback-only. |
+| `allow_insecure_http` | `false` | Required for a non-loopback bind behind a TLS-terminating reverse proxy. |
+| `secure_cookies` | `false` | Required for a non-loopback bind so browser sessions are marked Secure. |
 | `password_hash` | from env | Argon2 hash from `cellar hash-password`. |
 
 `auth = "password"` requires `CELLAR_WEB_PASSWORD_HASH` even on loopback.
@@ -226,6 +228,11 @@ engine privilege.
 
 `web.enabled` must be true for `cellar settings` to work at all, because those
 commands reach the running server through this API.
+
+Cellar does not terminate TLS itself. A non-loopback UI bind must explicitly
+set `allow_insecure_http = true` and `secure_cookies = true`, then sit behind a
+TLS reverse proxy. This prevents an accidental plain-HTTP deployment from
+silently carrying operator credentials.
 
 ---
 

@@ -107,7 +107,17 @@ async fn login(State(state): State<Arc<AppState>>, Json(login): Json<Login>) -> 
         return Json(serde_json::json!({ "ok": true })).into_response();
     };
 
+    if !state.login_limiter.allow() {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, "60")],
+            Json(serde_json::json!({ "ok": false, "error": "too many login attempts" })),
+        )
+            .into_response();
+    }
+
     if !session::verify_password(&login.password, hash.expose()) {
+        state.login_limiter.record_failure();
         // No detail: "wrong password" and "no operator configured" must look the
         // same from outside.
         return (
@@ -123,10 +133,13 @@ async fn login(State(state): State<Arc<AppState>>, Json(login): Json<Login>) -> 
         StatusCode::OK,
         [(
             header::SET_COOKIE,
-            // `Secure` is deliberately absent: this is commonly reached over
-            // plain http on a private address or through a port-forward, and a
-            // Secure cookie there is a cookie the browser silently drops.
-            format!("{COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200"),
+            if state.web_secure_cookies {
+                format!(
+                    "{COOKIE}={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=43200"
+                )
+            } else {
+                format!("{COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200")
+            },
         )],
         Json(serde_json::json!({ "ok": true })),
     )
@@ -148,7 +161,11 @@ async fn logout(State(state): State<Arc<AppState>>, headers: axum::http::HeaderM
         StatusCode::OK,
         [(
             header::SET_COOKIE,
-            format!("{COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"),
+            if state.web_secure_cookies {
+                format!("{COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0")
+            } else {
+                format!("{COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0")
+            },
         )],
         Json(serde_json::json!({ "ok": true })),
     )

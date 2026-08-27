@@ -168,6 +168,7 @@ fn build_state(
     let mut state = AppState::new(documents, auth, config.scope());
     state.max_body_bytes = config.bridge.max_body_bytes;
     state.rate_limiter = RateLimiter::new(config.bridge.rate_limit_per_minute);
+    state.login_limiter = cellar_server::state::LoginLimiter::new(10);
     state.supervisor = Some(handle);
     state.pool = pool;
     state.database_schema_owner = match config.database.schema_owner {
@@ -177,6 +178,7 @@ fn build_state(
     state.mariadb = mariadb;
     state.web_password_hash = config.web.password_hash.clone();
     state.web_auth = config.web.auth;
+    state.web_secure_cookies = config.web.secure_cookies;
     state.update_config = config.update.clone();
     state.release_config = config.release.clone();
     state.log_file = Some(cellar_runtime::log_file_for(&config.server));

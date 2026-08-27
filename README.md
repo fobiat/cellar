@@ -110,23 +110,27 @@ Full command list in the [CLI reference](docs/CLI.md).
 
 ## Install
 
-The repository is **private**, so every download needs a token. `gh auth token`
-prints one, and both installers and `cellar self-update` read it from
-`CELLAR_GITHUB_TOKEN`. Without it GitHub answers 404 and the tools say so rather
-than reporting "no releases".
+The public releases are available without a token. The installers and
+`cellar self-update` also accept `CELLAR_GITHUB_TOKEN` for private forks.
 
 **Windows**
 
 ```powershell
-$env:CELLAR_GITHUB_TOKEN = gh auth token
-irm https://raw.githubusercontent.com/fobiat/cellar/main/scripts/install.ps1 | iex
+$version = 'v0.1.6'
+Invoke-WebRequest "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.ps1" -OutFile install-cellar.ps1
+Get-Content .\install-cellar.ps1
+.\install-cellar.ps1 -Version $version
+Remove-Item .\install-cellar.ps1
 ```
 
 **Linux**
 
 ```sh
-export CELLAR_GITHUB_TOKEN="$(gh auth token)"
-curl -fsSL https://raw.githubusercontent.com/fobiat/cellar/main/scripts/install.sh | sh
+version=v0.1.6
+curl -fsSLO "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.sh"
+less install.sh
+sh install.sh --version "$version"
+rm install.sh
 ```
 
 Both are per-user by default and need no administrator. Both verify the
@@ -171,6 +175,8 @@ migrate_on_start = false
 enabled = true
 bind = "0.0.0.0:8081"
 auth = "password"
+allow_insecure_http = true
+secure_cookies = true
 ```
 
 Use `auth = "auto"` for loopback development, or `auth = "none"` only on a

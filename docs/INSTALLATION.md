@@ -1,22 +1,22 @@
 # Installation
 
-The repository is **private**, so every download path needs a GitHub token. If
-that changes, the token requirement disappears from all of these.
+Public releases need no GitHub token. Cellar reads `CELLAR_GITHUB_TOKEN` first,
+then `GITHUB_TOKEN`, when you install from a private fork.
 
-Get one with `gh auth token`, or create a fine-grained PAT with read access to
-`fobiat/cellar`. Cellar reads `CELLAR_GITHUB_TOKEN` first, then `GITHUB_TOKEN`.
-
-> Without a token, GitHub answers `404` to an anonymous caller rather than `403`.
-> Cellar distinguishes "no releases exist" from "no releases are visible to you"
-> in its error message, because those look identical from the outside.
+> Without a token, a private fork answers `404` to an anonymous caller rather
+> than `403`. Cellar distinguishes "no releases exist" from "no releases are
+> visible to you" in its error message.
 
 ---
 
 ## Windows
 
 ```powershell
-$env:CELLAR_GITHUB_TOKEN = gh auth token
-irm https://raw.githubusercontent.com/fobiat/cellar/main/scripts/install.ps1 | iex
+$version = 'v0.1.6'
+Invoke-WebRequest "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.ps1" -OutFile install-cellar.ps1
+Get-Content .\install-cellar.ps1
+.\install-cellar.ps1 -Version $version
+Remove-Item .\install-cellar.ps1
 ```
 
 Installs `cellar.exe` to `%LOCALAPPDATA%\Programs\Cellar` (or
@@ -81,8 +81,11 @@ mariadb` is only for hosts where that is not an option.
 ## Linux
 
 ```sh
-export CELLAR_GITHUB_TOKEN="$(gh auth token)"
-curl -fsSL https://raw.githubusercontent.com/fobiat/cellar/main/scripts/install.sh | sh
+version=v0.1.6
+curl -fsSLO "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.sh"
+less install.sh
+sh install.sh --version "$version"
+rm install.sh
 ```
 
 Installs to `/usr/local/bin` when run as root, otherwise `~/.local/bin`. Config

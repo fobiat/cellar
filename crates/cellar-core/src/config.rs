@@ -138,7 +138,7 @@ pub struct ServerConfig {
     pub hostname: String,
 
     /// Steam Game Server Login Token. Read from `CELLAR_GSLT` at load.
-    #[serde(default, skip_serializing)]
+    #[serde(default, skip_serializing, skip_deserializing)]
     pub gslt: Option<Secret>,
 
     /// Expose the server's real address instead of routing through Steam's
@@ -238,7 +238,7 @@ pub struct BridgeConfig {
     pub auth: AuthMode,
 
     /// Value for `shared_secret` mode, from `CELLAR_BRIDGE_SECRET`.
-    #[serde(skip_serializing)]
+    #[serde(skip_serializing, skip_deserializing)]
     pub shared_secret: Option<Secret>,
 
     /// Which server's documents these are. One value today; the column exists so
@@ -297,7 +297,7 @@ pub enum AuthMode {
 pub struct DatabaseConfig {
     pub enabled: bool,
     /// From `CELLAR_DATABASE_URL`. Never written to the config file.
-    #[serde(skip_serializing)]
+    #[serde(skip_serializing, skip_deserializing)]
     pub url: Option<Secret>,
     pub max_connections: u32,
     /// Who owns the tables in this connection. Game-owned is the safe default:
@@ -341,8 +341,12 @@ pub struct WebConfig {
     pub bind: String,
     /// Authentication policy for the operator UI.
     pub auth: WebAuthMode,
+    /// Permit plain HTTP between Cellar and a TLS-terminating reverse proxy.
+    pub allow_insecure_http: bool,
+    /// Mark operator cookies Secure when TLS is terminated before Cellar.
+    pub secure_cookies: bool,
     /// Argon2 hash of the operator password, from `CELLAR_WEB_PASSWORD_HASH`.
-    #[serde(skip_serializing)]
+    #[serde(skip_serializing, skip_deserializing)]
     pub password_hash: Option<Secret>,
 }
 
@@ -365,6 +369,8 @@ impl Default for WebConfig {
             enabled: false,
             bind: "127.0.0.1:8081".to_owned(),
             auth: WebAuthMode::default(),
+            allow_insecure_http: false,
+            secure_cookies: false,
             password_hash: None,
         }
     }
@@ -375,10 +381,10 @@ impl Default for WebConfig {
 pub struct NotifyConfig {
     pub enabled: bool,
     /// From `CELLAR_DISCORD_WEBHOOK_URL`. Never logged, never serialised.
-    #[serde(skip_serializing)]
+    #[serde(skip_serializing, skip_deserializing)]
     pub discord_webhook: Option<Secret>,
     /// From `CELLAR_WEBHOOK_URL`. Receives the raw event JSON.
-    #[serde(skip_serializing)]
+    #[serde(skip_serializing, skip_deserializing)]
     pub generic_webhook: Option<Secret>,
     /// Seconds to gather events before sending, so a join wave is one message.
     pub batch_seconds: u64,
@@ -709,6 +715,21 @@ impl Config {
             ));
         }
 
+        if self.web.enabled && !binds_loopback(&self.web.bind) {
+            if !self.web.allow_insecure_http {
+                return Err(ConfigError::Invalid(
+                    "web.allow_insecure_http = true is required for a non-loopback bind: put the UI behind a TLS reverse proxy"
+                        .into(),
+                ));
+            }
+            if !self.web.secure_cookies {
+                return Err(ConfigError::Invalid(
+                    "web.secure_cookies = true is required for a non-loopback bind behind a TLS reverse proxy"
+                        .into(),
+                ));
+            }
+        }
+
         if self.mariadb.managed {
             if self.mariadb.version.trim().is_empty() {
                 return Err(ConfigError::Invalid(
@@ -943,6 +964,24 @@ mod tests {
     }
 
     #[test]
+    fn an_exposed_web_ui_needs_proxy_tls_acknowledgements() {
+        let mut config = minimal();
+        config.web.enabled = true;
+        config.web.bind = "0.0.0.0:8081".to_owned();
+        config.web.password_hash = Some(Secret::new("$argon2id$v=19$m=1,t=1,p=1$hash"));
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("allow_insecure_http"), "{error}");
+
+        config.web.allow_insecure_http = true;
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("secure_cookies"), "{error}");
+
+        config.web.secure_cookies = true;
+        config.validate().unwrap();
+    }
+
+    #[test]
     fn password_web_auth_can_be_required_on_loopback() {
         let mut config = minimal();
         config.web.enabled = true;
@@ -1111,6 +1150,32 @@ mod tests {
         let text = toml::to_string(&config).unwrap();
         assert!(!text.contains("A-REAL-LOOKING-GSLT"));
         assert!(!text.contains("password@host"));
+    }
+
+    #[test]
+    fn config_secret_fields_are_rejected_and_must_come_from_the_environment() {
+        let text = r#"
+            [server]
+            executable = "a.exe"
+            project = "a.sbproj"
+            gslt = "a-token-from-a-file"
+
+            [database]
+            url = "mysql://user:file-password@host/db"
+
+            [bridge]
+            shared_secret = "bridge-file-secret"
+
+            [web]
+            password_hash = "$argon2id$v=19$not-a-real-hash"
+
+            [notify]
+            discord_webhook = "https://discord.example/webhook/file-secret"
+            generic_webhook = "https://example.test/hook/file-secret"
+        "#;
+
+        let error = toml::from_str::<Config>(text).unwrap_err().to_string();
+        assert!(error.contains("gslt"), "{error}");
     }
 
     #[test]

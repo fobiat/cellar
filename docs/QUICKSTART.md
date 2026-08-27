@@ -11,18 +11,24 @@ built `.sbproj`). Cellar supervises that; it does not install the game server.
 
 ## 1. Install Cellar
 
-**Windows** (PowerShell):
+**Windows** (PowerShell, pinned bootstrap):
 
 ```powershell
-$env:CELLAR_GITHUB_TOKEN = gh auth token   # the repo is private
-irm https://raw.githubusercontent.com/fobiat/cellar/main/scripts/install.ps1 | iex
+$version = 'v0.1.6'
+Invoke-WebRequest "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.ps1" -OutFile install-cellar.ps1
+Get-Content .\install-cellar.ps1
+.\install-cellar.ps1 -Version $version
+Remove-Item .\install-cellar.ps1
 ```
 
-**Linux**:
+**Linux** (pinned bootstrap):
 
 ```sh
-export CELLAR_GITHUB_TOKEN="$(gh auth token)"
-curl -fsSL https://raw.githubusercontent.com/fobiat/cellar/main/scripts/install.sh | sh
+version=v0.1.6
+curl -fsSLO "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.sh"
+less install.sh
+sh install.sh --version "$version"
+rm install.sh
 ```
 
 No `gh`? Download the archive for your platform from the
@@ -45,7 +51,7 @@ Cellar reads `cellar.toml` from the working directory unless you pass
 setup, start from the shipped example, which is commented throughout:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/fobiat/cellar/main/cellar.toml.example
+curl -fsSLO https://raw.githubusercontent.com/fobiat/cellar/v0.1.6/cellar.toml.example
 cp cellar.toml.example cellar.toml
 ```
 
@@ -191,6 +197,8 @@ export CELLAR_WEB_PASSWORD_HASH='$argon2id$v=19$...'
 [web]
 enabled = true
 bind    = "0.0.0.0:8081"
+allow_insecure_http = true
+secure_cookies = true
 ```
 
 Cellar refuses to start on a non-loopback address without

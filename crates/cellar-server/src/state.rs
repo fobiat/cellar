@@ -96,6 +96,38 @@ pub struct RateLimiter {
     window: Mutex<(Instant, u32)>,
 }
 
+pub struct LoginLimiter {
+    per_minute: u32,
+    window: Mutex<(Instant, u32)>,
+}
+
+impl LoginLimiter {
+    pub fn new(per_minute: u32) -> Self {
+        Self {
+            per_minute,
+            window: Mutex::new((Instant::now(), 0)),
+        }
+    }
+
+    pub fn allow(&self) -> bool {
+        let Ok(mut window) = self.window.lock() else {
+            return false;
+        };
+
+        if window.0.elapsed() >= Duration::from_secs(60) {
+            *window = (Instant::now(), 0);
+        }
+
+        window.1 < self.per_minute
+    }
+
+    pub fn record_failure(&self) {
+        if let Ok(mut window) = self.window.lock() {
+            window.1 = window.1.saturating_add(1);
+        }
+    }
+}
+
 impl RateLimiter {
     pub fn new(per_minute: u32) -> Self {
         Self {
@@ -132,6 +164,7 @@ pub struct AppState {
     pub scope: String,
     pub max_body_bytes: usize,
     pub rate_limiter: RateLimiter,
+    pub login_limiter: LoginLimiter,
     /// The supervisor, when one is running. Absent for a bridge-only process.
     pub supervisor: Option<Handle>,
     /// The operations database, when configured.
@@ -146,6 +179,7 @@ pub struct AppState {
     pub web_password_hash: Option<cellar_core::Secret>,
     /// Explicit web authentication policy.
     pub web_auth: cellar_core::config::WebAuthMode,
+    pub web_secure_cookies: bool,
     /// Live web sessions.
     pub sessions: crate::session::Sessions,
     /// Where to look for versions, when version checking is configured.
@@ -174,12 +208,14 @@ impl AppState {
             scope: scope.into(),
             max_body_bytes: 1024 * 1024,
             rate_limiter: RateLimiter::new(600),
+            login_limiter: LoginLimiter::new(10),
             supervisor: None,
             pool: None,
             database_schema_owner: "gamemode".to_owned(),
             mariadb: None,
             web_password_hash: None,
             web_auth: Default::default(),
+            web_secure_cookies: false,
             sessions: crate::session::Sessions::new(),
             version_probe: None,
             update_config: Default::default(),
@@ -258,6 +294,16 @@ mod tests {
         for _ in 0..1000 {
             assert!(limiter.allow());
         }
+    }
+
+    #[test]
+    fn login_limiter_counts_failures_without_blocking_successful_attempts() {
+        let limiter = LoginLimiter::new(2);
+        assert!(limiter.allow());
+        limiter.record_failure();
+        assert!(limiter.allow());
+        limiter.record_failure();
+        assert!(!limiter.allow());
     }
 
     #[tokio::test]
