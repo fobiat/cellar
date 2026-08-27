@@ -259,6 +259,6 @@ figure. See [Architecture](docs/ARCHITECTURE.md#the-status-bar-is-two-lines-and-
 
 ---
 
-## Licence
+## License
 
-MIT or Apache-2.0, at your option.
+MIT. See [LICENSE-MIT](LICENSE-MIT).

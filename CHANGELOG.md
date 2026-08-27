@@ -4,9 +4,30 @@ All notable changes to Cellar are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.7] - 2026-08-27
+
+### Added
+
+- **Public deployment guidance.** Added a security policy, contribution guide,
+  tagged installer examples, and GitHub issue routing for the open-source
+  repository.
+- **Safer hosted web configuration.** Non-loopback web binds now require an
+  explicit TLS reverse-proxy acknowledgement and Secure cookies.
+
+### Changed
+
+- **Gamemode-owned databases remain the default.** Secret values are accepted
+  from the environment only, and file-based secret fields are rejected.
+- **Login attempts are throttled.** Failed operator logins are capped per
+  process to reduce password-guessing and Argon2 CPU exhaustion.
+- **Public pull requests use GitHub-hosted CI runners.** Maintainer-only runs
+  may still use configured self-hosted runners.
 
 ### Fixed
+
+- **Installer documentation no longer pipes mutable `main` scripts into a
+  shell.** It downloads a tagged script, shows it before execution, and pins
+  the installed release to the same tag.
 
 - **A resource-sampler test failed on every native Windows run.** It used pid
   0 as a stand-in for a dead process, but Windows exposes pid 0 as the System
