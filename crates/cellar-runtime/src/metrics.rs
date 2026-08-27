@@ -6,9 +6,10 @@
 //! the dashboard confidently shows an idle server under full load.
 
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use cellar_core::event::ResourceSample;
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+use sysinfo::{Networks, Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
 /// Samples a process tree, keeping the `sysinfo` state that cpu percentages need.
 ///
@@ -16,7 +17,9 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 /// construction is meaningless and is reported as zero rather than as a spike.
 pub struct Sampler {
     system: System,
+    networks: Networks,
     primed: bool,
+    last_network: Option<(Instant, u64, u64)>,
 }
 
 impl Default for Sampler {
@@ -32,7 +35,9 @@ impl Sampler {
                 RefreshKind::new()
                     .with_processes(ProcessRefreshKind::new().with_cpu().with_memory()),
             ),
+            networks: Networks::new_with_refreshed_list(),
             primed: false,
+            last_network: None,
         }
     }
 
@@ -49,6 +54,9 @@ impl Sampler {
 
         let root = Pid::from_u32(root_pid);
         self.system.process(root)?;
+        self.system.refresh_cpu_usage();
+        self.system.refresh_memory();
+        self.networks.refresh();
 
         let members = self.tree_of(root);
 
@@ -65,12 +73,41 @@ impl Sampler {
         let first = !self.primed;
         self.primed = true;
 
+        let now = Instant::now();
+        let received: u64 = self.networks.values().map(|data| data.received()).sum();
+        let transmitted: u64 = self.networks.values().map(|data| data.transmitted()).sum();
+        let (network_rx_bytes_per_sec, network_tx_bytes_per_sec) = self
+            .last_network
+            .map(|(at, old_received, old_transmitted)| {
+                let seconds = now.duration_since(at).as_secs_f64().max(0.001);
+                (
+                    ((received.saturating_sub(old_received) as f64) / seconds) as u64,
+                    ((transmitted.saturating_sub(old_transmitted) as f64) / seconds) as u64,
+                )
+            })
+            .unwrap_or_default();
+        self.last_network = Some((now, received, transmitted));
+        let total_memory = self.system.total_memory();
+        let host_memory_percent = if total_memory == 0 {
+            0.0
+        } else {
+            self.system.used_memory() as f32 * 100.0 / total_memory as f32
+        };
+
         Some(ResourceSample {
             at: chrono::Utc::now(),
             // A cpu percentage needs two refreshes to mean anything.
             cpu_percent: if first { 0.0 } else { cpu_percent },
             memory_bytes,
             process_count: members.len(),
+            host_cpu_percent: if first {
+                0.0
+            } else {
+                self.system.global_cpu_usage()
+            },
+            host_memory_percent,
+            network_rx_bytes_per_sec,
+            network_tx_bytes_per_sec,
         })
     }
 

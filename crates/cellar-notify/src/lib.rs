@@ -177,6 +177,10 @@ mod tests {
                 cpu_percent: 1.0,
                 memory_bytes: 1,
                 process_count: 1,
+                host_cpu_percent: 1.0,
+                host_memory_percent: 1.0,
+                network_rx_bytes_per_sec: 0,
+                network_tx_bytes_per_sec: 0,
             }),
             Event::Log(LogLine {
                 at: chrono::Utc::now(),

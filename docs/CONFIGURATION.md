@@ -23,6 +23,7 @@ No secret is ever read from `cellar.toml`, and none is ever written back to it.
 | `CELLAR_DISCORD_WEBHOOK_URL` | Discord notifications. |
 | `CELLAR_WEBHOOK_URL` | Generic JSON notifications. |
 | `CELLAR_WEB_PASSWORD` | The plain password, so the CLI's live-server commands can log in. |
+| `CELLAR_API_TOKEN` | Bearer token for the read-only external API under `/api/v1`. |
 | `CELLAR_GITHUB_TOKEN` / `GITHUB_TOKEN` | Reading releases from a private fork. |
 | `CELLAR_LOG` | Log filter. Same as `--log`. |
 

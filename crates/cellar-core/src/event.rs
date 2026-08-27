@@ -161,6 +161,13 @@ pub struct ResourceSample {
     pub cpu_percent: f32,
     pub memory_bytes: u64,
     pub process_count: usize,
+    /// Host-wide CPU percentage, normalized to the whole machine.
+    pub host_cpu_percent: f32,
+    /// Host-wide memory percentage.
+    pub host_memory_percent: f32,
+    /// Network traffic observed since the previous sample.
+    pub network_rx_bytes_per_sec: u64,
+    pub network_tx_bytes_per_sec: u64,
 }
 
 impl Event {

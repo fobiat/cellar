@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use cellar_core::snapshot::BridgeStats;
 use cellar_runtime::Handle;
 use sqlx::MySqlPool;
+use std::path::Path;
 
 use crate::auth::Policy;
 
@@ -180,6 +181,8 @@ pub struct AppState {
     /// Explicit web authentication policy.
     pub web_auth: cellar_core::config::WebAuthMode,
     pub web_secure_cookies: bool,
+    /// Bearer token for read-only machine integrations under `/api/v1`.
+    pub external_api_token: Option<cellar_core::Secret>,
     /// Live web sessions.
     pub sessions: crate::session::Sessions,
     /// Where to look for versions, when version checking is configured.
@@ -189,6 +192,14 @@ pub struct AppState {
     pub log_file: Option<PathBuf>,
     pub configured_map: Option<String>,
     pub game_data_dir: Option<PathBuf>,
+    pub config_path: Mutex<Option<PathBuf>>,
+    pub web_bind: String,
+    pub web_enabled: bool,
+    pub bridge_bind: String,
+    pub bridge_enabled: bool,
+    pub server_port: u16,
+    pub query_port: u16,
+    pub server_direct_connect: bool,
     pub shutdown_requested: std::sync::Arc<AtomicBool>,
 
     reads: AtomicU64,
@@ -216,6 +227,7 @@ impl AppState {
             web_password_hash: None,
             web_auth: Default::default(),
             web_secure_cookies: false,
+            external_api_token: None,
             sessions: crate::session::Sessions::new(),
             version_probe: None,
             update_config: Default::default(),
@@ -223,6 +235,14 @@ impl AppState {
             log_file: None,
             configured_map: None,
             game_data_dir: None,
+            config_path: Mutex::new(None),
+            web_bind: "127.0.0.1:8081".to_owned(),
+            web_enabled: false,
+            bridge_bind: "127.0.0.1:8080".to_owned(),
+            bridge_enabled: false,
+            server_port: 27015,
+            query_port: 27016,
+            server_direct_connect: false,
             shutdown_requested: std::sync::Arc::new(AtomicBool::new(false)),
             reads: AtomicU64::new(0),
             writes: AtomicU64::new(0),
@@ -271,6 +291,20 @@ impl AppState {
             would_conflict: self.would_conflict.load(Ordering::Relaxed),
             last_error: self.last_error.lock().ok().and_then(|e| e.clone()),
         }
+    }
+
+    pub fn active_config_name(&self) -> Option<String> {
+        self.config_path
+            .lock()
+            .ok()
+            .and_then(|path| path.as_ref()?.file_stem()?.to_str().map(str::to_owned))
+    }
+
+    pub fn config_directory(&self) -> Option<PathBuf> {
+        self.config_path
+            .lock()
+            .ok()
+            .and_then(|path| path.as_ref()?.parent().map(Path::to_path_buf))
     }
 }
 

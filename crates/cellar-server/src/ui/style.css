@@ -157,6 +157,45 @@ section[hidden] { display: none; }
 
 .panel > .body { padding: 14px; }
 
+.console-tools {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto auto auto auto;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+
+.console-tools input, .console-tools select { min-width: 0; }
+
+.table-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+
+.table-tools input { flex: 1 1 220px; min-width: 160px; }
+.table-tools select { flex: 0 1 180px; }
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.metric-grid > div {
+  display: grid;
+  gap: 2px;
+  padding: 9px;
+  background: var(--aj-shell);
+  border: 1px solid color-mix(in srgb, var(--aj-frost) 16%, transparent);
+  border-radius: 3px;
+}
+
+.metric-grid strong { font-size: 16px; font-variant-numeric: tabular-nums; }
+.address-row { display: grid; gap: 3px; padding: 8px 0; border-bottom: 1px solid color-mix(in srgb, var(--aj-frost) 12%, transparent); }
+.address-row code { overflow-wrap: anywhere; color: var(--aj-frost); }
+
 .grid-2 {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
@@ -301,6 +340,7 @@ button.action.danger:hover { background: color-mix(in srgb, var(--aj-russet) 16%
 /* ---- sparkline ---------------------------------------------------------- */
 
 .spark { width: 100%; height: 40px; display: block; }
+.spark.large { height: 130px; color: var(--aj-azure); background: color-mix(in srgb, var(--aj-ink) 70%, transparent); }
 
 /* ---- login -------------------------------------------------------------- */
 
@@ -349,6 +389,9 @@ button.action.danger:hover { background: color-mix(in srgb, var(--aj-russet) 16%
   main { padding: 12px 10px 34px; }
   .grid-2 { grid-template-columns: 1fr; gap: 10px; }
   .database-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .console-tools { grid-template-columns: 1fr 1fr; }
+  .console-tools input { grid-column: 1 / -1; }
+  .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .console { height: 52vh; min-height: 220px; }
   .line .who { flex-basis: 64px; }
   table { min-width: 560px; }

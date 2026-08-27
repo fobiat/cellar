@@ -38,7 +38,13 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     let mariadb = start_mariadb(&config).await?;
 
     let pool = open_database(&config).await?;
-    let state = build_state(&config, pool.clone(), handle.clone(), mariadb.clone())?;
+    let state = build_state(
+        config_path,
+        &config,
+        pool.clone(),
+        handle.clone(),
+        mariadb.clone(),
+    )?;
 
     let mut servers = Vec::new();
 
@@ -149,6 +155,7 @@ async fn start_mariadb(config: &Config) -> Result<Option<cellar_mariadb::Handle>
 }
 
 fn build_state(
+    config_path: &Path,
     config: &Config,
     pool: Option<sqlx::MySqlPool>,
     handle: Handle,
@@ -179,9 +186,20 @@ fn build_state(
     state.web_password_hash = config.web.password_hash.clone();
     state.web_auth = config.web.auth;
     state.web_secure_cookies = config.web.secure_cookies;
+    state.external_api_token = cellar_core::Secret::from_env("CELLAR_API_TOKEN");
     state.update_config = config.update.clone();
     state.release_config = config.release.clone();
     state.log_file = Some(cellar_runtime::log_file_for(&config.server));
+    if let Ok(mut path) = state.config_path.lock() {
+        *path = Some(config_path.to_owned());
+    }
+    state.web_bind = config.web.bind.clone();
+    state.web_enabled = config.web.enabled;
+    state.bridge_bind = config.bridge.bind.clone();
+    state.bridge_enabled = config.bridge.enabled;
+    state.server_port = config.server.port;
+    state.query_port = config.server.query_port;
+    state.server_direct_connect = config.server.direct_connect;
     state.configured_map = config.server.map.clone();
     state.game_data_dir = config
         .server

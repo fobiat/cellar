@@ -157,13 +157,19 @@ Cellar writes that file for you, before launching the child, from its own config
   "version": 1,
   "provider": "hosted",
   "bridgeUrl": "http://127.0.0.1:8080",
-  "authAudience": "applejack-bridge"
+  "authAudience": "applejack-bridge",
+  "apiKey": "cellar-local-trusted"
 }
 ```
 
 It goes in `server.data_dir`. **If `data_dir` is unset, this never happens and
 the gamemode keeps using local files with no error at all.** `cellar doctor`
 checks for it.
+
+For a loopback `trusted` bridge, Cellar writes the local-only `apiKey` shown
+above. This avoids depending on the platform token service during local
+dedicated-server runs. It is not a remote credential: trusted mode is refused
+on a reachable bind. Shared-secret mode writes the configured secret instead.
 
 One source of truth, and no hand-editing of a file that refuses to be
 hand-edited.

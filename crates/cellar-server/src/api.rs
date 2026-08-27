@@ -15,7 +15,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use crate::session::Operator;
+use crate::session::{ExternalApi, Operator};
 use crate::state::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -23,6 +23,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/status", get(status))
         .route("/api/access", get(access).post(change_access))
         .route("/api/logs", get(logs))
+        .route("/api/configs", get(configs))
+        .route("/api/configs/activate", post(activate_config))
         .route("/api/release/{action}", post(release))
         .route("/api/exec", post(exec))
         .route("/api/control/{action}", post(control))
@@ -37,6 +39,51 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/settings/export", get(export_settings))
         .route("/api/versions", get(versions))
         .route("/api/changelog", get(changelog))
+        .route("/api/v1/status", get(external_status))
+        .route("/api/v1/logs", get(external_logs))
+        .route("/api/v1/resources", get(external_resources))
+        .route("/api/v1/addresses", get(external_addresses))
+}
+
+async fn external_status(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response {
+    status(
+        State(state),
+        Operator {
+            name: "api".to_owned(),
+        },
+    )
+    .await
+}
+
+async fn external_logs(
+    State(state): State<Arc<AppState>>,
+    _: ExternalApi,
+    query: Query<LogsQuery>,
+) -> Response {
+    logs(
+        State(state),
+        Operator {
+            name: "api".to_owned(),
+        },
+        query,
+    )
+    .await
+}
+
+async fn external_resources(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response {
+    let snapshot = match &state.supervisor {
+        Some(supervisor) => supervisor.snapshot().await,
+        None => None,
+    };
+    Json(serde_json::json!({
+        "resources": snapshot.as_ref().and_then(|value| value.resources),
+        "history": snapshot.map(|value| value.resource_history).unwrap_or_default(),
+    }))
+    .into_response()
+}
+
+async fn external_addresses(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response {
+    Json(addresses(&state).await).into_response()
 }
 
 /// Everything the server is currently set to.
@@ -253,7 +300,7 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
 
     let bridge = state.stats();
     let database = match &state.pool {
-        Some(pool) => cellar_store::ping(pool).await.is_ok(),
+        Some(pool) => cellar_store::admin::info(pool).await.is_ok(),
         None => false,
     };
     let mariadb = match &state.mariadb {
@@ -280,6 +327,12 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
             source.contains("GroundedOrAuthored") && source.contains("Scene.Trace")
         });
 
+    let addresses = addresses(&state).await;
+    let invite_only = read_access_files(&state)
+        .await
+        .ok()
+        .map(|(features, _)| feature_enabled(&features, "admin.inviteonly"));
+
     Json(serde_json::json!({
         "server": snapshot,
         "bridge": bridge,
@@ -291,8 +344,108 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
             "console": state.log_file.as_ref().is_some_and(|path| path.exists()),
         },
         "scope": state.scope,
+        "addresses": addresses,
+        "access": { "invite_only": invite_only },
     }))
     .into_response()
+}
+
+async fn addresses(state: &AppState) -> Vec<serde_json::Value> {
+    let tailscale_ip = tailscale_ip().await;
+    let mut result = Vec::new();
+    if state.web_enabled {
+        result.push(address("Cellar web", &state.web_bind, &tailscale_ip, true));
+    }
+    if state.bridge_enabled {
+        result.push(address(
+            "Document bridge",
+            &state.bridge_bind,
+            &tailscale_ip,
+            false,
+        ));
+    }
+    let server_bind = format!("0.0.0.0:{}", state.server_port);
+    result.push(address(
+        "Game server",
+        &server_bind,
+        &tailscale_ip,
+        state.server_direct_connect,
+    ));
+    let query_bind = format!("0.0.0.0:{}", state.query_port);
+    result.push(address(
+        "Game query",
+        &query_bind,
+        &tailscale_ip,
+        state.server_direct_connect,
+    ));
+    result
+}
+
+fn address(
+    label: &str,
+    bind: &str,
+    tailscale_ip: &Option<String>,
+    remote: bool,
+) -> serde_json::Value {
+    let exposed = remote
+        && !bind.starts_with("127.")
+        && !bind.starts_with("localhost:")
+        && !bind.starts_with("[::1]");
+    let local_host = if bind.starts_with("0.0.0.0:") {
+        bind.replacen("0.0.0.0", "127.0.0.1", 1)
+    } else {
+        bind.to_owned()
+    };
+    let port = bind.rsplit_once(':').map(|(_, port)| port).unwrap_or("");
+    let local_url = if label == "Game server" || label == "Game query" {
+        local_host.to_string()
+    } else {
+        format!("http://{local_host}")
+    };
+    let remote_url = exposed
+        .then(|| {
+            tailscale_ip.as_ref().map(|ip| {
+                if label == "Game server" || label == "Game query" {
+                    format!("{ip}:{port}")
+                } else {
+                    format!("http://{ip}:{port}")
+                }
+            })
+        })
+        .flatten();
+    let state = if exposed && tailscale_ip.is_some() {
+        "tailnet-ready"
+    } else {
+        "local-only"
+    };
+    serde_json::json!({
+        "label": label,
+        "bind": bind,
+        "local_url": local_url,
+        "remote_url": remote_url,
+        "state": state,
+    })
+}
+
+async fn tailscale_ip() -> Option<String> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_millis(700),
+        tokio::process::Command::new("tailscale")
+            .args(["ip", "-4"])
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()?
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned)
 }
 
 /// The AppleJack invite gate and its SteamID64 allowlist.
@@ -313,32 +466,106 @@ async fn access(State(state): State<Arc<AppState>>, _: Operator) -> Response {
 struct LogsQuery {
     #[serde(default)]
     limit: Option<usize>,
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    tag: Option<String>,
+    #[serde(default)]
+    level: Option<cellar_core::event::Level>,
+    #[serde(default)]
+    category: Option<String>,
 }
 
-/// Return the tail of the current engine log so a freshly opened dashboard has context.
+/// Scan current and rotated engine logs. The files are the persistent source,
+/// so search remains useful after Cellar or the browser restarts.
 async fn logs(
     State(state): State<Arc<AppState>>,
     _: Operator,
     Query(query): Query<LogsQuery>,
 ) -> Response {
     let Some(path) = &state.log_file else {
-        return Json(serde_json::json!([])).into_response();
+        return Json(serde_json::json!({
+            "lines": [], "matched": 0, "scanned_files": 0, "scanned_lines": 0,
+            "persistent": false
+        }))
+        .into_response();
     };
-    let limit = query.limit.unwrap_or(250).clamp(1, 1000);
-    let text = match tokio::fs::read_to_string(path).await {
-        Ok(text) => text,
-        Err(_) => return Json(serde_json::json!([])).into_response(),
+    let result = crate::logs::search(
+        path,
+        &crate::logs::Query {
+            text: query.q.filter(|value| !value.trim().is_empty()),
+            tag: query.tag.filter(|value| !value.trim().is_empty()),
+            level: query.level,
+            category: query.category.filter(|value| !value.trim().is_empty()),
+            limit: query.limit.unwrap_or(250).clamp(1, 5000),
+        },
+    )
+    .await;
+    Json(result).into_response()
+}
+
+async fn configs(State(state): State<Arc<AppState>>, _: Operator) -> Response {
+    let Some(directory) = state.config_directory() else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "no config file is active");
     };
-    let lines = text
-        .lines()
-        .rev()
-        .take(limit)
-        .map(str::to_owned)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>();
-    Json(lines).into_response()
+    let active = state.config_path.lock().ok().and_then(|path| path.clone());
+    Json(serde_json::json!({
+        "profiles": crate::config_manager::list(&directory, active.as_deref()).await
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct ActivateConfigRequest {
+    name: String,
+}
+
+async fn activate_config(
+    State(state): State<Arc<AppState>>,
+    _: Operator,
+    Json(request): Json<ActivateConfigRequest>,
+) -> Response {
+    let Some(directory) = state.config_directory() else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "no config file is active");
+    };
+    let path = match crate::config_manager::resolve(&directory, &request.name) {
+        Ok(path) => path,
+        Err(why) => return error(StatusCode::BAD_REQUEST, why),
+    };
+    let config = match crate::config_manager::load(&path) {
+        Ok(config) => config,
+        Err(why) => return error(StatusCode::BAD_REQUEST, why),
+    };
+    if config.web.bind != state.web_bind
+        || config.web.enabled != state.web_enabled
+        || config.bridge.bind != state.bridge_bind
+        || config.bridge.enabled != state.bridge_enabled
+    {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "profiles may change the supervised server, but not Cellar listener bindings",
+        );
+    }
+    let current_log = state.log_file.as_deref();
+    if current_log != Some(cellar_runtime::log_file_for(&config.server).as_path()) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "profiles must use the active server log path",
+        );
+    }
+    let Some(supervisor) = &state.supervisor else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no server is being supervised",
+        );
+    };
+    if let Err(why) = supervisor.switch_config(config).await {
+        return error(StatusCode::BAD_GATEWAY, why);
+    }
+    if let Ok(mut active) = state.config_path.lock() {
+        *active = Some(path);
+    }
+    Json(serde_json::json!({ "active": request.name, "restarting": true })).into_response()
 }
 
 /// Run a configured build or publish command for the game checkout.

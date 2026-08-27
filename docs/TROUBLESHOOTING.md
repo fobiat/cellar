@@ -75,7 +75,10 @@ Causes, most likely first:
    loopback address and you get silence.
 2. **`public_url` redirects.** The engine strips `Authorization` on every
    redirect hop. The URL must be final.
-3. **Answering too slowly.** The client times out at 3s for reads, 5s for
+3. **Platform auth is unavailable during local development.** Cellar writes a
+   loopback-only `apiKey` into `hosting.json` for trusted bridges, so restart
+   the managed server after upgrading Cellar to regenerate that file.
+4. **Answering too slowly.** The client times out at 3s for reads, 5s for
    writes, and opens its circuit breaker after three failures.
 
 ## Characters vanish, or reset to empty

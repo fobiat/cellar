@@ -21,6 +21,12 @@ const text = (value) => (value === null || value === undefined ? "" : String(val
 
 let socket = null;
 let cpuHistory = [];
+let resourceHistory = [];
+let consoleRecords = [];
+let consolePaused = false;
+let consoleSlow = false;
+let consoleRenderTimer = null;
+let activeTab = "dispatch";
 let serviceWorker = null;
 
 function showToast(message) {
@@ -71,6 +77,7 @@ function notifyOperator(title, body) {
 /* ---- tabs --------------------------------------------------------------- */
 
 function showTab(name) {
+  activeTab = name;
   document.querySelectorAll("nav.tabs button").forEach((button) => {
     button.setAttribute("aria-selected", String(button.dataset.tab === name));
   });
@@ -83,7 +90,9 @@ function showTab(name) {
   if (name === "players") loadPlayers();
   if (name === "access") loadAccess();
   if (name === "releases") loadReleases();
-  if (name === "ordinance") loadSettings();
+  if (name === "settings") loadSettings();
+  if (name === "monitoring") refreshStatus();
+  if (name === "configs") loadConfigs();
 }
 
 /* ---- access ------------------------------------------------------------- */
@@ -386,6 +395,16 @@ async function refreshStatus() {
       cpuHistory.push(server.resources.cpu_percent);
       if (cpuHistory.length > 120) cpuHistory.shift();
       drawSpark($("#spark-cpu"), cpuHistory);
+      resourceHistory = server.resource_history || [server.resources];
+      const latest = server.resources;
+      $("#metric-process-cpu").textContent = `${latest.cpu_percent.toFixed(1)}%`;
+      $("#metric-host-cpu").textContent = `${latest.host_cpu_percent.toFixed(1)}%`;
+      $("#metric-process-memory").textContent = formatBytes(latest.memory_bytes);
+      $("#metric-host-memory").textContent = `${latest.host_memory_percent.toFixed(1)}%`;
+      $("#metric-network-in").textContent = `${formatBytes(latest.network_rx_bytes_per_sec)}/s`;
+      $("#metric-network-out").textContent = `${formatBytes(latest.network_tx_bytes_per_sec)}/s`;
+      drawSeries($("#spark-resources"), resourceHistory.map((sample) => sample.host_cpu_percent), 100);
+      $("#telemetry-state").textContent = `${resourceHistory.length} samples · updates every 2s · process CPU is per-core`;
     }
 
     renderRoster(server.players);
@@ -414,6 +433,35 @@ async function refreshStatus() {
   const health = data.health || {};
   setLamp($("#stat-map"), health.map && health.spawn_validation ? "up" : "down",
     health.map && health.spawn_validation ? "validated" : "check needed");
+  renderAddresses(data.addresses);
+  const access = data.access || {};
+  setLamp($("#stat-access"), access.invite_only ? "up" : "wait", access.invite_only ? "invite-only" : "public");
+  applyTableTools();
+}
+
+const tableTools = [
+  ["roster-search", "roster", "roster-sort"],
+  ["access-search", "access-list", null],
+  ["feature-search", "features", "feature-sort"],
+  ["setting-search", "settings", "setting-sort"],
+  ["player-search", "players", "player-sort"],
+  ["table-search", "tables", "table-sort"],
+];
+
+function applyTableTools() {
+  for (const [inputId, bodyId, sortId] of tableTools) {
+    const input = $("#" + inputId);
+    const body = $("#" + bodyId);
+    if (!input || !body) continue;
+    const query = input.value.trim().toLowerCase();
+    const rows = [...body.children];
+    for (const row of rows) row.hidden = Boolean(query) && !row.textContent.toLowerCase().includes(query);
+    if (!sortId) continue;
+    const column = Number($("#" + sortId)?.value || 0);
+    const sortable = rows.filter((row) => row.cells.length > column);
+    sortable.sort((a, b) => (a.cells[column]?.textContent || "").localeCompare(b.cells[column]?.textContent || "", undefined, { numeric: true }));
+    for (const row of sortable) body.append(row);
+  }
 }
 
 function setLamp(node, state, label) {
@@ -483,16 +531,65 @@ function renderRoster(players) {
 
 /* ---- console ------------------------------------------------------------ */
 
-function appendLine(kind, at, who, message) {
+function appendLine(kind, at, who, message, live = false, level = "info", category = null) {
+  consoleRecords.push({ kind, at, who, message, live, level, category: category || logCategory(who, message) });
+  if (consoleRecords.length > 5000) consoleRecords.shift();
+  if (consoleSlow && live) {
+    if (!consoleRenderTimer) consoleRenderTimer = setTimeout(() => {
+      consoleRenderTimer = null;
+      renderConsole();
+    }, 1000);
+    return;
+  }
+  renderConsole();
+}
+
+function renderConsole() {
   const console_ = $("#console");
   const pinned = console_.scrollTop + console_.clientHeight >= console_.scrollHeight - 40;
-
-  const line = el("div", `line ${kind}`);
-  line.append(el("span", "at", at), el("span", "who", who), el("span", "msg", message));
-  console_.append(line);
-
-  while (console_.children.length > 1500) console_.firstChild.remove();
+  if (consolePaused) return;
+  const query = text($("#console-filter")?.value).trim().toLowerCase();
+  const minimum = $("#console-level")?.value || "";
+  const category = $("#console-category")?.value || "";
+  const rank = { trace: 0, debug: 1, info: 2, warning: 3, error: 4 };
+  const minimumRank = minimum ? rank[minimum] : -1;
+  console_.replaceChildren();
+  for (const record of consoleRecords) {
+    const searchable = `${record.who} ${record.message}`.toLowerCase();
+    if (query && !searchable.includes(query)) continue;
+    if (minimumRank >= 0 && (rank[record.level] ?? 2) < minimumRank) continue;
+    if (category && record.category !== category) continue;
+    const line = el("div", `line ${record.kind}`);
+    line.append(el("span", "at", record.at), el("span", "who", record.who), el("span", "msg", record.message));
+    console_.append(line);
+    while (console_.children.length > 1500) console_.firstChild.remove();
+  }
   if (pinned) console_.scrollTop = console_.scrollHeight;
+}
+
+function logCategory(who, message) {
+  const value = `${who} ${message}`.toLowerCase();
+  if (/storage|database|document/.test(value)) return "storage";
+  if (/network|connect|lobby/.test(value)) return "network";
+  if (/player|identity|chat/.test(value)) return "players";
+  if (/physics|render|map/.test(value)) return "engine";
+  if (/applejack|game/.test(value)) return "gameplay";
+  if (/cellar/.test(value)) return "cellar";
+  return "other";
+}
+
+function renderAddresses(addresses) {
+  const target = $("#addresses");
+  if (!target || !addresses) return;
+  target.replaceChildren();
+  for (const address of addresses) {
+    const row = el("div", "address-row");
+    row.append(el("strong", null, address.label));
+    row.append(el("span", "muted small", `${address.bind} · ${address.state}`));
+    if (address.local_url) row.append(el("code", "small", address.local_url));
+    if (address.remote_url) row.append(el("code", "small live", `Tailscale ${address.remote_url}`));
+    target.append(row);
+  }
 }
 
 async function runCommand(command) {
@@ -531,7 +628,7 @@ function connect() {
     const event = JSON.parse(message.data);
     switch (event.kind) {
       case "log":
-        appendLine(event.level === "error" ? "error" : "", clock(event.at), text(event.logger), text(event.message));
+        appendLine(event.level === "error" ? "error" : "", clock(event.at), text(event.logger), text(event.message), true, event.level);
         break;
       case "player_joined":
         appendLine("join", now(), "join", `${text(event.name)} [${event.steam_id}]`);
@@ -798,6 +895,25 @@ function drawSpark(svg, values) {
   svg.append(line);
 }
 
+function drawSeries(svg, values, floor = 0) {
+  svg.replaceChildren();
+  if (values.length < 2) return;
+  const width = svg.clientWidth || 600;
+  const height = 130;
+  const peak = Math.max(floor, ...values, 1);
+  const points = values.map((value, index) => {
+    const x = (index / (values.length - 1)) * width;
+    const y = height - (value / peak) * (height - 8) - 4;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+  line.setAttribute("points", points);
+  line.setAttribute("fill", "none");
+  line.setAttribute("stroke", "currentColor");
+  line.setAttribute("stroke-width", "2");
+  svg.append(line);
+}
+
 /* ---- sign in ------------------------------------------------------------ */
 
 function showGate() {
@@ -832,7 +948,10 @@ function start() {
   loadLogs();
   connect();
   refreshStatus();
-  setInterval(refreshStatus, 2000);
+  setInterval(() => {
+    refreshStatus();
+    if (activeTab === "database") loadDatabase();
+  }, 2000);
   renderAlertButton();
   if (alertsEnabled() && "serviceWorker" in navigator) {
     navigator.serviceWorker.register("/service-worker.js").then((registration) => {
@@ -852,8 +971,54 @@ async function runRelease(action) {
 async function loadLogs() {
   const response = await fetch("/api/logs?limit=250");
   if (!response.ok) return;
-  const lines = await response.json();
-  for (const line of lines) appendLine("", now(), "history", text(line));
+  const data = await response.json();
+  for (const line of data.lines || []) appendLine(line.level === "error" ? "error" : "", clock(line.at), line.tag, line.message, false, line.level, line.category);
+  $("#console-state").textContent = `${data.lines?.length || 0} recent lines · ${data.scanned_files || 0} persistent log file(s)`;
+}
+
+async function scanLogs() {
+  const params = new URLSearchParams({ limit: "5000" });
+  const query = $("#console-filter").value.trim();
+  const level = $("#console-level").value;
+  const category = $("#console-category").value;
+  if (query) params.set("q", query);
+  if (level) params.set("level", level);
+  if (category) params.set("category", category);
+  const response = await fetch(`/api/logs?${params}`);
+  const data = await response.json();
+  if (!response.ok) return showToast(text(data.error));
+  consoleRecords = [];
+  for (const line of data.lines || []) appendLine(line.level === "error" ? "error" : "", clock(line.at), line.tag, line.message, false, line.level, line.category);
+  $("#console-state").textContent = `${data.matched} matches across ${data.scanned_files} persistent log file(s), ${data.scanned_lines} lines scanned`;
+}
+
+async function loadConfigs() {
+  const target = $("#config-list");
+  const response = await fetch("/api/configs");
+  const data = await response.json();
+  target.replaceChildren();
+  if (!response.ok) {
+    target.append(el("p", "notice", text(data.error)));
+    return;
+  }
+  for (const profile of data.profiles || []) {
+    const button = el("button", `chip ${profile.active ? "live" : ""}`, `${profile.name} · ${profile.game || profile.project || "local"}`);
+    button.disabled = profile.active;
+    button.onclick = () => activateConfig(profile.name);
+    target.append(button);
+  }
+}
+
+async function activateConfig(name) {
+  if (!confirm(`Switch to ${name}? The supervised server will restart.`)) return;
+  const response = await fetch("/api/configs/activate", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const data = await response.json();
+  $("#config-notice").textContent = response.ok ? `Switched to ${name}.` : text(data.error);
+  if (response.ok) loadConfigs();
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -888,6 +1053,33 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("#stop").onclick = () => control("stop");
   $("#restart").onclick = () => control("restart");
   $("#notification-toggle").onclick = enableAlerts;
+  $("#console-filter").addEventListener("input", () => {
+    localStorage.setItem("cellar.console.filter", $("#console-filter").value);
+    renderConsole();
+  });
+  $("#console-level").addEventListener("change", () => {
+    localStorage.setItem("cellar.console.level", $("#console-level").value);
+    renderConsole();
+  });
+  $("#console-pause").onclick = () => {
+    consolePaused = !consolePaused;
+    $("#console-pause").textContent = consolePaused ? "resume" : "pause";
+    $("#console-state").textContent = consolePaused ? "Paused view. Incoming lines are still retained." : "Live output.";
+    renderConsole();
+  };
+  $("#console-slow").onclick = () => {
+    consoleSlow = !consoleSlow;
+    $("#console-slow").textContent = consoleSlow ? "normal mode" : "slow mode";
+    renderConsole();
+  };
+  $("#console-scan").onclick = scanLogs;
+  $("#console-clear").onclick = () => { consoleRecords = []; renderConsole(); };
+  $("#console-filter").value = localStorage.getItem("cellar.console.filter") || "";
+  $("#console-level").value = localStorage.getItem("cellar.console.level") || "";
+  for (const [inputId, , sortId] of tableTools) {
+    $("#" + inputId)?.addEventListener("input", applyTableTools);
+    $("#" + sortId)?.addEventListener("change", applyTableTools);
+  }
 
   const probe = await fetch("/api/status");
   if (probe.status === 401) {

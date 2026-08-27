@@ -54,8 +54,10 @@ pub async fn info(pool: &MySqlPool) -> Result<DatabaseInfo, StoreError> {
         connected: true,
         database: connection.try_get("database_name")?,
         server_version: connection.try_get("server_version")?,
-        table_count: totals.try_get::<u64, _>("table_count")?,
-        bytes: totals.try_get::<u64, _>("bytes")?,
+        // MySQL returns COUNT and SUM as signed BIGINT metadata even when the
+        // values cannot be negative. Decode that wire type explicitly.
+        table_count: totals.try_get::<i64, _>("table_count")?.max(0) as u64,
+        bytes: totals.try_get::<i64, _>("bytes")?.max(0) as u64,
         schema_owner: "unknown".to_owned(),
     })
 }

@@ -61,6 +61,7 @@ pub struct Snapshot {
     pub max_players: u32,
     pub status_bar: Option<StatusBar>,
     pub resources: Option<ResourceSample>,
+    pub resource_history: Vec<ResourceSample>,
     pub bridge: BridgeStats,
     pub consecutive_failures: u32,
     /// Lines the grammar did not recognise. A rising number means an engine
@@ -222,6 +223,7 @@ impl Tracker {
             max_players: self.max_players,
             status_bar: self.status_bar.clone(),
             resources: self.samples.back().copied(),
+            resource_history: self.samples.iter().copied().collect(),
             bridge: self.bridge.clone(),
             consecutive_failures: self.consecutive_failures,
             unparsed_lines: self.unparsed_lines,
@@ -368,6 +370,10 @@ mod tests {
                     cpu_percent: 1.0,
                     memory_bytes: 1,
                     process_count: 1,
+                    host_cpu_percent: 1.0,
+                    host_memory_percent: 1.0,
+                    network_rx_bytes_per_sec: 0,
+                    network_tx_bytes_per_sec: 0,
                 }),
                 now(),
             );

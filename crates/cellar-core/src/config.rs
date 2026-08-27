@@ -110,6 +110,7 @@ pub struct ServerConfig {
     ///
     /// `+game`, not `+project`: `+project` loads metadata and idles at the bare
     /// console without ever booting a map.
+    #[serde(default)]
     pub project: PathBuf,
 
     /// A published package ident such as `fobiat.applejackrp`.

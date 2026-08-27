@@ -431,6 +431,10 @@ mod tests {
             cpu_percent: 141.0,
             memory_bytes: 3 * 1024 * 1024 * 1024,
             process_count: 2,
+            host_cpu_percent: 24.0,
+            host_memory_percent: 50.0,
+            network_rx_bytes_per_sec: 0,
+            network_tx_bytes_per_sec: 0,
         }));
 
         assert_eq!(app.cpu.back().copied(), Some(141));

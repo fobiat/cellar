@@ -34,6 +34,37 @@ pub struct Operator {
     pub name: String,
 }
 
+pub struct ExternalApi;
+
+impl<S> FromRequestParts<S> for ExternalApi
+where
+    S: Send + Sync,
+    std::sync::Arc<crate::state::AppState>: axum::extract::FromRef<S>,
+{
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        use axum::extract::FromRef;
+        let state = std::sync::Arc::<crate::state::AppState>::from_ref(state);
+        let Some(expected) = &state.external_api_token else {
+            return Err((StatusCode::NOT_FOUND, "external API is not enabled"));
+        };
+        let Some(header) = parts.headers.get(axum::http::header::AUTHORIZATION) else {
+            return Err((StatusCode::UNAUTHORIZED, "missing bearer token"));
+        };
+        let Ok(header) = header.to_str() else {
+            return Err((StatusCode::UNAUTHORIZED, "invalid bearer token"));
+        };
+        let Some(token) = header.strip_prefix("Bearer ") else {
+            return Err((StatusCode::UNAUTHORIZED, "expected bearer token"));
+        };
+        if token != expected.expose() {
+            return Err((StatusCode::UNAUTHORIZED, "invalid bearer token"));
+        }
+        Ok(Self)
+    }
+}
+
 /// Live sessions.
 #[derive(Default)]
 pub struct Sessions {

@@ -8,7 +8,9 @@
 pub mod api;
 pub mod auth;
 pub mod bridge;
+pub mod config_manager;
 pub mod health;
+pub mod logs;
 pub mod session;
 pub mod state;
 pub mod ui;

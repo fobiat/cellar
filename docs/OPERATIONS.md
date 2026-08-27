@@ -1,5 +1,24 @@
 # Operations
 
+## API surfaces
+
+Cellar exposes two separate integration surfaces. The internal document bridge
+is `/v1/doc/{key}` on `bridge.bind` and is the game server's storage contract.
+The operator API is served on `web.bind`. Set `CELLAR_API_TOKEN` to enable its
+read-only machine endpoints:
+
+```text
+GET /api/v1/status
+GET /api/v1/logs?q=storage&level=error&limit=500
+GET /api/v1/resources
+GET /api/v1/addresses
+Authorization: Bearer <CELLAR_API_TOKEN>
+```
+
+The API token is read from the environment and never written to TOML or
+returned by status. Keep the web bind private or put it behind TLS and an
+appropriate network policy.
+
 Running Cellar for real: health, shutdown, Kubernetes, notifications, updates and
 backups.
 

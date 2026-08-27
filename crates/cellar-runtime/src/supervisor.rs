@@ -89,6 +89,11 @@ pub enum Control {
     Stop { reply: oneshot::Sender<()> },
     /// Stop and start again, resetting the backoff.
     Restart { reply: oneshot::Sender<()> },
+    /// Replace the server profile and restart it without rebinding Cellar.
+    SwitchConfig {
+        config: Box<Config>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Read the current state.
     Snapshot { reply: oneshot::Sender<Snapshot> },
 }
@@ -139,6 +144,19 @@ impl Handle {
         if self.control.send(Control::Restart { reply }).await.is_ok() {
             let _ = rx.await;
         }
+    }
+
+    pub async fn switch_config(&self, config: Config) -> Result<(), String> {
+        let (reply, rx) = oneshot::channel();
+        self.control
+            .send(Control::SwitchConfig {
+                config: Box::new(config),
+                reply,
+            })
+            .await
+            .map_err(|_| "the supervisor is not running".to_owned())?;
+        rx.await
+            .map_err(|_| "the supervisor stopped before switching config".to_owned())?
     }
 }
 
@@ -250,6 +268,14 @@ impl Supervisor {
                                 }
                                 Some(Control::Exec { reply, .. }) => {
                                     let _ = reply.send(Err("the server is not running".to_owned()));
+                                }
+                                Some(Control::SwitchConfig { config, reply }) => {
+                                    let previous = std::mem::replace(&mut self.config, *config);
+                                    let result = self.prepare_hosting();
+                                    if result.is_err() {
+                                        self.config = previous;
+                                    }
+                                    let _ = reply.send(result.map(|_| ()));
                                 }
                                 None => return,
                             }
@@ -438,6 +464,19 @@ impl Supervisor {
                                 Err(error) => {
                                     let _ = reply.send(Err(format!("could not reach the console: {error}")));
                                 }
+                            }
+                        }
+                        Some(Control::SwitchConfig { config, reply }) => {
+                            let previous = std::mem::replace(&mut self.config, *config);
+                            let prepare = self.prepare_hosting();
+                            if let Err(why) = prepare {
+                                self.config = previous;
+                                let _ = reply.send(Err(why));
+                            } else {
+                                restart_requested = true;
+                                let status = self.graceful_stop(&mut child, &mut output, &mut assembler).await;
+                                let _ = reply.send(Ok(()));
+                                break status;
                             }
                         }
                         Some(Control::Stop { reply }) => {

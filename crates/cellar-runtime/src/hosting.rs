@@ -28,6 +28,8 @@ pub struct HostingDocument {
     pub bridge_url: String,
     #[serde(rename = "authAudience")]
     pub auth_audience: String,
+    #[serde(rename = "apiKey", skip_serializing_if = "String::is_empty")]
+    pub api_key: String,
 }
 
 /// `HostingRules.CurrentVersion`. A document from a later version is refused by
@@ -48,6 +50,7 @@ impl HostingDocument {
             provider: HOSTED_PROVIDER.to_owned(),
             bridge_url: bridge_url.into(),
             auth_audience: auth_audience.into(),
+            api_key: String::new(),
         }
     }
 
@@ -58,6 +61,7 @@ impl HostingDocument {
             provider: LOCAL_PROVIDER.to_owned(),
             bridge_url: String::new(),
             auth_audience: String::new(),
+            api_key: String::new(),
         }
     }
 
@@ -108,7 +112,18 @@ impl HostingDocument {
 /// Compose the document a bridge config implies.
 pub fn document_for(bridge: &BridgeConfig) -> HostingDocument {
     if bridge.enabled {
-        HostingDocument::hosted(bridge.public_url.trim(), bridge.auth_audience.trim())
+        let mut document =
+            HostingDocument::hosted(bridge.public_url.trim(), bridge.auth_audience.trim());
+        document.api_key = match bridge.auth {
+            cellar_core::config::AuthMode::Trusted => "cellar-local-trusted".to_owned(),
+            cellar_core::config::AuthMode::SharedSecret => bridge
+                .shared_secret
+                .as_ref()
+                .map(|secret| secret.expose().to_owned())
+                .unwrap_or_default(),
+            cellar_core::config::AuthMode::Facepunch => String::new(),
+        };
+        document
     } else {
         HostingDocument::local()
     }
@@ -183,6 +198,7 @@ mod tests {
             provider: "postgres".to_owned(),
             bridge_url: "http://127.0.0.1:8080".to_owned(),
             auth_audience: "aud".to_owned(),
+            api_key: String::new(),
         };
         assert!(document.check().unwrap_err().contains("postgres"));
     }
@@ -215,5 +231,17 @@ mod tests {
         let json = serde_json::to_string(&original).unwrap();
         let back: HostingDocument = serde_json::from_str(&json).unwrap();
         assert_eq!(original, back);
+    }
+
+    #[test]
+    fn a_local_trusted_bridge_writes_a_non_platform_token_for_the_game_host() {
+        let bridge = BridgeConfig {
+            enabled: true,
+            ..BridgeConfig::default()
+        };
+
+        let document = document_for(&bridge);
+
+        assert_eq!(document.api_key, "cellar-local-trusted");
     }
 }
