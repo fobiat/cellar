@@ -20,6 +20,20 @@ schema_owner = "gamemode"
 migrate_on_start = false
 ```
 
+The Database panel is protected by the same web authentication as the control
+surface. For a phone or any non-loopback bind, use password auth:
+
+```toml
+[web]
+enabled = true
+bind = "127.0.0.1:8081" # or a private tailnet address
+auth = "password"
+```
+
+Generate the hash with `cellar hash-password` and provide it through
+`CELLAR_WEB_PASSWORD_HASH`. For local-only development, `auth = "none"` is
+available on loopback.
+
 The web UI Database panel provides:
 
 - live connection, server version, table count, and storage size;
