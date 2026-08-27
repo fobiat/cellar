@@ -1,0 +1,86 @@
+# Cellar v0.1.7 configuration for a local AppleJackRP Windows server.
+#
+# Copy this file to the machine's Cellar config location, then adjust the
+# engine and repository paths when the project is not under the default
+# Windows workspace.
+
+[server]
+executable = 'C:\AppleJackServer\sbox\sbox-server.exe'
+project = 'C:\Users\Shadow\Desktop\Projects\AppleJackRP-sandbox\applejackrp.sbproj'
+launcher = "native"
+working_dir = 'C:\AppleJackServer\sbox'
+hostname = "AppleJackRP Dev"
+data_dir = 'C:\AppleJackServer\sbox\data\fobiat\applejackrp#local'
+log_file = 'C:\AppleJackServer\sbox\logs\sbox-server.log'
+direct_connect = false
+port = 27015
+query_port = 27016
+ready_pattern = "Lobby created - session is joinable"
+
+# To run the published package instead, remove `project` and use:
+# game = "fobiat.applejackrp"
+# map = "thieves.rpdowntown3t"
+
+[supervisor]
+restart = "on_failure"
+graceful_timeout_seconds = 30
+sample_interval_seconds = 2
+
+[supervisor.backoff]
+initial = 2
+maximum = 120
+multiplier = 2.0
+crash_loop_threshold = 5
+window = 300
+healthy_after = 60
+
+[database]
+enabled = true
+max_connections = 8
+schema_owner = "gamemode"
+migrate_on_start = false
+event_retention_days = 90
+
+[mariadb]
+managed = true
+version = "11.4.5"
+sha256 = "b7c11d38657f16b837e68199d73670510aadb78f42dfa5d5fdea31a7aab342e3"
+install_dir = 'C:\ProgramData\Cellar\mariadb\11.4.5'
+data_dir = 'C:\ProgramData\Cellar\mariadb\data'
+port = 33306
+
+[backup]
+enabled = true
+directory = 'C:\ProgramData\Cellar\backups'
+interval_hours = 24
+retain = 7
+
+[bridge]
+enabled = true
+bind = "127.0.0.1:8080"
+public_url = "http://127.0.0.1:8080"
+auth_audience = "applejack-bridge"
+auth = "trusted"
+scope = "applejackrp-local"
+max_body_bytes = 1048576
+rate_limit_per_minute = 600
+
+[web]
+enabled = true
+bind = "127.0.0.1:8081"
+auth = "auto"
+
+[notify]
+enabled = false
+batch_seconds = 5
+kinds = []
+
+[update]
+policy = "notify"
+check_interval_minutes = 60
+check_remote = true
+only_when_empty = true
+window_start_hour = 0
+window_end_hour = 0
+update_gamemode = true
+update_engine = false

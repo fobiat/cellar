@@ -126,8 +126,8 @@ Also expected. There is no such convar and no such launch switch.
 `LaunchArguments.MaxPlayers` exists but nothing on the command line sets it; the
 real ceiling comes from `Metadata.MaxPlayers` in the `.sbproj`.
 
-This is a live bug in AppleJackRP's `server/entrypoint.sh`, where `MAX_PLAYERS`
-and its `+maxplayers` argument are both inert. Cellar does not pass the flag.
+AppleJackRP's old repository entrypoint used to pass `+maxplayers`, but the
+engine ignores it. Cellar does not pass the flag.
 
 ## Uptime in the status bar is an hour ahead
 

@@ -116,7 +116,7 @@ The public releases are available without a token. The installers and
 **Windows**
 
 ```powershell
-$version = 'v0.1.6'
+$version = 'v0.1.7'
 Invoke-WebRequest "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.ps1" -OutFile install-cellar.ps1
 Get-Content .\install-cellar.ps1
 .\install-cellar.ps1 -Version $version
@@ -126,7 +126,7 @@ Remove-Item .\install-cellar.ps1
 **Linux**
 
 ```sh
-version=v0.1.6
+version=v0.1.7
 curl -fsSLO "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.sh"
 less install.sh
 sh install.sh --version "$version"
@@ -137,6 +137,7 @@ Both are per-user by default and need no administrator. Both verify the
 published SHA-256 before installing anything, and both refuse when no checksum
 was published. System-wide installs, service registration, Docker, Kubernetes
 and building from source are all in [Installation](docs/INSTALLATION.md).
+The AppleJackRP-specific setup is in [docs/APPLEJACKRP.md](docs/APPLEJACKRP.md).
 
 For an image or service, installation can be followed by an automatic
 configuration check and foreground run. The container image uses this flow by
@@ -246,8 +247,8 @@ The full list, and what happens if that assumption fails, is in
 Both from engine source:
 
 - **`+maxplayers` does nothing.** There is no such convar or launch switch; the
-  real ceiling comes from the project's `.sbproj` `Metadata.MaxPlayers`. The
-  current `entrypoint.sh` passes it and it is inert.
+  real ceiling comes from the project's `.sbproj` `Metadata.MaxPlayers`. Cellar
+  does not pass the inert flag.
 - **Steam A2S reports zero players.** The server calls `SteamGameServer_Init`
   with a real query port, but nothing calls `BUpdateUserData`, which is what
   Steam derives the player count from. A2S is a liveness signal, not a roster.

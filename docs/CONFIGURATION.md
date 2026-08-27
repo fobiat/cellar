@@ -55,8 +55,7 @@ Two deliberate omissions:
 
 - **No `maxplayers`.** The engine has no such convar and no such launch switch.
   The real ceiling is `Metadata.MaxPlayers` in the `.sbproj`. Setting
-  `+maxplayers` does nothing, which is a live bug in AppleJackRP's
-  `server/entrypoint.sh`.
+  `+maxplayers` does nothing. AppleJackRP's Cellar config leaves it out.
 - **`-allowlocalhttp` is added automatically** when the bridge is enabled, and
   only then. Without it the engine refuses to call any private or loopback
   address and the gamemode silently cannot reach the bridge.

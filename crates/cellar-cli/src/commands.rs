@@ -99,7 +99,7 @@ pub async fn doctor(path: &Path) -> Result<()> {
         .map(|path| path.join("Code/Characters/CharacterDirector.cs"));
     if let Some(path) = spawn_source {
         let grounded = std::fs::read_to_string(&path)
-            .map(|text| text.contains("TryGroundSpawn") && text.contains("Scene.Trace"))
+            .map(|text| text.contains("GroundedOrAuthored") && text.contains("Scene.Trace"))
             .unwrap_or(false);
         check(grounded, "spawn validation", format!("{}", path.display()));
     }

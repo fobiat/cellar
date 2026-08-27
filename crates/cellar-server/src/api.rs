@@ -276,7 +276,9 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
                 .join("Code/Characters/CharacterDirector.cs")
         })
         .and_then(|path| std::fs::read_to_string(path).ok())
-        .is_some_and(|source| source.contains("TryGroundSpawn") && source.contains("Scene.Trace"));
+        .is_some_and(|source| {
+            source.contains("GroundedOrAuthored") && source.contains("Scene.Trace")
+        });
 
     Json(serde_json::json!({
         "server": snapshot,

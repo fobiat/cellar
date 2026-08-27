@@ -263,8 +263,8 @@ Four things established from source that change how this is built:
    blocks direct IP literals, private addresses and loopback on ports other than
    80, 443, 8080 and 8443. A cluster-internal bridge is a private address.
 2. **`+maxplayers` does nothing.** No such convar, no such launch switch. The
-   ceiling is `Metadata.MaxPlayers` in the `.sbproj`. AppleJackRP's
-   `entrypoint.sh` passes it anyway, inertly.
+   ceiling is `Metadata.MaxPlayers` in the `.sbproj`. Cellar deliberately does
+   not pass the inert flag.
 3. **Steam A2S reports zero players, always.** Nothing calls `BUpdateUserData`,
    so the count and the `A2S_PLAYER` list are always empty. A2S is a liveness
    check only.
