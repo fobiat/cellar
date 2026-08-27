@@ -27,6 +27,39 @@ pub struct TableSummary {
     pub comment: Option<String>,
 }
 
+/// Facts about the live database, without assuming a gamemode schema.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseInfo {
+    pub connected: bool,
+    pub database: Option<String>,
+    pub server_version: Option<String>,
+    pub table_count: u64,
+    pub bytes: u64,
+    pub schema_owner: String,
+}
+
+/// Read connection metadata from the server and information schema.
+pub async fn info(pool: &MySqlPool) -> Result<DatabaseInfo, StoreError> {
+    let connection = sqlx::query("SELECT DATABASE() AS database_name, VERSION() AS server_version")
+        .fetch_one(pool)
+        .await?;
+    let totals = sqlx::query(
+        "SELECT COUNT(*) AS table_count, COALESCE(SUM(DATA_LENGTH + INDEX_LENGTH), 0) AS bytes
+         FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'",
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(DatabaseInfo {
+        connected: true,
+        database: connection.try_get("database_name")?,
+        server_version: connection.try_get("server_version")?,
+        table_count: totals.try_get::<u64, _>("table_count")?,
+        bytes: totals.try_get::<u64, _>("bytes")?,
+        schema_owner: "unknown".to_owned(),
+    })
+}
+
 /// A column, as the schema view shows it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnSummary {

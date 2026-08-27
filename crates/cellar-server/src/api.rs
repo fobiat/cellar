@@ -30,6 +30,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/docs", get(documents))
         .route("/api/docs/{*key}", get(document).delete(delete_document))
         .route("/api/db/tables", get(db_tables))
+        .route("/api/db/info", get(db_info))
         .route("/api/db/table/{table}", get(db_browse))
         .route("/api/db/query", post(db_query))
         .route("/api/settings", get(settings).post(set_setting))
@@ -783,6 +784,25 @@ async fn db_tables(State(state): State<Arc<AppState>>, _: Operator) -> Response 
 
     match cellar_store::admin::tables(pool).await {
         Ok(tables) => Json(tables).into_response(),
+        Err(why) => error(StatusCode::BAD_GATEWAY, why.to_string()),
+    }
+}
+
+/// Connection and ownership facts for the database panel.
+async fn db_info(State(state): State<Arc<AppState>>, _: Operator) -> Response {
+    let Some(pool) = &state.pool else {
+        return Json(serde_json::json!({
+            "connected": false,
+            "schema_owner": state.database_schema_owner,
+        }))
+        .into_response();
+    };
+
+    match cellar_store::admin::info(pool).await {
+        Ok(mut info) => {
+            info.schema_owner = state.database_schema_owner.clone();
+            Json(info).into_response()
+        }
         Err(why) => error(StatusCode::BAD_GATEWAY, why.to_string()),
     }
 }

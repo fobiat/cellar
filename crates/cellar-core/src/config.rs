@@ -300,10 +300,25 @@ pub struct DatabaseConfig {
     #[serde(skip_serializing)]
     pub url: Option<Secret>,
     pub max_connections: u32,
-    /// Run pending migrations at startup.
+    /// Who owns the tables in this connection. Game-owned is the safe default:
+    /// Cellar can inspect and query the schema, but never invents game tables.
+    pub schema_owner: DatabaseSchemaOwner,
+    /// Legacy opt-in for Cellar's operational migrations. It is ignored for a
+    /// game-owned database and remains only for compatible v0.1 configs.
     pub migrate_on_start: bool,
     /// Keep this many days of `srv_event` rows. Zero keeps everything.
     pub event_retention_days: u32,
+}
+
+/// Ownership of a configured game database.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DatabaseSchemaOwner {
+    /// The gamemode owns migrations, tables, and data contracts.
+    #[default]
+    Gamemode,
+    /// Cellar's legacy operational schema owns this connection.
+    Cellar,
 }
 
 impl Default for DatabaseConfig {
@@ -312,7 +327,8 @@ impl Default for DatabaseConfig {
             enabled: false,
             url: None,
             max_connections: 8,
-            migrate_on_start: true,
+            schema_owner: DatabaseSchemaOwner::default(),
+            migrate_on_start: false,
             event_retention_days: 90,
         }
     }
@@ -323,9 +339,24 @@ impl Default for DatabaseConfig {
 pub struct WebConfig {
     pub enabled: bool,
     pub bind: String,
+    /// Authentication policy for the operator UI.
+    pub auth: WebAuthMode,
     /// Argon2 hash of the operator password, from `CELLAR_WEB_PASSWORD_HASH`.
     #[serde(skip_serializing)]
     pub password_hash: Option<Secret>,
+}
+
+/// Authentication policy for the web UI.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WebAuthMode {
+    /// Require a password when one is configured, otherwise allow loopback.
+    #[default]
+    Auto,
+    /// Always require the configured Argon2 password hash.
+    Password,
+    /// Disable the login gate. Valid only on a loopback bind.
+    None,
 }
 
 impl Default for WebConfig {
@@ -333,6 +364,7 @@ impl Default for WebConfig {
         Self {
             enabled: false,
             bind: "127.0.0.1:8081".to_owned(),
+            auth: WebAuthMode::default(),
             password_hash: None,
         }
     }
@@ -649,7 +681,27 @@ impl Config {
             }
         }
 
-        if self.web.enabled && !binds_loopback(&self.web.bind) && self.web.password_hash.is_none() {
+        if self.web.enabled
+            && self.web.auth == WebAuthMode::Password
+            && self.web.password_hash.is_none()
+        {
+            return Err(ConfigError::Invalid(
+                "web.auth = \"password\" needs CELLAR_WEB_PASSWORD_HASH".into(),
+            ));
+        }
+
+        if self.web.enabled && self.web.auth == WebAuthMode::None && !binds_loopback(&self.web.bind)
+        {
+            return Err(ConfigError::Invalid(
+                "web.auth = \"none\" may only bind to loopback".into(),
+            ));
+        }
+
+        if self.web.enabled
+            && self.web.auth == WebAuthMode::Auto
+            && !binds_loopback(&self.web.bind)
+            && self.web.password_hash.is_none()
+        {
             return Err(ConfigError::Invalid(
                 "web.enabled on a non-loopback address needs CELLAR_WEB_PASSWORD_HASH: the web UI \
                  runs console commands at full engine privilege"

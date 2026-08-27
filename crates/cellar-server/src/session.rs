@@ -21,6 +21,8 @@ use axum::http::StatusCode;
 use axum::http::request::Parts;
 use rand::Rng;
 
+use cellar_core::config::WebAuthMode;
+
 /// How long a session lasts without being used.
 const SESSION_TTL: Duration = Duration::from_secs(12 * 3600);
 
@@ -137,9 +139,13 @@ where
         use axum::extract::FromRef;
         let state = std::sync::Arc::<crate::state::AppState>::from_ref(state);
 
-        // No password configured means the UI is loopback-only (the config layer
-        // guarantees it), so there is nobody else to authenticate.
-        if state.web_password_hash.is_none() {
+        let requires_password = match state.web_auth {
+            WebAuthMode::Password => true,
+            WebAuthMode::None => false,
+            WebAuthMode::Auto => state.web_password_hash.is_some(),
+        };
+
+        if !requires_password {
             return Ok(Operator {
                 name: "local".to_owned(),
             });

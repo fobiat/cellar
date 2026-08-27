@@ -19,6 +19,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 
+use cellar_core::config::WebAuthMode;
+
 use crate::session::{self, COOKIE};
 use crate::state::AppState;
 
@@ -69,8 +71,15 @@ struct Login {
 
 async fn login(State(state): State<Arc<AppState>>, Json(login): Json<Login>) -> Response {
     let Some(hash) = &state.web_password_hash else {
-        // No password configured means loopback only, which the config layer
-        // enforces. Nothing to sign in to.
+        if state.web_auth == WebAuthMode::Password {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(
+                    serde_json::json!({ "ok": false, "error": "password auth is not configured" }),
+                ),
+            )
+                .into_response();
+        }
         return Json(serde_json::json!({ "ok": true })).into_response();
     };
 

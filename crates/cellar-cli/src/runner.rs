@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use cellar_core::config::{AuthMode, Config, UpdatePolicy};
+use cellar_core::config::{AuthMode, Config, DatabaseSchemaOwner, UpdatePolicy};
 use cellar_core::event::Event;
 use cellar_runtime::{Handle, Supervisor};
 use cellar_server::auth::Policy;
@@ -170,8 +170,13 @@ fn build_state(
     state.rate_limiter = RateLimiter::new(config.bridge.rate_limit_per_minute);
     state.supervisor = Some(handle);
     state.pool = pool;
+    state.database_schema_owner = match config.database.schema_owner {
+        DatabaseSchemaOwner::Gamemode => "gamemode".to_owned(),
+        DatabaseSchemaOwner::Cellar => "cellar".to_owned(),
+    };
     state.mariadb = mariadb;
     state.web_password_hash = config.web.password_hash.clone();
+    state.web_auth = config.web.auth;
     state.update_config = config.update.clone();
     state.release_config = config.release.clone();
     state.log_file = Some(cellar_runtime::log_file_for(&config.server));
@@ -221,11 +226,17 @@ async fn open_database(config: &Config) -> Result<Option<sqlx::MySqlPool>> {
         .await
         .context("connecting to the database")?;
 
-    if config.database.migrate_on_start {
+    if config.database.migrate_on_start
+        && config.database.schema_owner == DatabaseSchemaOwner::Cellar
+    {
         cellar_store::migrate(&pool)
             .await
             .context("applying migrations")?;
         tracing::info!("database schema is current");
+    } else if config.database.migrate_on_start {
+        tracing::warn!(
+            "database.migrate_on_start is ignored because schema_owner = gamemode; Cellar never migrates game tables"
+        );
     }
 
     Ok(Some(pool))
