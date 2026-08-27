@@ -160,8 +160,24 @@ mod tests {
     #[test]
     fn a_dead_root_samples_as_nothing_rather_than_as_zero() {
         let mut sampler = Sampler::new();
-        // Pid 0 is never a live user process on either platform.
-        assert!(sampler.sample(0).is_none());
+
+        // Pid 0 is not a usable stand-in for "dead": it is the kernel idle
+        // process, and on Windows sysinfo reports it as a live entry, so the
+        // sample would come back Some and this test would lie about the
+        // platform it just failed on. Spawn something real and wait for it
+        // to exit instead, so the pid is genuinely gone rather than reserved.
+        #[cfg(windows)]
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "exit"])
+            .spawn()
+            .unwrap();
+        #[cfg(not(windows))]
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+
+        let dead_pid = child.id();
+        child.wait().unwrap();
+
+        assert!(sampler.sample(dead_pid).is_none());
     }
 
     #[test]
