@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -43,6 +44,239 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/v1/logs", get(external_logs))
         .route("/api/v1/resources", get(external_resources))
         .route("/api/v1/addresses", get(external_addresses))
+        .route("/metrics", get(metrics))
+}
+
+async fn metrics(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response {
+    let snapshot = match &state.supervisor {
+        Some(supervisor) => supervisor.snapshot().await,
+        None => None,
+    };
+    let bridge = state.stats();
+    let database_source = database_source(&state);
+    let database_up = match &state.pool {
+        Some(pool) => cellar_store::admin::info(pool).await.is_ok(),
+        None => false,
+    };
+    let mut output = String::new();
+    let scope = prometheus_label(&state.scope);
+
+    metric_header(
+        &mut output,
+        "cellar_server_state",
+        "Current supervised server state",
+        "gauge",
+    );
+    for state_name in [
+        "stopped",
+        "starting",
+        "running",
+        "stopping",
+        "backoff",
+        "crash_looping",
+    ] {
+        let value = snapshot
+            .as_ref()
+            .is_some_and(|current| current.state.as_str() == state_name);
+        output.push_str(&format!(
+            "cellar_server_state{{scope=\"{scope}\",state=\"{state_name}\"}} {}\n",
+            u8::from(value)
+        ));
+    }
+
+    gauge(
+        &mut output,
+        "cellar_server_players",
+        "Connected players",
+        snapshot.as_ref().map_or(0, |value| value.players.len()),
+        &[("scope", scope.as_str())],
+    );
+    gauge(
+        &mut output,
+        "cellar_server_max_players",
+        "Configured player limit",
+        snapshot.as_ref().map_or(0, |value| value.max_players),
+        &[("scope", scope.as_str())],
+    );
+    gauge(
+        &mut output,
+        "cellar_server_uptime_seconds",
+        "Server uptime in seconds",
+        snapshot
+            .as_ref()
+            .map_or(0, |value| value.uptime_seconds(chrono::Utc::now())),
+        &[("scope", scope.as_str())],
+    );
+    gauge(
+        &mut output,
+        "cellar_server_restarts_total",
+        "Unexpected or requested server restarts",
+        snapshot.as_ref().map_or(0, |value| value.restarts),
+        &[("scope", scope.as_str())],
+    );
+    gauge(
+        &mut output,
+        "cellar_server_unparsed_lines_total",
+        "Console lines not recognized by the parser",
+        snapshot.as_ref().map_or(0, |value| value.unparsed_lines),
+        &[("scope", scope.as_str())],
+    );
+
+    if let Some(resources) = snapshot.as_ref().and_then(|value| value.resources) {
+        gauge_float(
+            &mut output,
+            "cellar_process_cpu_percent",
+            "Supervised process tree CPU percentage",
+            resources.cpu_percent,
+            &[("scope", scope.as_str())],
+        );
+        gauge(
+            &mut output,
+            "cellar_process_memory_bytes",
+            "Supervised process tree memory",
+            resources.memory_bytes,
+            &[("scope", scope.as_str())],
+        );
+        gauge(
+            &mut output,
+            "cellar_process_count",
+            "Processes in the supervised tree",
+            resources.process_count,
+            &[("scope", scope.as_str())],
+        );
+        gauge_float(
+            &mut output,
+            "cellar_host_cpu_percent",
+            "Host CPU percentage",
+            resources.host_cpu_percent,
+            &[("scope", scope.as_str())],
+        );
+        gauge_float(
+            &mut output,
+            "cellar_host_memory_percent",
+            "Host memory percentage",
+            resources.host_memory_percent,
+            &[("scope", scope.as_str())],
+        );
+        gauge(
+            &mut output,
+            "cellar_network_receive_bytes_per_second",
+            "Host network receive rate",
+            resources.network_rx_bytes_per_sec,
+            &[("scope", scope.as_str())],
+        );
+        gauge(
+            &mut output,
+            "cellar_network_transmit_bytes_per_second",
+            "Host network transmit rate",
+            resources.network_tx_bytes_per_sec,
+            &[("scope", scope.as_str())],
+        );
+    }
+
+    gauge(
+        &mut output,
+        "cellar_bridge_reads_total",
+        "Bridge document reads",
+        bridge.reads,
+        &[("scope", scope.as_str())],
+    );
+    gauge(
+        &mut output,
+        "cellar_bridge_writes_total",
+        "Bridge document writes",
+        bridge.writes,
+        &[("scope", scope.as_str())],
+    );
+    gauge(
+        &mut output,
+        "cellar_bridge_absent_total",
+        "Bridge document misses",
+        bridge.absent,
+        &[("scope", scope.as_str())],
+    );
+    gauge(
+        &mut output,
+        "cellar_bridge_refused_total",
+        "Bridge requests refused",
+        bridge.refused,
+        &[("scope", scope.as_str())],
+    );
+    gauge(
+        &mut output,
+        "cellar_bridge_healthy",
+        "Bridge health",
+        u8::from(bridge.healthy),
+        &[("scope", scope.as_str())],
+    );
+    gauge(
+        &mut output,
+        "cellar_database_connected",
+        "Database metadata query health",
+        u8::from(database_up),
+        &[("scope", scope.as_str())],
+    );
+    gauge(
+        &mut output,
+        "cellar_database_source",
+        "Configured database source, one for the active source",
+        1,
+        &[("scope", scope.as_str()), ("source", database_source)],
+    );
+
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        output,
+    )
+        .into_response()
+}
+
+fn metric_header(output: &mut String, name: &str, help: &str, kind: &str) {
+    output.push_str(&format!("# HELP {name} {help}\n# TYPE {name} {kind}\n"));
+}
+
+fn gauge<T: std::fmt::Display>(
+    output: &mut String,
+    name: &str,
+    help: &str,
+    value: T,
+    labels: &[(&str, &str)],
+) {
+    metric_header(output, name, help, "gauge");
+    output.push_str(name);
+    write_labels(output, labels);
+    output.push_str(&format!(" {value}\n"));
+}
+
+fn gauge_float(output: &mut String, name: &str, help: &str, value: f32, labels: &[(&str, &str)]) {
+    gauge(output, name, help, value, labels);
+}
+
+fn write_labels(output: &mut String, labels: &[(&str, &str)]) {
+    if labels.is_empty() {
+        return;
+    }
+    output.push('{');
+    for (index, (name, value)) in labels.iter().enumerate() {
+        if index > 0 {
+            output.push(',');
+        }
+        output.push_str(name);
+        output.push_str("=\"");
+        output.push_str(value);
+        output.push('"');
+    }
+    output.push('}');
+}
+
+fn prometheus_label(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('"', "\\\"")
 }
 
 async fn external_status(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response {
@@ -337,6 +571,7 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         "server": snapshot,
         "bridge": bridge,
         "database": database,
+        "database_source": database_source(&state),
         "mariadb": mariadb,
         "health": {
             "map": map_log,
@@ -353,6 +588,15 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
 async fn addresses(state: &AppState) -> Vec<serde_json::Value> {
     let tailscale_ip = tailscale_ip().await;
     let mut result = Vec::new();
+    if let Some(ip) = &tailscale_ip {
+        result.push(serde_json::json!({
+            "label": "Tailscale IPv4",
+            "bind": ip,
+            "local_url": null,
+            "remote_url": null,
+            "state": "available",
+        }));
+    }
     if state.web_enabled {
         result.push(address("Cellar web", &state.web_bind, &tailscale_ip, true));
     }
@@ -428,24 +672,38 @@ fn address(
 }
 
 async fn tailscale_ip() -> Option<String> {
-    let output = tokio::time::timeout(
-        std::time::Duration::from_millis(700),
-        tokio::process::Command::new("tailscale")
-            .args(["ip", "-4"])
-            .output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    if !output.status.success() {
-        return None;
+    let mut commands = vec!["tailscale".to_owned()];
+    if cfg!(windows) {
+        commands.extend([
+            r"C:\Program Files\Tailscale\tailscale.exe".to_owned(),
+            r"C:\Program Files (x86)\Tailscale\tailscale.exe".to_owned(),
+        ]);
     }
-    String::from_utf8(output.stdout)
-        .ok()?
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(str::to_owned)
+
+    for command in commands {
+        let output = tokio::time::timeout(
+            std::time::Duration::from_millis(700),
+            tokio::process::Command::new(command)
+                .args(["ip", "-4"])
+                .output(),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok);
+        let Some(output) = output else { continue };
+        if output.status.success() {
+            if let Some(ip) = String::from_utf8(output.stdout).ok().and_then(|value| {
+                value
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .map(str::to_owned)
+            }) {
+                return Some(ip);
+            }
+        }
+    }
+    None
 }
 
 /// The AppleJack invite gate and its SteamID64 allowlist.
@@ -1023,16 +1281,33 @@ async fn db_info(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         return Json(serde_json::json!({
             "connected": false,
             "schema_owner": state.database_schema_owner,
+            "source": "disabled",
         }))
         .into_response();
     };
 
     match cellar_store::admin::info(pool).await {
-        Ok(mut info) => {
-            info.schema_owner = state.database_schema_owner.clone();
-            Json(info).into_response()
-        }
+        Ok(info) => Json(serde_json::json!({
+            "connected": info.connected,
+            "database": info.database,
+            "server_version": info.server_version,
+            "table_count": info.table_count,
+            "bytes": info.bytes,
+            "schema_owner": state.database_schema_owner,
+            "source": database_source(&state),
+        }))
+        .into_response(),
         Err(why) => error(StatusCode::BAD_GATEWAY, why.to_string()),
+    }
+}
+
+fn database_source(state: &AppState) -> &'static str {
+    if state.pool.is_none() {
+        "disabled"
+    } else if state.mariadb.is_some() {
+        "managed"
+    } else {
+        "external"
     }
 }
 

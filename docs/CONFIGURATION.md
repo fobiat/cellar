@@ -16,7 +16,7 @@ No secret is ever read from `cellar.toml`, and none is ever written back to it.
 
 | Variable | Used for |
 | --- | --- |
-| `CELLAR_DATABASE_URL` | `mysql://user:password@host/database`. Required when `database.enabled`. |
+| `CELLAR_DATABASE_URL` | `mysql://user:password@host/database`. Takes precedence over `database.url_file`. |
 | `CELLAR_GSLT` | Steam Game Server Login Token. |
 | `CELLAR_BRIDGE_SECRET` | Required when `bridge.auth = "shared_secret"`. |
 | `CELLAR_WEB_PASSWORD_HASH` | From `cellar hash-password`. Required for a non-loopback `web.bind`. |
@@ -102,7 +102,8 @@ over a month is fine, and one that restarted five times in a minute is not.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `false` | Needs `CELLAR_DATABASE_URL`. |
+| `enabled` | `false` | Needs `CELLAR_DATABASE_URL` or `url_file`. |
+| `url_file` | *(none)* | Protected one-line MySQL/MariaDB URL file for an externally hosted source. Environment URL wins when both are set. |
 | `max_connections` | `8` | Connection pool ceiling. |
 | `schema_owner` | `gamemode` | `gamemode` means Cellar only inspects the live schema. `cellar` retains the legacy operational migrations. |
 | `migrate_on_start` | `false` | Legacy opt-in. Ignored when `schema_owner = "gamemode"`. |

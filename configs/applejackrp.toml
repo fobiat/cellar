@@ -36,6 +36,9 @@ healthy_after = 60
 
 [database]
 enabled = true
+# For a hosted source, set this to a protected file outside the repository and
+# set [mariadb].managed = false. CELLAR_DATABASE_URL takes precedence.
+# url_file = 'C:\ProgramData\Cellar\external-database.url'
 max_connections = 8
 schema_owner = "gamemode"
 migrate_on_start = false

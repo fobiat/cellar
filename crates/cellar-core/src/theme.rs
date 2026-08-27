@@ -79,6 +79,77 @@ token!(
     "#4A4642",
     "Secondary text"
 );
+token!(
+    LOG_TRACE,
+    "log-trace",
+    "#626A78",
+    "#697386",
+    "Trace and low-signal output"
+);
+token!(LOG_DEBUG, "log-debug", "#9CC4D4", "#457588", "Debug output");
+token!(
+    LOG_INFO,
+    "log-info",
+    "#F2F2F0",
+    "#201F1D",
+    "Informational output"
+);
+token!(
+    LOG_WARNING,
+    "log-warning",
+    "#D8B45A",
+    "#8A650A",
+    "Warnings and degraded service"
+);
+token!(
+    LOG_ERROR,
+    "log-error",
+    "#DA5B4D",
+    "#A33326",
+    "Errors and failures"
+);
+token!(
+    LOG_STORAGE,
+    "log-storage",
+    "#B58AF0",
+    "#6B46A1",
+    "Database and document storage"
+);
+token!(
+    LOG_NETWORK,
+    "log-network",
+    "#68D7C4",
+    "#287A6E",
+    "Network, bridge and lobby"
+);
+token!(
+    LOG_PLAYERS,
+    "log-players",
+    "#57A6E8",
+    "#175694",
+    "Players and identity"
+);
+token!(
+    LOG_ENGINE,
+    "log-engine",
+    "#D8A657",
+    "#8A5E0A",
+    "Engine, map and physics"
+);
+token!(
+    LOG_GAMEPLAY,
+    "log-gameplay",
+    "#F2A274",
+    "#A45126",
+    "Gamemode activity"
+);
+token!(
+    LOG_CELLAR,
+    "log-cellar",
+    "#9CC4D4",
+    "#457588",
+    "Cellar supervisor activity"
+);
 
 /// Every token, in the order the palette documents them.
 pub const TOKENS: &[Token] = &[
@@ -92,6 +163,17 @@ pub const TOKENS: &[Token] = &[
     RAISED,
     TEXT,
     TEXT_MUTED,
+    LOG_TRACE,
+    LOG_DEBUG,
+    LOG_INFO,
+    LOG_WARNING,
+    LOG_ERROR,
+    LOG_STORAGE,
+    LOG_NETWORK,
+    LOG_PLAYERS,
+    LOG_ENGINE,
+    LOG_GAMEPLAY,
+    LOG_CELLAR,
 ];
 
 /// The wordmark, as the TUI splash draws it.

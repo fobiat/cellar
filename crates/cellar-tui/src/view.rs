@@ -4,7 +4,6 @@
 //! roster, the log, and the command line. An operations screen earns its keep by
 //! being in the same place every time.
 
-use cellar_core::event::Level;
 use cellar_runtime::metrics::{format_bytes, format_uptime};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -200,11 +199,12 @@ fn draw_log(frame: &mut Frame, area: Rect, app: &App) {
         .skip(start)
         .take(end - start)
         .map(|row| {
-            let message = Style::default().fg(match (row.level, row.local) {
-                (Level::Error, _) => theme::russet(),
-                (_, true) => theme::azure(),
-                _ => theme::text(),
-            });
+            let message = Style::default().fg(theme::log_colour(
+                row.level,
+                &row.who,
+                &row.message,
+                row.local,
+            ));
 
             Line::from(vec![
                 Span::styled(format!("{} ", row.at), theme::dim()),

@@ -559,7 +559,11 @@ function renderConsole() {
     if (query && !searchable.includes(query)) continue;
     if (minimumRank >= 0 && (rank[record.level] ?? 2) < minimumRank) continue;
     if (category && record.category !== category) continue;
-    const line = el("div", `line ${record.kind}`);
+    const levels = ["trace", "debug", "info", "warning", "error"];
+    const categories = ["cellar", "engine", "gameplay", "network", "players", "storage", "other"];
+    const level = levels.includes(record.level) ? record.level : "info";
+    const logCategoryName = categories.includes(record.category) ? record.category : "other";
+    const line = el("div", `line ${record.kind} level-${level} category-${logCategoryName}`);
     line.append(el("span", "at", record.at), el("span", "who", record.who), el("span", "msg", record.message));
     console_.append(line);
     while (console_.children.length > 1500) console_.firstChild.remove();
@@ -777,7 +781,7 @@ async function loadDatabase() {
     $("#db-table-count").textContent = text(info.table_count ?? "—");
     $("#db-size").textContent = formatBytes(info.bytes);
     $("#db-version").textContent = info.server_version
-      ? `${text(info.database)} · ${text(info.server_version)} · schema supplied by the gamemode`
+      ? `${text(info.database)} · ${text(info.server_version)} · ${text(info.source || "external")} source · schema supplied by the gamemode`
       : "The gamemode owns the schema. Cellar only inspects it.";
   } else {
     $("#db-connection").textContent = "unavailable";

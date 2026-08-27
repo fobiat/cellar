@@ -300,6 +300,9 @@ pub struct DatabaseConfig {
     /// From `CELLAR_DATABASE_URL`. Never written to the config file.
     #[serde(skip_serializing, skip_deserializing)]
     pub url: Option<Secret>,
+    /// Optional path to a one-line external MySQL or MariaDB URL. The file is
+    /// read only when `CELLAR_DATABASE_URL` is absent and is never serialized.
+    pub url_file: Option<PathBuf>,
     pub max_connections: u32,
     /// Who owns the tables in this connection. Game-owned is the safe default:
     /// Cellar can inspect and query the schema, but never invents game tables.
@@ -327,6 +330,7 @@ impl Default for DatabaseConfig {
         Self {
             enabled: false,
             url: None,
+            url_file: None,
             max_connections: 8,
             schema_owner: DatabaseSchemaOwner::default(),
             migrate_on_start: false,
@@ -563,6 +567,7 @@ impl Config {
         })?;
 
         config.overlay_env();
+        config.overlay_database_url_file()?;
         config.validate()?;
         Ok(config)
     }
@@ -589,6 +594,30 @@ impl Config {
             Secret::from_env("CELLAR_DISCORD_WEBHOOK_URL").or(self.notify.discord_webhook.take());
         self.notify.generic_webhook =
             Secret::from_env("CELLAR_WEBHOOK_URL").or(self.notify.generic_webhook.take());
+    }
+
+    fn overlay_database_url_file(&mut self) -> Result<(), ConfigError> {
+        if self.database.url.is_some() {
+            return Ok(());
+        }
+        let Some(path) = &self.database.url_file else {
+            return Ok(());
+        };
+        let url = std::fs::read_to_string(path)
+            .map_err(|source| ConfigError::Read {
+                path: path.clone(),
+                source,
+            })?
+            .trim()
+            .to_owned();
+        if url.is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "database.url_file {} is empty",
+                path.display()
+            )));
+        }
+        self.database.url = Some(Secret::new(url));
+        Ok(())
     }
 
     /// Refuse a configuration that would fail later, in a way that is harder to
@@ -627,7 +656,7 @@ impl Config {
         if self.backup.enabled {
             if !self.database.enabled || self.database.url.is_none() {
                 return Err(ConfigError::Invalid(
-                    "backup.enabled needs database.enabled and CELLAR_DATABASE_URL".into(),
+                    "backup.enabled needs database.enabled and a database URL".into(),
                 ));
             }
             if self.backup.retain == 0 {
@@ -646,7 +675,7 @@ impl Config {
 
             if self.database.url.is_none() {
                 return Err(ConfigError::Invalid(
-                    "database.enabled needs CELLAR_DATABASE_URL in the environment".into(),
+                    "database.enabled needs CELLAR_DATABASE_URL or database.url_file".into(),
                 ));
             }
 

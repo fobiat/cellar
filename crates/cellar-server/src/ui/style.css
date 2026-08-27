@@ -272,10 +272,30 @@ td.wide { max-width: 460px; overflow-wrap: anywhere; }
 .line .who { color: var(--aj-frost); flex: 0 0 88px; }
 .line .msg { overflow-wrap: anywhere; }
 
-.line.error .msg { color: var(--aj-russet); }
+.line.level-trace .msg { color: var(--aj-log-trace); }
+.line.level-debug .msg { color: var(--aj-log-debug); }
+.line.level-info .msg { color: var(--aj-log-info); }
+.line.level-warning .msg { color: var(--aj-log-warning); }
+.line.level-error .msg { color: var(--aj-log-error); }
+.line.category-storage .who, .palette-key.category-storage { color: var(--aj-log-storage); }
+.line.category-network .who, .palette-key.category-network { color: var(--aj-log-network); }
+.line.category-players .who, .palette-key.category-players { color: var(--aj-log-players); }
+.line.category-engine .who, .palette-key.category-engine { color: var(--aj-log-engine); }
+.line.category-gameplay .who, .palette-key.category-gameplay { color: var(--aj-log-gameplay); }
+.line.category-cellar .who, .palette-key.category-cellar { color: var(--aj-log-cellar); }
+.line.error .msg { color: var(--aj-log-error); }
 .line.join  .msg { color: var(--aj-orchard); }
 .line.leave .msg { color: var(--aj-frost); }
 .line.echo  .msg { color: var(--aj-azure); }
+
+.console-palette { display: flex; flex-wrap: wrap; gap: 5px 10px; margin: 7px 0 2px; }
+.palette-key { color: var(--aj-text-muted); font-size: 10px; letter-spacing: .04em; }
+.palette-key::before { content: "●"; margin-right: 4px; }
+.palette-key.level-trace { color: var(--aj-log-trace); }
+.palette-key.level-debug { color: var(--aj-log-debug); }
+.palette-key.level-info { color: var(--aj-log-info); }
+.palette-key.level-warning { color: var(--aj-log-warning); }
+.palette-key.level-error { color: var(--aj-log-error); }
 
 .prompt { display: flex; gap: 8px; margin-top: 10px; }
 .prompt .caret { color: var(--aj-azure); padding-top: 8px; }

@@ -44,7 +44,8 @@ pub async fn info(pool: &MySqlPool) -> Result<DatabaseInfo, StoreError> {
         .fetch_one(pool)
         .await?;
     let totals = sqlx::query(
-        "SELECT COUNT(*) AS table_count, COALESCE(SUM(DATA_LENGTH + INDEX_LENGTH), 0) AS bytes
+        "SELECT CAST(COUNT(*) AS UNSIGNED) AS table_count,
+                CAST(COALESCE(SUM(DATA_LENGTH + INDEX_LENGTH), 0) AS UNSIGNED) AS bytes
          FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'",
     )
     .fetch_one(pool)
@@ -54,10 +55,8 @@ pub async fn info(pool: &MySqlPool) -> Result<DatabaseInfo, StoreError> {
         connected: true,
         database: connection.try_get("database_name")?,
         server_version: connection.try_get("server_version")?,
-        // MySQL returns COUNT and SUM as signed BIGINT metadata even when the
-        // values cannot be negative. Decode that wire type explicitly.
-        table_count: totals.try_get::<i64, _>("table_count")?.max(0) as u64,
-        bytes: totals.try_get::<i64, _>("bytes")?.max(0) as u64,
+        table_count: totals.try_get("table_count")?,
+        bytes: totals.try_get("bytes")?,
         schema_owner: "unknown".to_owned(),
     })
 }
@@ -85,7 +84,9 @@ pub struct ResultSet {
 /// Every table in the current schema.
 pub async fn tables(pool: &MySqlPool) -> Result<Vec<TableSummary>, StoreError> {
     let rows = sqlx::query(
-        "SELECT TABLE_NAME, TABLE_ROWS, DATA_LENGTH + INDEX_LENGTH AS BYTES, TABLE_COMMENT
+        "SELECT TABLE_NAME, TABLE_ROWS,
+                CAST(COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0) AS UNSIGNED) AS BYTES,
+                TABLE_COMMENT
          FROM information_schema.TABLES
          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'
          ORDER BY TABLE_NAME",

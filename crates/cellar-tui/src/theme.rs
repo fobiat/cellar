@@ -65,6 +65,42 @@ pub fn accent() -> Style {
     Style::default().fg(azure())
 }
 
+fn token_colour(token: theme::Token) -> Color {
+    colour(token)
+}
+
+pub fn log_colour(level: cellar_core::Level, who: &str, message: &str, local: bool) -> Color {
+    if level == cellar_core::Level::Error {
+        return token_colour(theme::LOG_ERROR);
+    }
+    if local {
+        return token_colour(theme::LOG_CELLAR);
+    }
+
+    let value = format!("{who} {message}").to_ascii_lowercase();
+    let category =
+        if value.contains("storage") || value.contains("database") || value.contains("document") {
+            theme::LOG_STORAGE
+        } else if value.contains("network") || value.contains("connect") || value.contains("lobby")
+        {
+            theme::LOG_NETWORK
+        } else if value.contains("player") || value.contains("identity") || value.contains("chat") {
+            theme::LOG_PLAYERS
+        } else if value.contains("physics") || value.contains("render") || value.contains("map") {
+            theme::LOG_ENGINE
+        } else if value.contains("applejack") || value.contains("game") {
+            theme::LOG_GAMEPLAY
+        } else {
+            match level {
+                cellar_core::Level::Trace => theme::LOG_TRACE,
+                cellar_core::Level::Debug => theme::LOG_DEBUG,
+                cellar_core::Level::Warning => theme::LOG_WARNING,
+                cellar_core::Level::Info | cellar_core::Level::Error => theme::LOG_INFO,
+            }
+        };
+    token_colour(category)
+}
+
 /// The colour a lifecycle state should read as.
 pub fn state_colour(state: cellar_core::State) -> Color {
     use cellar_core::State;
