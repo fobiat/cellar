@@ -16,6 +16,7 @@ An open-source dedicated server runner and manager for s&box.
 | | |
 | --- | --- |
 | **[Game database](GAME_DATABASE.md)** | Hosted database access, schema ownership, and the read-only operator browser. |
+| **[Facepunch Sandbox](FACEPUNCH-SANDBOX.md)** | A published `facepunch.sandbox` profile for testing a second gamemode. |
 | **[Operations](OPERATIONS.md)** | Running it for real: health probes, graceful shutdown, webhooks, updates, backups. |
 | **[Troubleshooting](TROUBLESHOOTING.md)** | Symptoms, causes and fixes, including the ones that look like something else. |
 | **[Architecture](ARCHITECTURE.md)** | How it is built and why, including the engine findings the design rests on. |

@@ -113,6 +113,10 @@ The recommended setup is a hosted game database owned by the gamemode. See
 [Game database](GAME_DATABASE.md). The browser is read-only and should use a
 database account with a matching `SELECT` grant.
 
+For a published game that does not use AppleJackRP's database contract, see
+the [Facepunch Sandbox profile](FACEPUNCH-SANDBOX.md). It leaves the database
+and bridge disabled while retaining Cellar's process supervision and dashboard.
+
 MariaDB and MySQL are both supported and they are not identical; the differences
 that bite are recorded in [Troubleshooting](TROUBLESHOOTING.md#mariadb-and-mysql-differ).
 

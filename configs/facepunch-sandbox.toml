@@ -1,0 +1,47 @@
+# Cellar profile for testing a published Facepunch Sandbox game.
+# This profile has no AppleJackRP project, database, or document bridge.
+# Keep the data and logs outside any source checkout.
+
+[server]
+executable = 'C:\AppleJackServer\sbox\sbox-server.exe'
+game = "facepunch.sandbox"
+launcher = "native"
+working_dir = 'C:\AppleJackServer\sbox'
+hostname = "Facepunch Sandbox Dev"
+data_dir = 'C:\AppleJackServer\sbox\data\facepunch\sandbox#local'
+log_file = 'C:\AppleJackServer\sbox\logs\facepunch-sandbox.log'
+direct_connect = false
+port = 27025
+query_port = 27026
+ready_pattern = "Lobby created - session is joinable"
+
+[database]
+enabled = false
+
+[mariadb]
+managed = false
+
+[backup]
+enabled = false
+
+[bridge]
+enabled = false
+
+[web]
+enabled = true
+bind = "127.0.0.1:8091"
+auth = "auto"
+
+[notify]
+enabled = false
+kinds = []
+
+[update]
+policy = "notify"
+check_interval_minutes = 60
+check_remote = false
+only_when_empty = true
+window_start_hour = 0
+window_end_hour = 0
+update_gamemode = false
+update_engine = false
