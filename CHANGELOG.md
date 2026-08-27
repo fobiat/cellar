@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A resource-sampler test failed on every native Windows run.** It used pid
+  0 as a stand-in for a dead process, but Windows exposes pid 0 as the System
+  Idle Process, so `sysinfo` reported it alive. The test now spawns a real
+  child and samples its pid after it exits.
+
 ## [0.1.6] - 2026-08-25
 
 ### Fixed
