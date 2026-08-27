@@ -27,6 +27,7 @@ use crate::state::AppState;
 const HTML: &str = include_str!("ui/index.html");
 const CSS: &str = include_str!("ui/style.css");
 const JS: &str = include_str!("ui/app.js");
+const SERVICE_WORKER: &str = include_str!("ui/service-worker.js");
 
 /// The finished page, built once.
 fn page() -> &'static str {
@@ -41,6 +42,8 @@ fn page() -> &'static str {
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(index))
+        .route("/service-worker.js", get(service_worker))
+        .route("/manifest.webmanifest", get(manifest))
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
 }
@@ -60,6 +63,27 @@ async fn index() -> Response {
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
         page(),
+    )
+        .into_response()
+}
+
+async fn service_worker() -> Response {
+    (
+        StatusCode::OK,
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        SERVICE_WORKER,
+    )
+        .into_response()
+}
+
+async fn manifest() -> Response {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/manifest+json")],
+        r##"{"name":"Cellar","short_name":"Cellar","start_url":"/","display":"standalone","theme_color":"#0E0F11","background_color":"#0E0F11","description":"The dedicated server manager built for s&box."}"##,
     )
         .into_response()
 }

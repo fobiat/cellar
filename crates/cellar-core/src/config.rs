@@ -943,6 +943,47 @@ mod tests {
     }
 
     #[test]
+    fn password_web_auth_can_be_required_on_loopback() {
+        let mut config = minimal();
+        config.web.enabled = true;
+        config.web.auth = WebAuthMode::Password;
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("PASSWORD_HASH")
+        );
+
+        config.web.password_hash = Some(Secret::new("$argon2id$v=19$m=1,t=1,p=1$hash"));
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn unauthenticated_web_auth_is_loopback_only() {
+        let mut config = minimal();
+        config.web.enabled = true;
+        config.web.auth = WebAuthMode::None;
+        config.web.bind = "0.0.0.0:8081".to_owned();
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("loopback")
+        );
+    }
+
+    #[test]
+    fn game_schema_is_the_safe_database_default() {
+        assert_eq!(
+            DatabaseConfig::default().schema_owner,
+            DatabaseSchemaOwner::Gamemode
+        );
+        assert!(!DatabaseConfig::default().migrate_on_start);
+    }
+
+    #[test]
     fn managed_mariadb_needs_a_pinned_version_and_checksum() {
         let mut config = minimal();
         config.mariadb = managed_mariadb();

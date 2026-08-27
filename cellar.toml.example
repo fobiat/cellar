@@ -2,7 +2,7 @@
 #
 # Secrets are never in this file. They come from the environment:
 #
-#   CELLAR_DATABASE_URL         mysql://user:password@host/database
+#   CELLAR_DATABASE_URL         mysql://readonly_user:password@host/database
 #   CELLAR_GSLT                 Steam Game Server Login Token
 #   CELLAR_BRIDGE_SECRET        for bridge.auth = "shared_secret"
 #   CELLAR_WEB_PASSWORD_HASH    from `cellar hash-password`
@@ -10,9 +10,9 @@
 #   CELLAR_WEBHOOK_URL          generic JSON notifications
 
 [server]
-# Linux, in the container image built from AppleJackRP's server/Dockerfile:
+# Linux, in a container or on a host:
 executable = "/home/container/sbox/sbox-server.exe"
-project = "/home/container/projects/applejackrp/applejackrp.sbproj"
+project = "/home/container/projects/my-game/my-game.sbproj"
 # For a published package, use `game` instead of `project`:
 # game = "fobiat.applejackrp"
 # map = "thieves.rpdowntown3t"
@@ -20,10 +20,10 @@ launcher = "wine"
 
 # Windows, natively:
 # executable = 'C:\sbox\sbox-server.exe'
-# project = 'C:\Users\Shadow\Desktop\Projects\AppleJackRP-sandbox\applejackrp.sbproj'
+# project = 'C:\Users\Shadow\Desktop\Projects\my-game\my-game.sbproj'
 # launcher = "native"
 
-hostname = "AppleJackRP Dev"
+hostname = "My S&box Server"
 
 # The engine's data directory, beside features.json and permissions.json.
 # Cellar writes hosting.json here before starting the server. Required when the
@@ -41,12 +41,12 @@ direct_connect = false
 port = 27015
 query_port = 27016
 
-# The log line that means "serving". This default is AppleJackRP's own, from
-# Code/NetworkBootstrap.cs.
+# The log line that means "serving". Set this to the readiness signal emitted
+# by the game when it has finished loading.
 ready_pattern = "Lobby created - session is joinable"
 
 # Note: no maxplayers. The engine has no such convar or launch switch; the real
-# ceiling is applejackrp.sbproj's Metadata.MaxPlayers.
+# ceiling is the project's Metadata.MaxPlayers.
 
 [supervisor]
 # never | always | on_failure
@@ -69,7 +69,10 @@ healthy_after = 60
 [database]
 enabled = true
 max_connections = 8
-migrate_on_start = true
+# The gamemode owns its tables, migrations, and data contract. Cellar only
+# introspects the live schema and runs read-only queries in the web UI.
+schema_owner = "gamemode"
+migrate_on_start = false
 event_retention_days = 90
 
 # Logical MariaDB dumps. The password is never put in the dump command line.
@@ -122,8 +125,9 @@ rate_limit_per_minute = 600
 [web]
 enabled = true
 bind = "127.0.0.1:8081"
-# On any non-loopback address, CELLAR_WEB_PASSWORD_HASH is required: the console
-# behind this runs at full engine privilege.
+# auto uses the password when configured, password always requires it, and
+# none is accepted only on loopback. Create a hash with `cellar hash-password`.
+auth = "auto"
 
 [notify]
 enabled = false

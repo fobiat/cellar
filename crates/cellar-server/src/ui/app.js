@@ -21,6 +21,52 @@ const text = (value) => (value === null || value === undefined ? "" : String(val
 
 let socket = null;
 let cpuHistory = [];
+let serviceWorker = null;
+
+function showToast(message) {
+  const toast = $("#toast");
+  toast.textContent = message;
+  toast.hidden = false;
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => { toast.hidden = true; }, 4500);
+}
+
+function alertsEnabled() {
+  return localStorage.getItem("cellar.alerts") === "on";
+}
+
+function renderAlertButton() {
+  $("#notification-toggle").textContent = alertsEnabled() ? "Alerts on" : "Enable alerts";
+}
+
+async function enableAlerts() {
+  if (!("Notification" in window)) {
+    showToast("This browser does not support notifications.");
+    return;
+  }
+
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    showToast("Alerts are blocked. Allow notifications in browser settings.");
+    return;
+  }
+
+  if ("serviceWorker" in navigator) {
+    serviceWorker = await navigator.serviceWorker.register("/service-worker.js");
+  }
+  localStorage.setItem("cellar.alerts", "on");
+  renderAlertButton();
+  showToast("Browser alerts enabled for server events.");
+}
+
+function notifyOperator(title, body) {
+  if (!alertsEnabled() || Notification.permission !== "granted") return;
+  if (serviceWorker) {
+    serviceWorker.showNotification(title, { body, tag: "cellar-server" });
+  } else {
+    new Notification(title, { body });
+  }
+}
 
 /* ---- tabs --------------------------------------------------------------- */
 
@@ -33,7 +79,7 @@ function showTab(name) {
   });
 
   if (name === "records") loadDocuments();
-  if (name === "database") loadTables();
+  if (name === "database") loadDatabase();
   if (name === "players") loadPlayers();
   if (name === "access") loadAccess();
   if (name === "releases") loadReleases();
@@ -478,6 +524,9 @@ function connect() {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
   socket = new WebSocket(`${protocol}://${location.host}/api/events`);
 
+  socket.onopen = () => setLamp($("#connection-state"), "up", "live");
+  socket.onerror = () => setLamp($("#connection-state"), "down", "error");
+
   socket.onmessage = (message) => {
     const event = JSON.parse(message.data);
     switch (event.kind) {
@@ -496,6 +545,12 @@ function connect() {
       case "process_exited":
       case "server_ready":
         appendLine("echo", now(), "cellar", event.kind.replace("_", " "));
+        if (event.kind === "process_exited" && !event.graceful) {
+          notifyOperator("Cellar server alert", "The server exited unexpectedly.");
+        }
+        if (event.kind === "server_ready") {
+          notifyOperator("Cellar server ready", event.map ? `Ready on ${event.map}.` : "Ready for players.");
+        }
         refreshStatus();
         break;
       default:
@@ -505,7 +560,10 @@ function connect() {
 
   // Reconnect rather than going quietly dead: a dashboard that stops updating
   // without saying so is worse than one that is obviously offline.
-  socket.onclose = () => setTimeout(connect, 3000);
+  socket.onclose = () => {
+    setLamp($("#connection-state"), "down", "reconnecting");
+    setTimeout(connect, 3000);
+  };
 }
 
 /* ---- players ------------------------------------------------------------ */
@@ -611,6 +669,24 @@ async function loadTables() {
     button.onclick = () => browseTable(table.name);
     list.append(button);
   }
+}
+
+async function loadDatabase() {
+  const response = await fetch("/api/db/info");
+  const info = await response.json();
+  if (response.ok) {
+    $("#db-connection").textContent = info.connected ? "connected" : "offline";
+    $("#db-owner").textContent = text(info.schema_owner || "unknown");
+    $("#db-table-count").textContent = text(info.table_count ?? "—");
+    $("#db-size").textContent = formatBytes(info.bytes);
+    $("#db-version").textContent = info.server_version
+      ? `${text(info.database)} · ${text(info.server_version)} · schema supplied by the gamemode`
+      : "The gamemode owns the schema. Cellar only inspects it.";
+  } else {
+    $("#db-connection").textContent = "unavailable";
+    $("#db-version").textContent = text(info.error);
+  }
+  loadTables();
 }
 
 async function browseTable(name) {
@@ -757,6 +833,12 @@ function start() {
   connect();
   refreshStatus();
   setInterval(refreshStatus, 2000);
+  renderAlertButton();
+  if (alertsEnabled() && "serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/service-worker.js").then((registration) => {
+      serviceWorker = registration;
+    }).catch(() => showToast("Alerts could not be restored."));
+  }
 }
 
 async function runRelease(action) {
@@ -805,6 +887,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   $("#stop").onclick = () => control("stop");
   $("#restart").onclick = () => control("restart");
+  $("#notification-toggle").onclick = enableAlerts;
 
   const probe = await fetch("/api/status");
   if (probe.status === 401) {

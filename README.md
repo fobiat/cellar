@@ -1,9 +1,9 @@
 # Cellar
 
-A dedicated server runner and manager for [s&box](https://sbox.game), built for
-[AppleJackRP](https://fobiat.dev/applejack). One binary that supervises the game
-process, gives it a console you can actually reach, and implements the MySQL
-persistence bridge the gamemode already has a client for.
+A dedicated server runner and manager for [s&box](https://sbox.game). One binary
+that supervises the game process, gives it a console you can actually reach,
+and provides a responsive operator web UI for the game database the gamemode
+owns.
 
 Runs on **Linux under Wine** (the container and Kubernetes case) and **Windows
 natively**. Same `cellar.toml` either way.
@@ -21,7 +21,7 @@ cellar run        # supervise, in the foreground
 | **[Installation](docs/INSTALLATION.md)** | Installers, Docker, Kubernetes, source, upgrading, uninstalling. |
 | **[Configuration](docs/CONFIGURATION.md)** | Every `cellar.toml` key and its default. |
 | **[CLI reference](docs/CLI.md)** | Every command and flag. |
-| **[The bridge](docs/BRIDGE.md)** | The persistence protocol, the schema, wiring it to the gamemode. |
+| **[Game database](docs/GAME_DATABASE.md)** | Hosted database connection, read-only schema browser, and ownership contract. |
 | **[Operations](docs/OPERATIONS.md)** | Probes, graceful shutdown, webhooks, updates, backups. |
 | **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Symptoms and fixes, including what is still unproven. |
 | **[Architecture](docs/ARCHITECTURE.md)** | How it is built, and the engine findings behind it. |
@@ -37,15 +37,10 @@ Two gaps, both of which the projects themselves had already written down.
 > No readiness/liveness probes: this isn't HTTP … Revisit once there's a
 > confirmed way to ask this server "are you actually serving."
 
-**There was no persistence bridge.** `Documentation/Design/20_PERSISTENCE.md` §6.3
-specifies an HTTP service at `/v1/doc/{key}`, and the gamemode's client half is
-written, tested and shipped as `Code/Storage/HostedDocumentStore.cs`. Nothing
-implemented the server half, so `StorageDirector` logged:
-
-> `hosted: the call sites are still synchronous, so every read answers
-> Unavailable and every write stays owed in the journal`
-
-Cellar closes both. It supervises the process **and** it is the bridge.
+**The game owns its persistence.** Cellar connects to the database supplied by
+the gamemode, discovers its live schema, and exposes a read-only browser for
+operators. It does not create game tables, run game migrations, or pretend to
+understand domain data it was not given.
 
 ---
 
@@ -90,16 +85,15 @@ There is no RCON in s&box. This is the substitute, and it is a better one.
 - **Reads two channels**: the pty for commands, their replies and the status
   bar's frame timings; `logs/sbox-server.log` for every event. Only one produces
   events, or every line would be counted twice.
-- **Is the bridge**: `GET`/`PUT`/`HEAD /v1/doc/{key}` over MySQL, to the exact
-  contract `HostedDocumentProtocol.cs` expects, with a revision history so a bad
-  write is recoverable.
+- **Connects to hosted game databases**: the web UI introspects the live schema,
+  browses tables, and runs capped read-only queries without imposing a schema.
 - **Answers probes**: `/healthz` for liveness, `/readyz` for "is it actually
   serving", derived from the readiness line in the log rather than from a port
   being open.
 - **Three interfaces**: a CLI, a ratatui dashboard, and a web UI, all reading one
   snapshot so they cannot disagree.
-- **Browses the database**: a small read-only phpMyAdmin in the web UI, plus a
-  document browser with revision history.
+- **Works from a phone**: the dashboard is responsive, installable, reactive to
+  WebSocket state, and can send browser alerts for server events.
 - **Can host the database itself**: downloads, initializes and supervises a
   local MariaDB (`cellar mariadb provision`), for machines with no MySQL
   already available and no Docker to run one in. See [Configuration](docs/CONFIGURATION.md#mariadb).
