@@ -18,10 +18,9 @@ env:
 jobs:
   release:
     name: build and publish
-    # Actions minutes are billed on a private repository, and on 2026-08-25
-    # every hosted run failed before reaching a step. `CI_RUNNER` names a
-    # self-hosted label, the same repository variable the CI workflow reads.
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    # Public releases use GitHub-hosted capacity so a missing private runner
+    # cannot leave a pushed tag queued forever.
+    runs-on: ubuntu-latest
 
     steps:
       # `github.ref` is the tag on a tag push. The input is what makes a manual
