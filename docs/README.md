@@ -10,6 +10,7 @@ An open-source dedicated server runner and manager for s&box.
 | **[Installation](INSTALLATION.md)** | Every install path: installers, Docker, Kubernetes, from source, upgrading, uninstalling. |
 | **[Configuration](CONFIGURATION.md)** | Every `cellar.toml` key, its default, and what it does. |
 | **[CLI reference](CLI.md)** | Every command and flag, with worked examples. |
+| **[MCP integration](MCP.md)** | Read-only MCP tools, authenticated command access, and stdio client usage. |
 
 ## Going further
 

@@ -219,6 +219,25 @@ refused. See [The bridge](BRIDGE.md#document-keys).
 
 ---
 
+## `cellar mcp`
+
+Expose Cellar to an MCP host, or inspect and call another stdio MCP server.
+
+```
+cellar mcp serve [--url URL]
+cellar mcp tools <COMMAND> [--arg ARG]...
+cellar mcp call <COMMAND> --tool NAME [--input JSON] [--arg ARG]...
+```
+
+`serve` proxies the running Cellar API. Read tools require
+`CELLAR_API_TOKEN`. The optional `cellar_command` tool additionally requires
+`CELLAR_MCP_ENABLE_COMMAND=1` and authenticates through Cellar's existing web
+operator session using `CELLAR_WEB_PASSWORD` when configured. See
+[MCP integration](MCP.md) for the host configuration and the complete tool
+list.
+
+---
+
 ## `cellar settings`
 
 Read and write the running server's configuration. Needs a `cellar run` with

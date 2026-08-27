@@ -168,6 +168,11 @@ window_end_hour = 6
 `notify` is the default: Cellar tells you an update exists and takes it only when
 you ask. `apply` is hands-off.
 
+Cellar also checks its own release feed in the background when
+`[update].program_check` is enabled. The result appears in the Versions tab and
+Cellar logs a notice when a newer program is available. Install it deliberately
+with `cellar self-update`, then restart Cellar.
+
 Three guards, all on by default:
 
 - **`only_when_empty`.** An updater that restarts a populated server is worse
@@ -247,6 +252,36 @@ Cellar does not schedule it for you.
 | Crash loop | logs, webhooks | `crash_loop_threshold` failures inside `window`. Cellar has given up restarting. |
 | Revision conflicts | `cellar db status` | Real concurrent writers exist. Relevant before enabling optimistic concurrency. |
 | MariaDB lamp | web UI, `cellar mariadb status` | Only present with `[mariadb]` `managed = true`. Down or crash-looping means the game server is about to lose its own database, not just the browser. |
+| Anti-cheat | web UI, `/api/status` | Shows detected VAC, Easy Anti-Cheat, or BattlEye evidence. `unknown` means the engine log made no claim. An unauthenticated Steam fallback is shown as VAC disabled. |
+| AppleJack build drift | web UI, Releases tab | Compares the running `BuildVersion.g.cs` commit with the current `origin/main` tip. `out of sync` is a real alert, not a package-version guess. |
+
+The Dispatch console has a view selector for command results, background events,
+and errors. This keeps output from Precinct shortcuts visible without mixing it
+with the persistent engine stream. Console view and filters are saved per
+browser.
+
+Settings snapshots can be imported from the Settings tab. Select a TOML or YAML
+file, preview the planned changes, then apply them. Cellar sends only the named
+changes through the live gamemode catalogue and never writes the source file or
+the AppleJackRP checkout.
+
+## Five useful features to add next
+
+Comparable managers commonly provide these features. Cellar already has the
+primitives for the first steps, so they are the next product backlog:
+
+1. Durable scheduled tasks with missed-run policy and execution history.
+2. Game-data backup and restore with retention and pre-update snapshots.
+3. Scoped roles, expiring service tokens, and durable audit records.
+4. Persisted monitoring history with threshold and recovery alert policies.
+5. Signed inbound integrations mapped to named safe actions.
+
+The comparison used official product documentation from
+[Pterodactyl](https://pterodactyl.io/panel/1.0/additional_configuration.html),
+[AMP](https://www.cubecoders.com/AMP/TQ),
+[LinuxGSM](https://docs.linuxgsm.com/commands/monitor),
+[GameAP](https://docs.gameap.com/), and
+[Crafty Controller](https://docs.craftycontrol.com/pages/user-guide/open-metrics/).
 
 The unparsed counter is worth a dashboard. A parser that quietly stops matching
 is the failure mode this whole design is built against: an unmatched line is

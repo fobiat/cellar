@@ -1,0 +1,147 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cellar-config
+data:
+  cellar.toml: |
+    [server]
+    executable = "/home/container/sbox/sbox-server.exe"
+    game = "facepunch.sandbox"
+    launcher = "wine"
+    working_dir = "/home/container/sbox"
+    hostname = "Cellar Sandbox"
+    data_dir = "/home/container/sbox/data/facepunch/sandbox#local"
+    log_file = "/home/container/sbox/logs/sbox-server.log"
+    direct_connect = true
+    port = 27015
+    query_port = 27016
+    ready_pattern = "Lobby created - session is joinable"
+
+    [database]
+    enabled = true
+    schema_owner = "gamemode"
+
+    [web]
+    enabled = true
+    bind = "0.0.0.0:8081"
+    auth = "password"
+    allow_insecure_http = true
+    secure_cookies = true
+
+    [update]
+    policy = "notify"
+    only_when_empty = true
+    update_gamemode = false
+    update_engine = false
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cellar
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: cellar
+  template:
+    metadata:
+      labels:
+        app: cellar
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: cellar
+          image: your-registry/your-sbox-server:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/cellar-entrypoint"]
+          args: ["run"]
+          stdin: true
+          tty: true
+          env:
+            - name: CELLAR_CONFIG
+              value: /etc/cellar/cellar.toml
+          envFrom:
+            - secretRef:
+                name: cellar-secrets
+          ports:
+            - name: web
+              containerPort: 8081
+            - name: game
+              containerPort: 27015
+              protocol: UDP
+            - name: query
+              containerPort: 27016
+              protocol: UDP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: web
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: web
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/cellar/cellar.toml
+              subPath: cellar.toml
+              readOnly: true
+            - name: sbox-data
+              mountPath: /home/container/sbox/data
+            - name: sbox-logs
+              mountPath: /home/container/sbox/logs
+      volumes:
+        - name: config
+          configMap:
+            name: cellar-config
+        - name: sbox-data
+          persistentVolumeClaim:
+            claimName: cellar-data
+        - name: sbox-logs
+          persistentVolumeClaim:
+            claimName: cellar-logs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cellar
+spec:
+  selector:
+    app: cellar
+  ports:
+    - name: web
+      port: 8081
+      targetPort: web
+    - name: game
+      port: 27015
+      targetPort: game
+      protocol: UDP
+    - name: query
+      port: 27016
+      targetPort: query
+      protocol: UDP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cellar-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cellar-logs
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi

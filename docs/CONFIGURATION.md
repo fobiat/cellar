@@ -275,6 +275,9 @@ Webhook URLs come from the environment, are never logged, and are redacted from
 | `window_end_hour` | `0` | Window end. Equal values mean any time; `22`–`4` wraps midnight. |
 | `update_gamemode` | `true` | Update the gamemode checkout. |
 | `update_engine` | `false` | Update the engine through SteamCMD. |
+| `program_check` | `true` | Check the Cellar release feed in the background. Checks report only. |
+| `program_check_interval_minutes` | `60` | Minutes between Cellar release checks, with a five-minute floor. |
+| `program_release_url` | Cellar GitHub releases API | Release endpoint for the Cellar program check. |
 | `steam_dir` | unset | Needed for `update_engine` and for reading the installed build id. |
 | `steamcmd` | unset | Path to `steamcmd`. |
 

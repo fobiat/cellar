@@ -9,7 +9,52 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use cellar_core::config::Config;
 
-use crate::{DbAction, DocAction, MariadbAction};
+use crate::{DbAction, DocAction, MariadbAction, McpAction};
+
+/// Run Cellar's MCP stdio server or act as a small stdio MCP client.
+pub async fn mcp(action: McpAction) -> Result<()> {
+    match action {
+        McpAction::Serve { url } => {
+            let api =
+                cellar_mcp::CellarApi::from_env(url.as_deref()).map_err(anyhow::Error::msg)?;
+            cellar_mcp::CellarMcpServer::new(std::sync::Arc::new(api))
+                .serve_stdio()
+                .await
+                .map_err(anyhow::Error::msg)
+        }
+        McpAction::Tools { command, args } => {
+            let tools = cellar_mcp::list_child_tools(&command, &args)
+                .await
+                .map_err(anyhow::Error::msg)?;
+            println!("{}", serde_json::to_string_pretty(&tools)?);
+            Ok(())
+        }
+        McpAction::Call {
+            command,
+            tool,
+            input,
+            args,
+        } => {
+            let arguments = input
+                .as_deref()
+                .map(serde_json::from_str::<serde_json::Value>)
+                .transpose()
+                .context("--input must be valid JSON")?
+                .map(|value| {
+                    value
+                        .as_object()
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("--input must be a JSON object"))
+                })
+                .transpose()?;
+            let result = cellar_mcp::call_child_tool(&command, &args, &tool, arguments)
+                .await
+                .map_err(anyhow::Error::msg)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            Ok(())
+        }
+    }
+}
 
 /// Print the resolved config, with every secret already redacted by its type.
 pub fn show_config(path: &Path) -> Result<()> {

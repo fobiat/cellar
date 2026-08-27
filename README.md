@@ -20,6 +20,7 @@ cellar run        # supervise, in the foreground
 | **[Installation](docs/INSTALLATION.md)** | Installers, Docker, Kubernetes, source, upgrading, uninstalling. |
 | **[Configuration](docs/CONFIGURATION.md)** | Every `cellar.toml` key and its default. |
 | **[CLI reference](docs/CLI.md)** | Every command and flag. |
+| **[MCP integration](docs/MCP.md)** | Read-only tools, authenticated commands, and stdio client support. |
 | **[Game database](docs/GAME_DATABASE.md)** | Hosted database connection, read-only schema browser, and ownership contract. |
 | **[Operations](docs/OPERATIONS.md)** | Probes, graceful shutdown, webhooks, updates, backups. |
 | **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Symptoms and fixes, including what is still unproven. |

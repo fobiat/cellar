@@ -28,6 +28,10 @@ const HTML: &str = include_str!("ui/index.html");
 const CSS: &str = include_str!("ui/style.css");
 const JS: &str = include_str!("ui/app.js");
 const SERVICE_WORKER: &str = include_str!("ui/service-worker.js");
+const FAVICON: &str = include_str!("ui/assets/favicon.svg");
+const APP_ICON: &str = include_str!("ui/assets/cellar-icon.svg");
+const AUTH_SLOT: &str = r#"<div id="auth-reminder" class="security-banner" hidden></div>"#;
+const MANIFEST: &str = r##"{"name":"Cellar","short_name":"Cellar","start_url":"/","display":"standalone","theme_color":"#0E0F11","background_color":"#0E0F11","icons":[{"src":"/cellar-icon.svg","sizes":"192x192","type":"image/svg+xml","purpose":"any maskable"},{"src":"/cellar-icon.svg","sizes":"512x512","type":"image/svg+xml","purpose":"any maskable"}],"shortcuts":[{"name":"Dispatch","url":"/?tab=dispatch"},{"name":"Monitoring","url":"/?tab=monitoring"}],"description":"The dedicated server manager built for s&box."}"##;
 
 /// The finished page, built once.
 fn page() -> &'static str {
@@ -42,13 +46,16 @@ fn page() -> &'static str {
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(index))
+        .route("/favicon.svg", get(favicon))
+        .route("/cellar-icon.svg", get(app_icon))
         .route("/service-worker.js", get(service_worker))
         .route("/manifest.webmanifest", get(manifest))
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
 }
 
-async fn index() -> Response {
+async fn index(State(state): State<Arc<AppState>>) -> Response {
+    let page = page_for_state(&state);
     (
         StatusCode::OK,
         [
@@ -62,7 +69,67 @@ async fn index() -> Response {
             ),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
-        page(),
+        page,
+    )
+        .into_response()
+}
+
+fn page_for_state(state: &AppState) -> String {
+    page().replace(AUTH_SLOT, &auth_notice(state))
+}
+
+fn auth_notice(state: &AppState) -> String {
+    if !state.web_enabled {
+        return String::new();
+    }
+
+    let reachable = !cellar_core::config::binds_loopback(&state.web_bind);
+    let password_ready = state.web_password_hash.is_some();
+    let password_required = state.web_auth == WebAuthMode::Password
+        || (state.web_auth == WebAuthMode::Auto && password_ready);
+
+    let (class, title, message) = if reachable && (!password_required || !state.web_secure_cookies)
+    {
+        (
+            "security-banner danger",
+            "Web UI security needs attention",
+            "This listener is reachable beyond this PC. Configure password authentication, put it behind HTTPS, and enable secure cookies before sharing the address.",
+        )
+    } else if reachable {
+        (
+            "security-banner warning",
+            "Web UI is remotely reachable",
+            "Password authentication is configured. Keep this listener behind HTTPS and share its address only with trusted operators.",
+        )
+    } else if !password_required {
+        (
+            "security-banner warning",
+            "Web UI is local-only without a password",
+            "Keep the listener bound to loopback. Add CELLAR_WEB_PASSWORD_HASH if this address may become reachable from another device.",
+        )
+    } else {
+        return String::new();
+    };
+
+    format!(
+        r#"<aside id="auth-reminder" class="{class}" role="alert"><strong>{title}</strong><span>{message}</span></aside>"#
+    )
+}
+
+async fn favicon() -> Response {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
+        FAVICON,
+    )
+        .into_response()
+}
+
+async fn app_icon() -> Response {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
+        APP_ICON,
     )
         .into_response()
 }
@@ -83,7 +150,7 @@ async fn manifest() -> Response {
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/manifest+json")],
-        r##"{"name":"Cellar","short_name":"Cellar","start_url":"/","display":"standalone","theme_color":"#0E0F11","background_color":"#0E0F11","description":"The dedicated server manager built for s&box."}"##,
+        MANIFEST,
     )
         .into_response()
 }
@@ -183,6 +250,42 @@ mod tests {
         assert!(!page.contains("/*PALETTE*/"));
         assert!(!page.contains("/*STYLE*/"));
         assert!(!page.contains("/*APP*/"));
+        assert!(page.contains(AUTH_SLOT));
+    }
+
+    #[test]
+    fn the_page_recommends_auth_for_a_reachable_listener() {
+        let mut state = AppState::new(
+            crate::state::Documents::memory(),
+            crate::auth::Policy::Trusted,
+            "test",
+        );
+        state.web_enabled = true;
+        state.web_bind = "0.0.0.0:8081".to_owned();
+        let page = page_for_state(&state);
+        assert!(page.contains("Web UI security needs attention"));
+        assert!(page.contains("Configure password authentication"));
+    }
+
+    #[test]
+    fn the_page_warns_about_a_local_unauthenticated_listener() {
+        let mut state = AppState::new(
+            crate::state::Documents::memory(),
+            crate::auth::Policy::Trusted,
+            "test",
+        );
+        state.web_enabled = true;
+        assert!(page_for_state(&state).contains("Web UI is local-only without a password"));
+    }
+
+    #[test]
+    fn the_manifest_points_to_local_installable_icons() {
+        let _: serde_json::Value = serde_json::from_str(MANIFEST).unwrap();
+        assert!(MANIFEST.contains("/cellar-icon.svg"));
+        assert!(!MANIFEST.contains("http://"));
+        assert!(!MANIFEST.contains("https://"));
+        assert!(FAVICON.contains("<svg"));
+        assert!(APP_ICON.contains("<svg"));
     }
 
     #[test]

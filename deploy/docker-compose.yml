@@ -1,0 +1,24 @@
+services:
+  cellar:
+    image: your-registry/your-sbox-server:latest
+    init: true
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    environment:
+      CELLAR_CONFIG: /etc/cellar/cellar.toml
+      CELLAR_DATABASE_URL: ${CELLAR_DATABASE_URL:?set CELLAR_DATABASE_URL}
+      CELLAR_WEB_PASSWORD_HASH: ${CELLAR_WEB_PASSWORD_HASH:?set CELLAR_WEB_PASSWORD_HASH}
+      CELLAR_API_TOKEN: ${CELLAR_API_TOKEN:-}
+    ports:
+      - "8081:8081"
+      - "27015:27015/udp"
+      - "27016:27016/udp"
+    volumes:
+      - ./cellar.toml:/etc/cellar/cellar.toml:ro
+      - sbox-data:/home/container/sbox/data
+      - sbox-logs:/home/container/sbox/logs
+
+volumes:
+  sbox-data:
+  sbox-logs:

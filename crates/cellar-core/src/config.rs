@@ -76,6 +76,9 @@ pub struct UpdateConfig {
     pub window_end_hour: u8,
     pub update_gamemode: bool,
     pub update_engine: bool,
+    pub program_check: bool,
+    pub program_check_interval_minutes: u64,
+    pub program_release_url: String,
     /// Steam's install directory, for reading the build id and for updating.
     pub steam_dir: Option<PathBuf>,
     pub steamcmd: Option<PathBuf>,
@@ -92,6 +95,10 @@ impl Default for UpdateConfig {
             window_end_hour: 0,
             update_gamemode: true,
             update_engine: false,
+            program_check: true,
+            program_check_interval_minutes: 60,
+            program_release_url: "https://api.github.com/repos/fobiat/cellar/releases/latest"
+                .to_owned(),
             steam_dir: None,
             steamcmd: None,
         }

@@ -12,6 +12,29 @@ use std::path::Path;
 
 use crate::auth::Policy;
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProgramUpdateStatus {
+    pub current: String,
+    pub latest: Option<String>,
+    pub update_available: bool,
+    pub release_url: String,
+    pub checked_at: Option<String>,
+    pub error: Option<String>,
+}
+
+impl ProgramUpdateStatus {
+    pub fn new(release_url: impl Into<String>) -> Self {
+        Self {
+            current: env!("CARGO_PKG_VERSION").to_owned(),
+            latest: None,
+            update_available: false,
+            release_url: release_url.into(),
+            checked_at: None,
+            error: None,
+        }
+    }
+}
+
 /// Where documents live.
 ///
 /// An enum rather than a trait object: the in-memory variant exists so the
@@ -188,6 +211,7 @@ pub struct AppState {
     /// Where to look for versions, when version checking is configured.
     pub version_probe: Option<cellar_update::Probe>,
     pub update_config: cellar_core::config::UpdateConfig,
+    pub program_update: std::sync::Arc<tokio::sync::RwLock<ProgramUpdateStatus>>,
     pub release_config: cellar_core::config::ReleaseConfig,
     pub log_file: Option<PathBuf>,
     pub configured_map: Option<String>,
@@ -231,6 +255,11 @@ impl AppState {
             sessions: crate::session::Sessions::new(),
             version_probe: None,
             update_config: Default::default(),
+            program_update: std::sync::Arc::new(tokio::sync::RwLock::new(
+                ProgramUpdateStatus::new(
+                    cellar_core::config::UpdateConfig::default().program_release_url,
+                ),
+            )),
             release_config: Default::default(),
             log_file: None,
             configured_map: None,

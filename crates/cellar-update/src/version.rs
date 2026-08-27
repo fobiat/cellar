@@ -66,6 +66,52 @@ impl Versions {
             format!("gamemode {gamemode}, engine build {engine}")
         }
     }
+
+    /// Compare the build stamp Cellar launched with the current `main` tip.
+    pub fn build_drift(&self) -> BuildDrift {
+        let running_commit = self
+            .gamemode
+            .as_ref()
+            .map(|version| version.commit.clone())
+            .filter(|commit| !commit.trim().is_empty())
+            .or_else(|| self.git.as_ref().map(|git| git.head.clone()));
+        let main_commit = self.git.as_ref().and_then(|git| git.remote_head.clone());
+
+        let state = match (&running_commit, &main_commit) {
+            (Some(running), Some(main)) if commits_match(running, main) => "synced",
+            (Some(running), Some(main)) if !running.is_empty() && !main.is_empty() => "drifted",
+            _ => "unknown",
+        };
+
+        let detail = match state {
+            "synced" => "running AppleJackRP build matches origin/main",
+            "drifted" => "running AppleJackRP build differs from origin/main",
+            _ => "AppleJackRP build sync could not be verified",
+        };
+
+        BuildDrift {
+            state: state.to_owned(),
+            running_commit,
+            main_commit,
+            detail: detail.to_owned(),
+        }
+    }
+}
+
+/// Whether two full or abbreviated git object names identify the same commit.
+fn commits_match(left: &str, right: &str) -> bool {
+    left == right
+        || (left.len() >= 7 && right.starts_with(left))
+        || (right.len() >= 7 && left.starts_with(right))
+}
+
+/// The operator-facing answer to "is the live AppleJackRP build current?".
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildDrift {
+    pub state: String,
+    pub running_commit: Option<String>,
+    pub main_commit: Option<String>,
+    pub detail: String,
 }
 
 /// What `BuildVersion.g.cs` says.
@@ -223,7 +269,11 @@ async fn git_version(dir: &Path, check_remote: bool) -> Result<Option<GitVersion
     let remote_head = if check_remote {
         // `ls-remote`, never `fetch`: this runs on a timer, possibly against a
         // checkout somebody is working in, and it must not write to their tree.
-        match git(dir, &["ls-remote", "origin", "HEAD"]).await {
+        let remote = match git(dir, &["ls-remote", "origin", "refs/heads/main"]).await {
+            Ok(output) => Ok(output),
+            Err(_) => git(dir, &["ls-remote", "origin", "HEAD"]).await,
+        };
+        match remote {
             Ok(output) => output
                 .split_whitespace()
                 .next()
@@ -491,6 +541,40 @@ mod tests {
 
         assert!(versions.update_available());
         assert!(versions.summary().contains("update available"));
+    }
+
+    #[test]
+    fn build_drift_matches_abbreviated_build_stamps() {
+        let versions = Versions {
+            gamemode: Some(GamemodeVersion {
+                commit: "6521cb26".into(),
+                ..Default::default()
+            }),
+            git: Some(GitVersion {
+                head: "6521cb26abcdef".into(),
+                remote_head: Some("6521cb26abcdef".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(versions.build_drift().state, "synced");
+    }
+
+    #[test]
+    fn build_drift_reports_a_running_build_that_differs_from_main() {
+        let versions = Versions {
+            gamemode: Some(GamemodeVersion {
+                commit: "1111111".into(),
+                ..Default::default()
+            }),
+            git: Some(GitVersion {
+                head: "2222222".into(),
+                remote_head: Some("3333333".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(versions.build_drift().state, "drifted");
     }
 
     #[tokio::test]

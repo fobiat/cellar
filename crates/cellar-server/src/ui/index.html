@@ -5,11 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cellar · dispatch</title>
 <meta name="theme-color" content="#0E0F11">
+<meta name="application-name" content="Cellar">
+<meta name="msapplication-TileColor" content="#0E0F11">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/cellar-icon.svg">
 <link rel="manifest" href="/manifest.webmanifest">
 <style>/*PALETTE*/</style>
 <style>/*STYLE*/</style>
 </head>
 <body>
+
+<div id="auth-reminder" class="security-banner" hidden></div>
 
 <div class="gate" id="gate" hidden>
   <form class="panel" id="login">
@@ -50,6 +56,8 @@
     <div class="stat"><div class="label">Database</div><div class="value lamp wait" id="stat-mariadb">…</div></div>
     <div class="stat"><div class="label">Map</div><div class="value lamp wait" id="stat-map">…</div></div>
     <div class="stat"><div class="label">Access</div><div class="value lamp wait" id="stat-access">…</div></div>
+    <div class="stat"><div class="label">Build</div><div class="value lamp wait" id="stat-build">…</div></div>
+    <div class="stat"><div class="label">Anti-cheat</div><div class="value lamp wait" id="stat-anti-cheat">…</div></div>
   </div>
 
   <nav class="tabs">
@@ -75,6 +83,12 @@
         <div class="body">
           <div class="console-tools">
             <input type="search" id="console-filter" placeholder="filter live output or tag…" autocomplete="off">
+            <select id="console-view" aria-label="console view">
+              <option value="all">all output</option>
+              <option value="command">command results</option>
+              <option value="background">background events</option>
+              <option value="errors">errors only</option>
+            </select>
             <select id="console-level" aria-label="minimum log level">
               <option value="">all levels</option>
               <option value="trace">trace</option>
@@ -157,6 +171,13 @@
         <div class="panel">
           <h2>Addresses</h2>
           <div class="body scroll" id="addresses"><p class="muted small">Waiting for status.</p></div>
+        </div>
+        <div class="panel">
+          <h2>Anti-cheat</h2>
+          <div class="body">
+            <p id="anti-cheat-summary" class="value lamp wait">Checking…</p>
+            <div id="anti-cheat-types" class="scroll"><p class="muted small">Evidence is read from the engine log.</p></div>
+          </div>
         </div>
       </div>
     </section>
@@ -261,6 +282,12 @@
     <!-- Ordinance: what the server is set to. -->
     <section id="tab-settings" hidden>
       <div class="panel">
+        <h2>Web UI access</h2>
+        <div class="body">
+          <p id="web-auth-reminder" class="notice">Checking authentication posture…</p>
+        </div>
+      </div>
+      <div class="panel">
         <h2>Export</h2>
         <div class="body">
           <div class="row">
@@ -270,6 +297,13 @@
             <button class="chip" onclick="exportSettings('yaml', true)">overrides only, YAML</button>
             <button class="action" onclick="loadSettings()">Refresh</button>
           </div>
+          <div class="row import-tools">
+            <input type="file" id="settings-import-file" accept=".toml,.yaml,.yml,text/plain" aria-label="settings file">
+            <button class="chip" id="settings-import-preview" type="button">Preview import</button>
+            <button class="action" id="settings-import-apply" type="button">Apply import</button>
+          </div>
+          <p class="notice" id="settings-import-notice"></p>
+          <div id="settings-import-plan" class="small"></div>
           <p class="muted small" style="margin-top:10px">
             Overrides only is the shape worth committing: a whole dump is mostly defaults.
             Apply a file elsewhere with <code>cellar settings apply &lt;file&gt;</code>.

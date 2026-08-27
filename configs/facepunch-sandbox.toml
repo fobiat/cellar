@@ -45,3 +45,5 @@ window_start_hour = 0
 window_end_hour = 0
 update_gamemode = false
 update_engine = false
+program_check = true
+program_check_interval_minutes = 60

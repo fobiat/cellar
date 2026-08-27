@@ -1,0 +1,31 @@
+[server]
+executable = "/home/container/sbox/sbox-server.exe"
+game = "facepunch.sandbox"
+launcher = "wine"
+working_dir = "/home/container/sbox"
+hostname = "Cellar Sandbox"
+data_dir = "/home/container/sbox/data/facepunch/sandbox#local"
+log_file = "/home/container/sbox/logs/sbox-server.log"
+direct_connect = true
+port = 27015
+query_port = 27016
+ready_pattern = "Lobby created - session is joinable"
+
+[database]
+enabled = true
+schema_owner = "gamemode"
+
+[web]
+enabled = true
+bind = "0.0.0.0:8081"
+auth = "password"
+allow_insecure_http = true
+secure_cookies = true
+
+[update]
+policy = "notify"
+only_when_empty = true
+update_gamemode = false
+update_engine = false
+program_check = true
+program_check_interval_minutes = 60

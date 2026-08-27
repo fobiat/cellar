@@ -145,12 +145,15 @@ shipped Docker recipe:
 ./scripts/cross-build-windows.sh
 ```
 
-## Docker
+## Docker and Swarm
 
-A `Dockerfile` is at the repo root.
+A `Dockerfile` is at the repo root. It builds the Cellar layer, while the final
+server image supplies the s&box executable, Wine, and the gamemode package.
+Ready-to-adapt Compose and Swarm settings are in
+[`deploy/docker-compose.yml`](../deploy/docker-compose.yml).
 
 ```sh
-docker build -t cellar .
+docker build -t cellar-layer .
 ```
 
 The image entrypoint creates `/etc/cellar/cellar.toml` from the bundled example
@@ -159,35 +162,48 @@ when needed, runs `cellar doctor`, and then starts `cellar run`:
 ```sh
 docker run -it \
   -e CELLAR_DATABASE_URL='mysql://cellar:secret@db/cellar' \
+  -e CELLAR_WEB_PASSWORD_HASH='from-cellar-hash-password' \
   -v /path/to/sbox:/home/container/sbox \
   -v /path/to/cellar.toml:/etc/cellar/cellar.toml \
   -p 8081:8081 \
-  cellar
+  your-registry/your-sbox-server:latest
 ```
 
 Use `CELLAR_CONFIG` to select another config path. Pass `doctor`, `config`, or
 another CLI command after the image name to run that command without the
 automatic `doctor` plus `run` sequence.
 
-**`-it` is load-bearing.** Without a TTY the engine never builds its console and
-commands silently do nothing. See
+The container must keep `stdin_open: true` and `tty: true`. Cellar gives the
+engine a pseudo-terminal so console commands and readiness detection continue
+to work without an interactive operator. See
 [Architecture](ARCHITECTURE.md#the-console-needs-a-terminal-not-a-pipe).
+
+For Swarm, use the same Compose file with `docker stack deploy` after replacing
+the image and adding the registry secret. Keep one replica, mount persistent
+game data and logs, and store database, UI password, and API tokens as Docker
+secrets or environment secrets.
 
 ## Kubernetes
 
-The pod spec needs three things that are easy to miss:
+[`deploy/kubernetes.yaml`](../deploy/kubernetes.yaml) is a complete starting
+manifest. It includes the one-replica `Recreate` strategy, persistent volumes,
+HTTP probes, UDP game/query ports, and a 60 second termination grace period.
+Create `cellar-secrets` before applying it. The image must contain the Cellar
+entrypoint, the s&box dedicated server, Wine, and the selected gamemode.
+
+The pod spec needs these settings:
 
 ```yaml
 spec:
-  terminationGracePeriodSeconds: 45   # >= supervisor.graceful_timeout_seconds
+  terminationGracePeriodSeconds: 60   # >= supervisor.graceful_timeout_seconds
   containers:
     - name: server
-      stdin: true                      # both of these, or no console
+      stdin: true                      # keep the engine console available
       tty: true
       readinessProbe:
-        httpGet: { path: /readyz, port: 8080 }
+        httpGet: { path: /readyz, port: 8081 }
       livenessProbe:
-        httpGet: { path: /healthz, port: 8080 }
+        httpGet: { path: /healthz, port: 8081 }
 ```
 
 Full manifest and the reasoning in [Operations](OPERATIONS.md#kubernetes).

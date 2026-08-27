@@ -113,6 +113,44 @@ enum Command {
 
     /// Hash an operator password for the web UI.
     HashPassword,
+
+    /// Expose Cellar over MCP or call another stdio MCP server.
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum McpAction {
+    /// Run Cellar's MCP server over stdio for an MCP host to launch.
+    Serve {
+        /// Running Cellar web URL. Read tools use CELLAR_API_TOKEN.
+        #[arg(long)]
+        url: Option<String>,
+    },
+    /// List tools advertised by another stdio MCP server.
+    Tools {
+        /// Executable that hosts the MCP server.
+        command: String,
+        /// Arguments passed to that executable. Repeat for each argument.
+        #[arg(long = "arg")]
+        args: Vec<String>,
+    },
+    /// Call a tool on another stdio MCP server.
+    Call {
+        /// Executable that hosts the MCP server.
+        command: String,
+        /// Tool name to call.
+        #[arg(long)]
+        tool: String,
+        /// JSON object passed as tool arguments.
+        #[arg(long)]
+        input: Option<String>,
+        /// Arguments passed to that executable. Repeat for each argument.
+        #[arg(long = "arg")]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -203,6 +241,9 @@ async fn main() -> std::process::ExitCode {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .with_target(false)
+        // MCP stdio reserves stdout for JSON-RPC frames. Keeping all Cellar
+        // diagnostics on stderr also makes the command safe for host launchers.
+        .with_writer(std::io::stderr)
         .init();
 
     let result = match cli.command {
@@ -220,6 +261,7 @@ async fn main() -> std::process::ExitCode {
         Command::Settings { action } => commands::settings(&cli.config, action).await,
         Command::SelfUpdate { check } => commands::self_update(check).await,
         Command::HashPassword => commands::hash_password(),
+        Command::Mcp { action } => commands::mcp(action).await,
     };
 
     match result {

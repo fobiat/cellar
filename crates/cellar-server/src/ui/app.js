@@ -26,6 +26,7 @@ let consoleRecords = [];
 let consolePaused = false;
 let consoleSlow = false;
 let consoleRenderTimer = null;
+let buildDriftState = "";
 let activeTab = "dispatch";
 let serviceWorker = null;
 
@@ -245,7 +246,7 @@ async function setSetting(kind, id, value) {
   }
 
   appendLine("echo", now(), "you", `> ${text(data.command)}`);
-  for (const line of data.reply || []) appendLine("", now(), "reply", text(line));
+  for (const line of data.reply || []) appendLine("reply", now(), "reply", text(line));
 }
 
 async function exportSettings(format, overrides) {
@@ -273,6 +274,13 @@ async function loadReleases() {
     row.append(el("td", "muted", label), el("td", null, value));
     rows.append(row);
   };
+
+  const program = data.program_update;
+  if (program) {
+    add("Cellar", `${text(program.current)}${program.update_available ? `, ${text(program.latest)} available` : ", current"}`);
+    if (program.checked_at) add("Cellar checked", text(program.checked_at));
+    if (program.error) add("Cellar check", `error: ${text(program.error)}`);
+  }
 
   if (versions.gamemode) {
     add("gamemode", `${text(versions.gamemode.version)} (${text(versions.gamemode.commit)})`);
@@ -434,9 +442,62 @@ async function refreshStatus() {
   setLamp($("#stat-map"), health.map && health.spawn_validation ? "up" : "down",
     health.map && health.spawn_validation ? "validated" : "check needed");
   renderAddresses(data.addresses);
+  renderAntiCheat(data.anti_cheat);
+  renderWebAuth(data.web_auth);
   const access = data.access || {};
   setLamp($("#stat-access"), access.invite_only ? "up" : "wait", access.invite_only ? "invite-only" : "public");
   applyTableTools();
+}
+
+function renderAntiCheat(status) {
+  if (!status) return;
+  const lamps = { enabled: "up", disabled: "down", unknown: "wait" };
+  setLamp($("#stat-anti-cheat"), lamps[status.state] || "wait", status.state || "unknown");
+  setLamp($("#anti-cheat-summary"), lamps[status.state] || "wait", status.summary || "unknown");
+  const target = $("#anti-cheat-types");
+  if (!target) return;
+  target.replaceChildren();
+  if (!status.types?.length) {
+    target.append(el("p", "muted small", "No known anti-cheat signal was found in the engine log."));
+    return;
+  }
+  for (const type of status.types) {
+    const row = el("div", "security-row");
+    row.append(el("span", `lamp ${lamps[type.state] || "wait"}`, `${text(type.name)} · ${text(type.state)}`));
+    if (type.evidence) row.append(el("code", "muted small", text(type.evidence)));
+    target.append(row);
+  }
+}
+
+function renderWebAuth(auth) {
+  const target = $("#web-auth-reminder");
+  if (!target || !auth) return;
+  const reachable = auth.bind && !auth.bind.startsWith("127.") && !auth.bind.startsWith("localhost") && !auth.bind.startsWith("[::1]");
+  if (reachable && !auth.password_configured) {
+    target.className = "notice down";
+    target.textContent = "Action needed: this listener is reachable off-box without a configured password. Set CELLAR_WEB_PASSWORD_HASH before exposing it.";
+  } else if (!reachable && !auth.password_configured) {
+    target.className = "notice muted";
+    target.textContent = "Reminder: the UI has no password gate. Keep it on loopback, or configure CELLAR_WEB_PASSWORD_HASH before remote access.";
+  } else {
+    target.className = "notice up";
+    target.textContent = `Password authentication is configured for ${text(auth.bind)}.`;
+  }
+}
+
+async function refreshBuildHealth() {
+  const response = await fetch("/api/versions");
+  if (!response.ok) return;
+  const data = await response.json();
+  const drift = data.build_drift || {};
+  const lamps = { synced: "up", drifted: "down", unknown: "wait" };
+  setLamp($("#stat-build"), lamps[drift.state] || "wait", drift.state === "drifted" ? "out of sync" : drift.state || "unknown");
+  const previous = buildDriftState;
+  buildDriftState = drift.state || "unknown";
+  if (buildDriftState === "drifted" && previous !== "drifted") {
+    notifyOperator("AppleJackRP build drift", drift.detail || "The running build differs from origin/main.");
+    appendLine("error", now(), "cellar", drift.detail || "AppleJackRP build drift detected.", false, "error", "cellar");
+  }
 }
 
 const tableTools = [
@@ -551,6 +612,7 @@ function renderConsole() {
   const query = text($("#console-filter")?.value).trim().toLowerCase();
   const minimum = $("#console-level")?.value || "";
   const category = $("#console-category")?.value || "";
+  const view = $("#console-view")?.value || "all";
   const rank = { trace: 0, debug: 1, info: 2, warning: 3, error: 4 };
   const minimumRank = minimum ? rank[minimum] : -1;
   console_.replaceChildren();
@@ -559,6 +621,9 @@ function renderConsole() {
     if (query && !searchable.includes(query)) continue;
     if (minimumRank >= 0 && (rank[record.level] ?? 2) < minimumRank) continue;
     if (category && record.category !== category) continue;
+    if (view === "command" && !["echo", "reply"].includes(record.kind)) continue;
+    if (view === "background" && !["log", "join", "leave"].includes(record.kind)) continue;
+    if (view === "errors" && record.level !== "error" && record.kind !== "error") continue;
     const levels = ["trace", "debug", "info", "warning", "error"];
     const categories = ["cellar", "engine", "gameplay", "network", "players", "storage", "other"];
     const level = levels.includes(record.level) ? record.level : "info";
@@ -612,8 +677,8 @@ async function runCommand(command) {
       appendLine("error", now(), "cellar", text(data.error));
       return;
     }
-    for (const line of data.reply) appendLine("", now(), "reply", text(line));
-    if (!data.reply.length) appendLine("", now(), "reply", "(no output)");
+    for (const line of data.reply) appendLine("reply", now(), "reply", text(line));
+    if (!data.reply.length) appendLine("reply", now(), "reply", "(no output)");
   } catch (error) {
     appendLine("error", now(), "cellar", String(error));
   }
@@ -952,10 +1017,12 @@ function start() {
   loadLogs();
   connect();
   refreshStatus();
+  refreshBuildHealth();
   setInterval(() => {
     refreshStatus();
     if (activeTab === "database") loadDatabase();
   }, 2000);
+  setInterval(refreshBuildHealth, 30000);
   renderAlertButton();
   if (alertsEnabled() && "serviceWorker" in navigator) {
     navigator.serviceWorker.register("/service-worker.js").then((registration) => {
@@ -968,7 +1035,7 @@ async function runRelease(action) {
   const response = await fetch(`/api/release/${action}`, { method: "POST" });
   const data = await response.json();
   $("#release-notice").textContent = response.ok ? `${action} completed.` : text(data.output || data.error);
-  for (const line of String(data.output || "").split("\n").filter(Boolean)) appendLine("", now(), action, line);
+  for (const line of String(data.output || "").split("\n").filter(Boolean)) appendLine("reply", now(), action, line);
   loadReleases();
 }
 
@@ -978,6 +1045,40 @@ async function loadLogs() {
   const data = await response.json();
   for (const line of data.lines || []) appendLine(line.level === "error" ? "error" : "", clock(line.at), line.tag, line.message, false, line.level, line.category);
   $("#console-state").textContent = `${data.lines?.length || 0} recent lines · ${data.scanned_files || 0} persistent log file(s)`;
+}
+
+async function importSettings(apply) {
+  const file = $("#settings-import-file").files?.[0];
+  if (!file) {
+    $("#settings-import-notice").textContent = "Choose a TOML or YAML settings file first.";
+    return;
+  }
+  if (apply && !confirm(`Apply settings from ${file.name}?`)) return;
+  const response = await fetch("/api/settings/import", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ contents: await file.text(), apply }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    $("#settings-import-notice").textContent = text(data.error);
+    return;
+  }
+  const changes = data.changes || [];
+  $("#settings-import-notice").textContent = apply
+    ? `Applied ${data.applied?.length || 0} change(s), ${data.failed?.length || 0} failed.`
+    : `${changes.length} change(s) found. Review them, then apply.`;
+  const plan = $("#settings-import-plan");
+  plan.replaceChildren();
+  for (const change of changes) {
+    const line = el("div", change.refused ? "down" : "muted");
+    line.textContent = `${text(change.id)}: ${text(change.from)} -> ${text(change.to)}${change.refused ? ` (${text(change.refused)})` : ""}`;
+    plan.append(line);
+  }
+  for (const item of data.applied || []) {
+    for (const line of item.reply || []) appendLine("reply", now(), "import", text(line));
+  }
+  if (apply) loadSettings();
 }
 
 async function scanLogs() {
@@ -1061,6 +1162,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     localStorage.setItem("cellar.console.filter", $("#console-filter").value);
     renderConsole();
   });
+  $("#console-view").addEventListener("change", () => {
+    localStorage.setItem("cellar.console.view", $("#console-view").value);
+    renderConsole();
+  });
   $("#console-level").addEventListener("change", () => {
     localStorage.setItem("cellar.console.level", $("#console-level").value);
     renderConsole();
@@ -1080,6 +1185,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("#console-clear").onclick = () => { consoleRecords = []; renderConsole(); };
   $("#console-filter").value = localStorage.getItem("cellar.console.filter") || "";
   $("#console-level").value = localStorage.getItem("cellar.console.level") || "";
+  $("#console-view").value = localStorage.getItem("cellar.console.view") || "all";
+  $("#settings-import-preview").onclick = () => importSettings(false);
+  $("#settings-import-apply").onclick = () => importSettings(true);
   for (const [inputId, , sortId] of tableTools) {
     $("#" + inputId)?.addEventListener("input", applyTableTools);
     $("#" + sortId)?.addEventListener("change", applyTableTools);

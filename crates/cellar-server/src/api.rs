@@ -38,12 +38,15 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/db/query", post(db_query))
         .route("/api/settings", get(settings).post(set_setting))
         .route("/api/settings/export", get(export_settings))
+        .route("/api/settings/import", post(import_settings))
         .route("/api/versions", get(versions))
         .route("/api/changelog", get(changelog))
         .route("/api/v1/status", get(external_status))
         .route("/api/v1/logs", get(external_logs))
         .route("/api/v1/resources", get(external_resources))
         .route("/api/v1/addresses", get(external_addresses))
+        .route("/api/v1/versions", get(external_versions))
+        .route("/api/v1/configs", get(external_configs))
         .route("/metrics", get(metrics))
 }
 
@@ -320,6 +323,39 @@ async fn external_addresses(State(state): State<Arc<AppState>>, _: ExternalApi) 
     Json(addresses(&state).await).into_response()
 }
 
+async fn external_versions(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response {
+    versions(
+        State(state),
+        Operator {
+            name: "api".to_owned(),
+        },
+    )
+    .await
+}
+
+async fn external_configs(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response {
+    let Some(directory) = state.config_directory() else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "no config file is active");
+    };
+    let active = state.config_path.lock().ok().and_then(|path| path.clone());
+    let profiles = crate::config_manager::list(&directory, active.as_deref())
+        .await
+        .into_iter()
+        .map(|profile| {
+            // External integrations get the useful profile identity, not the
+            // host's local paths. The latter are operational details and can
+            // disclose more than a remote dashboard needs.
+            serde_json::json!({
+                "name": profile.name,
+                "active": profile.active,
+                "game": profile.game,
+                "map": profile.map,
+            })
+        })
+        .collect::<Vec<_>>();
+    Json(serde_json::json!({ "profiles": profiles })).into_response()
+}
+
 /// Everything the server is currently set to.
 ///
 /// Asked of the running server every time rather than cached: a feature toggled
@@ -471,6 +507,111 @@ async fn export_settings(
     }
 }
 
+#[derive(Deserialize)]
+struct ImportSettingsRequest {
+    contents: String,
+    #[serde(default)]
+    apply: bool,
+}
+
+/// Preview or apply a TOML/YAML settings snapshot without writing it into the
+/// gamemode checkout. Applying still goes through the live console catalogue.
+async fn import_settings(
+    State(state): State<Arc<AppState>>,
+    operator: Operator,
+    Json(request): Json<ImportSettingsRequest>,
+) -> Response {
+    if request.contents.len() > 512 * 1024 {
+        return error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "settings import is limited to 512 KiB",
+        );
+    }
+    let desired = match cellar_core::convar::Snapshot::parse(&request.contents) {
+        Ok(snapshot) => snapshot,
+        Err(why) => return error(StatusCode::BAD_REQUEST, why),
+    };
+    let Some(supervisor) = &state.supervisor else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no server is being supervised",
+        );
+    };
+
+    let current = cellar_core::convar::Snapshot {
+        captured_at: None,
+        hostname: supervisor
+            .snapshot()
+            .await
+            .map(|snapshot| snapshot.hostname),
+        features: supervisor
+            .exec("applejack_features", "web")
+            .await
+            .map(|reply| cellar_core::convar::parse_features(&reply))
+            .unwrap_or_default(),
+        settings: supervisor
+            .exec("applejack_settings", "web")
+            .await
+            .map(|reply| cellar_core::convar::parse_settings(&reply))
+            .unwrap_or_default(),
+        convars: Vec::new(),
+    };
+    let changes = cellar_core::convar::plan(&current, &desired);
+    if !request.apply {
+        return Json(serde_json::json!({
+            "applied": [],
+            "failed": [],
+            "changes": changes,
+        }))
+        .into_response();
+    }
+
+    let mut applied = Vec::new();
+    let mut failed = Vec::new();
+    for change in &changes {
+        if let Some(reason) = &change.refused {
+            failed.push(serde_json::json!({
+                "id": change.id,
+                "reason": reason,
+            }));
+            continue;
+        }
+        match supervisor.exec(&change.command, &operator.name).await {
+            Ok(reply) => {
+                let refused = reply.iter().any(|line| {
+                    let lower = line.to_ascii_lowercase();
+                    lower.contains("refus")
+                        || lower.contains("not a valid")
+                        || lower.contains("unknown")
+                });
+                if refused {
+                    failed.push(serde_json::json!({
+                        "id": change.id,
+                        "reply": reply,
+                    }));
+                } else {
+                    applied.push(serde_json::json!({
+                        "id": change.id,
+                        "command": change.command,
+                        "reply": reply,
+                    }));
+                }
+            }
+            Err(why) => failed.push(serde_json::json!({
+                "id": change.id,
+                "reason": why,
+            })),
+        }
+    }
+
+    Json(serde_json::json!({
+        "applied": applied,
+        "failed": failed,
+        "changes": changes,
+    }))
+    .into_response()
+}
+
 /// Installed and available versions, plus what the updater would do about them.
 ///
 /// Probed on request rather than cached: it runs a `git ls-remote` at most, and
@@ -500,11 +641,14 @@ async fn versions(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         .parse()
         .unwrap_or(0u8);
     let decision = cellar_update::updater::decide(&state.update_config, &versions, players, hour);
+    let program_update = state.program_update.read().await.clone();
 
     Json(serde_json::json!({
         "versions": versions,
+        "build_drift": versions.build_drift(),
         "decision": decision,
         "policy": state.update_config.policy,
+        "program_update": program_update,
     }))
     .into_response()
 }
@@ -562,6 +706,7 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         });
 
     let addresses = addresses(&state).await;
+    let anti_cheat = crate::security::inspect(state.log_file.as_deref()).await;
     let invite_only = read_access_files(&state)
         .await
         .ok()
@@ -581,6 +726,12 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         "scope": state.scope,
         "addresses": addresses,
         "access": { "invite_only": invite_only },
+        "anti_cheat": anti_cheat,
+        "web_auth": {
+            "bind": state.web_bind,
+            "mode": state.web_auth,
+            "password_configured": state.web_password_hash.is_some(),
+        },
     }))
     .into_response()
 }
@@ -691,16 +842,16 @@ async fn tailscale_ip() -> Option<String> {
         .ok()
         .and_then(Result::ok);
         let Some(output) = output else { continue };
-        if output.status.success() {
-            if let Some(ip) = String::from_utf8(output.stdout).ok().and_then(|value| {
+        if output.status.success()
+            && let Some(ip) = String::from_utf8(output.stdout).ok().and_then(|value| {
                 value
                     .lines()
                     .map(str::trim)
                     .find(|line| !line.is_empty())
                     .map(str::to_owned)
-            }) {
-                return Some(ip);
-            }
+            })
+        {
+            return Some(ip);
         }
     }
     None

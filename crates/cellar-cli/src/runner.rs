@@ -15,7 +15,7 @@ use cellar_core::config::{AuthMode, Config, DatabaseSchemaOwner, UpdatePolicy};
 use cellar_core::event::Event;
 use cellar_runtime::{Handle, Supervisor};
 use cellar_server::auth::Policy;
-use cellar_server::state::{AppState, Documents, RateLimiter};
+use cellar_server::state::{AppState, Documents, ProgramUpdateStatus, RateLimiter};
 
 pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     let config =
@@ -80,6 +80,13 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
 
     if config.update.policy != UpdatePolicy::Off {
         tokio::spawn(watch_for_updates(config.clone(), handle.clone()));
+    }
+
+    if config.update.program_check {
+        tokio::spawn(watch_for_program_updates(
+            config.clone(),
+            state.program_update.clone(),
+        ));
     }
 
     let supervising = tokio::spawn(supervisor.run(control));
@@ -188,6 +195,9 @@ fn build_state(
     state.web_secure_cookies = config.web.secure_cookies;
     state.external_api_token = cellar_core::Secret::from_env("CELLAR_API_TOKEN");
     state.update_config = config.update.clone();
+    state.program_update = Arc::new(tokio::sync::RwLock::new(ProgramUpdateStatus::new(
+        config.update.program_release_url.clone(),
+    )));
     state.release_config = config.release.clone();
     state.log_file = Some(cellar_runtime::log_file_for(&config.server));
     if let Ok(mut path) = state.config_path.lock() {
@@ -411,6 +421,47 @@ async fn watch_for_updates(config: Config, handle: Handle) {
                 // Restart either way. A half-applied update still needs a
                 // running server more than it needs to stay down.
                 handle.restart().await;
+            }
+        }
+    }
+}
+
+async fn watch_for_program_updates(
+    config: Config,
+    status: Arc<tokio::sync::RwLock<ProgramUpdateStatus>>,
+) {
+    let interval =
+        std::time::Duration::from_secs(config.update.program_check_interval_minutes.max(5) * 60);
+    let mut ticker = tokio::time::interval(interval);
+
+    loop {
+        ticker.tick().await;
+        let result =
+            cellar_update::selfupdate::latest_release(&config.update.program_release_url).await;
+        let checked_at = chrono::Utc::now().to_rfc3339();
+        let mut state = status.write().await;
+        state.checked_at = Some(checked_at);
+        state.error = None;
+
+        match result {
+            Ok(release) if cellar_update::selfupdate::is_newer(&state.current, &release.tag) => {
+                let changed = state.latest.as_deref() != Some(release.tag.as_str());
+                state.latest = Some(release.tag.clone());
+                state.update_available = true;
+                if changed {
+                    tracing::info!(
+                        "Cellar program update available: {} (run `cellar self-update` to install)",
+                        release.tag
+                    );
+                }
+            }
+            Ok(release) => {
+                state.latest = Some(release.tag);
+                state.update_available = false;
+            }
+            Err(error) => {
+                state.error = Some(error.to_string());
+                tracing::warn!("Cellar program update check failed: {error}");
             }
         }
     }

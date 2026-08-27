@@ -20,6 +20,38 @@ use serde::{Deserialize, Serialize};
 /// Where releases are published.
 pub const DEFAULT_RELEASES_URL: &str = "https://api.github.com/repos/fobiat/cellar/releases/latest";
 
+pub async fn latest_release(url: &str) -> Result<Release, SelfUpdateError> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|error| SelfUpdateError::Other(format!("building release client: {error}")))?;
+    let response = github(client.get(url))
+        .send()
+        .await
+        .map_err(|error| SelfUpdateError::Other(format!("reaching the release API: {error}")))?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err(SelfUpdateError::Other(format!(
+            "no release visible at {url}; publish a release or configure a private-repository token"
+        )));
+    }
+
+    let json: serde_json::Value = response
+        .error_for_status()
+        .map_err(|error| {
+            SelfUpdateError::Other(format!("the release API refused the request: {error}"))
+        })?
+        .json()
+        .await
+        .map_err(|error| {
+            SelfUpdateError::Other(format!("reading the release document: {error}"))
+        })?;
+
+    parse_release(&json).ok_or_else(|| {
+        SelfUpdateError::Other("the release API answered with an unreadable release".to_owned())
+    })
+}
+
 /// The suffix a superseded binary is renamed to.
 ///
 /// Left on disk deliberately: on Windows the old file is still mapped by the
@@ -98,17 +130,43 @@ pub const fn current_target() -> &'static str {
     }
 }
 
-/// Whether `available` is a different version from `current`.
-///
-/// A string comparison after stripping a leading `v`, not a semver parse: the
-/// only question is "is this the one I am running", and a build that cannot
-/// parse its own tag should not refuse to update because of it.
+/// Whether `available` is a newer release than `current`.
 pub fn is_newer(current: &str, available: &str) -> bool {
-    normalise(current) != normalise(available) && !normalise(available).is_empty()
+    match (version_tuple(current), version_tuple(available)) {
+        (Some(current), Some(available)) => available > current,
+        _ => normalise(current) != normalise(available) && !normalise(available).is_empty(),
+    }
 }
 
 fn normalise(version: &str) -> &str {
     version.trim().trim_start_matches('v')
+}
+
+fn version_tuple(version: &str) -> Option<(u64, u64, u64)> {
+    let core = normalise(version)
+        .split_once('-')
+        .map_or(normalise(version), |(core, _)| core);
+    let mut parts = core.split('.');
+    Some((
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    ))
+}
+
+fn github(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    let request = request
+        .header("User-Agent", "cellar")
+        .header("Accept", "application/vnd.github+json");
+
+    match std::env::var("CELLAR_GITHUB_TOKEN")
+        .or_else(|_| std::env::var("GITHUB_TOKEN"))
+        .ok()
+        .filter(|token| !token.trim().is_empty())
+    {
+        Some(token) => request.header("Authorization", format!("Bearer {token}")),
+        None => request,
+    }
 }
 
 /// Parse GitHub's release JSON into what this module needs.
@@ -291,9 +349,9 @@ fn sha256(data: &[u8]) -> [u8; 32] {
     }
     message.extend_from_slice(&bit_length.to_be_bytes());
 
-    for chunk in message.chunks_exact(64) {
+    for chunk in message.as_chunks::<64>().0 {
         let mut w = [0u32; 64];
-        for (index, word) in chunk.chunks_exact(4).enumerate() {
+        for (index, word) in chunk.as_chunks::<4>().0.iter().enumerate() {
             w[index] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
         }
         for index in 16..64 {
@@ -411,6 +469,12 @@ mod tests {
         assert!(!is_newer("v0.1.0", "0.1.0"));
         assert!(is_newer("0.1.0", "v0.2.0"));
         assert!(!is_newer("0.1.0", ""));
+    }
+
+    #[test]
+    fn an_older_release_is_not_an_update() {
+        assert!(!is_newer("0.1.7", "v0.1.6"));
+        assert!(is_newer("0.1.6", "v0.1.7"));
     }
 
     #[test]
