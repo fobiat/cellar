@@ -14,7 +14,7 @@
 executable = "/home/container/sbox/sbox-server.exe"
 project = "/home/container/projects/my-game/my-game.sbproj"
 # For a published package, use `game` instead of `project`:
-# game = "fobiat.applejackrp"
+# game = "your-org.your-game"
 # map = "thieves.rpdowntown3t"
 launcher = "wine"
 
@@ -107,7 +107,7 @@ bind = "127.0.0.1:8080"
 public_url = "http://127.0.0.1:8080"
 
 # The Auth.GetToken service name. HostingConfigStore refuses a document without one.
-auth_audience = "applejack-bridge"
+auth_audience = "your-game-bridge"
 
 # trusted | shared_secret | facepunch
 #
@@ -117,7 +117,7 @@ auth_audience = "applejack-bridge"
 auth = "trusted"
 
 # Which server's documents these are. One value today.
-scope = "applejackrp-dev"
+scope = "your-game-dev"
 
 max_body_bytes = 1048576
 rate_limit_per_minute = 600
@@ -161,4 +161,4 @@ update_engine = false
 # Supply the exact editor or wrapper commands used by this installation.
 # build_command = ["powershell.exe", "-NoProfile", "-File", "C:\\path\\to\\build.ps1"]
 # publish_command = ["powershell.exe", "-NoProfile", "-File", "C:\\path\\to\\publish.ps1"]
-# working_dir = "C:\\Users\\Shadow\\Desktop\\Projects\\AppleJackRP-sandbox"
+# working_dir = "C:\\path\\to\\your-game"

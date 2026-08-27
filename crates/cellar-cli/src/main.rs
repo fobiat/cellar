@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "cellar",
     version,
-    about = "A dedicated server runner and manager for s&box / AppleJackRP",
+    about = "An open-source dedicated server manager for s&box",
     long_about = None
 )]
 struct Cli {

@@ -1,6 +1,6 @@
 [package]
 name = "cellar-cli"
-description = "Cellar: a dedicated server runner and manager for s&box / AppleJackRP."
+description = "Cellar: an open-source dedicated server manager for s&box."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

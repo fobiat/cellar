@@ -3,6 +3,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/fobiat/cellar/main/scripts/install.sh | sh
 #   ./install.sh --system --service      # /usr/local/bin plus a systemd unit
+#   ./install.sh --run                   # install, doctor, and start Cellar
 #   ./install.sh --from-file cellar.tar.gz
 #
 # POSIX sh, not bash: a minimal container image is exactly where this runs and
@@ -14,6 +15,7 @@ TARGET="x86_64-unknown-linux"
 VERSION="latest"
 SYSTEM=0
 SERVICE=0
+RUN=0
 FROM_FILE=""
 
 while [ $# -gt 0 ]; do
@@ -21,6 +23,7 @@ while [ $# -gt 0 ]; do
         --version) VERSION="$2"; shift 2 ;;
         --system) SYSTEM=1; shift ;;
         --service) SERVICE=1; SYSTEM=1; shift ;;
+        --run) RUN=1; shift ;;
         --from-file) FROM_FILE="$2"; shift 2 ;;
         -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -31,6 +34,8 @@ blue() { printf '\033[38;2;47;143;224m%s\033[0m\n' "$1"; }
 grey() { printf '\033[38;2;122;125;129m%s\033[0m\n' "$1"; }
 green() { printf '\033[38;2;111;168;98m%s\033[0m\n' "$1"; }
 die() { printf '\033[38;2;218;91;77merror:\033[0m %s\n' "$1" >&2; exit 1; }
+
+[ "$RUN" -eq 0 ] || [ "$SERVICE" -eq 0 ] || die "--run cannot be combined with --service"
 
 printf '\n'
 blue '  * CELLAR'
@@ -255,3 +260,10 @@ case ":${PATH}:" in
     *":${INSTALL_DIR}:"*) ;;
     *) grey "  ${INSTALL_DIR} is not on your PATH. Add it to your shell profile."; printf '\n' ;;
 esac
+
+if [ "$RUN" -eq 1 ]; then
+    printf '\n'
+    grey "  Running cellar doctor"
+    "${INSTALL_DIR}/cellar" --config "$CONFIG" doctor
+    exec "${INSTALL_DIR}/cellar" --config "$CONFIG" run
+fi

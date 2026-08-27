@@ -16,6 +16,9 @@
 
 .EXAMPLE
     .\install.ps1 -Version v0.1.0 -Service
+
+.EXAMPLE
+    .\install.ps1 -Run
 #>
 [CmdletBinding()]
 param(
@@ -28,6 +31,10 @@ param(
     # Register a Windows service that runs `cellar run` at boot.
     [switch] $Service,
 
+    # Run doctor and start Cellar after installation. Cannot be combined with
+    # -Service because the service owns the process.
+    [switch] $Run,
+
     # Install from a local zip instead of downloading. For testing a build
     # before it is published.
     [string] $FromFile
@@ -35,6 +42,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+if ($Run -and $Service) {
+    throw '-Run cannot be combined with -Service'
+}
 
 $repo = 'fobiat/cellar'
 $target = 'x86_64-pc-windows'
@@ -244,10 +255,10 @@ try {
         # spaces in the config path are exactly what breaks a naive version.
         $binPath = "`"$exe`" run --config `"$config`""
         & sc.exe create Cellar binPath= $binPath start= auto DisplayName= "Cellar (s&box server manager)" | Out-Null
-        & sc.exe description Cellar "Supervises an s&box dedicated server, and serves its persistence bridge." | Out-Null
+        & sc.exe description Cellar "Supervises an s&box dedicated server and serves its operator web UI." | Out-Null
 
         Write-Done 'Service registered. Start it with: sc.exe start Cellar'
-        Write-Note 'Set CELLAR_DATABASE_URL as a machine environment variable first, or the bridge will not start.'
+        Write-Note 'Set CELLAR_DATABASE_URL as a machine environment variable first, or database features will stay offline.'
         Write-Note 'No MySQL/MariaDB available? `cellar mariadb provision` hosts one locally and prints a CELLAR_DATABASE_URL for you.'
     }
 
@@ -266,6 +277,16 @@ try {
     Write-Host ''
     Write-Note '  Open a new terminal for the PATH change to take effect.'
     Write-Host ''
+
+    if ($Run) {
+        Write-Step 'Running cellar doctor'
+        & $exe --config $config doctor
+        if ($LASTEXITCODE -ne 0) {
+            throw "cellar doctor failed with exit code $LASTEXITCODE"
+        }
+        & $exe --config $config run
+        exit $LASTEXITCODE
+    }
 }
 finally {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $temp

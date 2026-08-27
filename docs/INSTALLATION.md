@@ -32,6 +32,13 @@ plus a registered Windows service, from an **elevated** PowerShell:
 
 `-Service` implies `-System`. A specific version: `.\install.ps1 -Version v0.1.1`.
 
+Add `-Run` when the config and game server are already ready. The installer
+will run `cellar doctor` and then replace itself with `cellar run`.
+
+```powershell
+.\install.ps1 -Run
+```
+
 Manual instead: download `cellar-x86_64-pc-windows.zip` from the
 [releases page](https://github.com/fobiat/cellar/releases), unzip it anywhere,
 and run `cellar.exe`. The zip carries `cellar.toml.example` with the Windows
@@ -40,7 +47,7 @@ paths already commented in.
 ### Hosting MariaDB locally
 
 Cellar needs a MySQL/MariaDB it can reach at `CELLAR_DATABASE_URL` for the
-bridge and its own operations tables. If nothing is already running on this
+database browser and operational state. If nothing is already running on this
 machine (or the network), Cellar can host one itself instead: set
 `[mariadb]` `managed = true`, `version` and `sha256` in `cellar.toml` (see
 [Configuration](CONFIGURATION.md#mariadb)), then:
@@ -86,6 +93,7 @@ Options:
 ```sh
 sh install.sh --version v0.1.1              # a specific release
 sh install.sh --from-file ./cellar.tar.gz   # a file you already downloaded
+sh install.sh --run                         # install, doctor, and start Cellar
 sudo sh install.sh --system --service       # /usr/local/bin plus a systemd unit
 ```
 
@@ -142,7 +150,8 @@ A `Dockerfile` is at the repo root.
 docker build -t cellar .
 ```
 
-Running it needs a TTY, which is not optional:
+The image entrypoint creates `/etc/cellar/cellar.toml` from the bundled example
+when needed, runs `cellar doctor`, and then starts `cellar run`:
 
 ```sh
 docker run -it \
@@ -150,8 +159,12 @@ docker run -it \
   -v /path/to/sbox:/home/container/sbox \
   -v /path/to/cellar.toml:/etc/cellar/cellar.toml \
   -p 8081:8081 \
-  cellar run -c /etc/cellar/cellar.toml
+  cellar
 ```
+
+Use `CELLAR_CONFIG` to select another config path. Pass `doctor`, `config`, or
+another CLI command after the image name to run that command without the
+automatic `doctor` plus `run` sequence.
 
 **`-it` is load-bearing.** Without a TTY the engine never builds its console and
 commands silently do nothing. See

@@ -1,18 +1,16 @@
 # Cellar, for adding to an existing s&box server image.
 #
-# This does not build a server image. AppleJackRP's own `server/Dockerfile`
-# already bakes in steamcmd, Wine, the Windows .NET runtime and the gamemode,
-# and duplicating that here would be a second copy to keep working.
+# This does not build a game server image. A game image should provide steamcmd,
+# Wine, the Windows .NET runtime and the gamemode, then copy Cellar into it.
 #
 # Instead this is a builder whose output is copied into that image:
 #
-#     # in AppleJackRP-sandbox/server/Dockerfile
+#     # in the game's server/Dockerfile
 #     COPY --from=ghcr.io/fobiat/cellar:latest /cellar /usr/local/bin/cellar
 #     ENTRYPOINT ["/usr/local/bin/cellar", "run"]
 #
-# replacing entrypoint.sh. Cellar then supervises `wine sbox-server.exe` on a
-# pseudo-terminal, serves the bridge and answers the readiness probe the
-# deployment asked for in a comment.
+# replacing the image's entrypoint. Cellar then supervises `wine sbox-server.exe`
+# on a pseudo-terminal, serves the operator UI and answers readiness probes.
 
 FROM rust:1-bookworm AS build
 
@@ -36,8 +34,10 @@ RUN apt-get update \
 
 COPY --from=build /src/target/release/cellar /cellar
 COPY cellar.toml.example /cellar.toml.example
+COPY scripts/container-entrypoint.sh /usr/local/bin/cellar-entrypoint
+RUN chmod 0755 /usr/local/bin/cellar-entrypoint
 
-# Answering `--version` is the cheapest proof the binary in this image runs at
-# all, and it is what a `docker run --rm ghcr.io/fobiat/cellar` should print.
-ENTRYPOINT ["/cellar"]
-CMD ["--version"]
+# The entrypoint prepares the default config, checks it, and starts Cellar.
+# Override the command for `doctor`, `config`, or another CLI operation.
+ENTRYPOINT ["/usr/local/bin/cellar-entrypoint"]
+CMD ["run"]

@@ -5,7 +5,7 @@ no persistence yet: [step 6](#6-optional-turn-on-persistence) adds those once th
 basics work.
 
 You need an s&box dedicated server already installed (`sbox-server.exe` and a
-built `.sbproj`). Cellar supervises that; it does not install it.
+built `.sbproj`). Cellar supervises that; it does not install the game server.
 
 ---
 
@@ -41,7 +41,8 @@ cellar --version
 ## 2. Write a config
 
 Cellar reads `cellar.toml` from the working directory unless you pass
-`-c/--config`. Start from the shipped example, which is commented throughout:
+`-c/--config`. The installers write a starting config for you. For a manual
+setup, start from the shipped example, which is commented throughout:
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/fobiat/cellar/main/cellar.toml.example
@@ -53,9 +54,9 @@ The smallest config that does something useful:
 ```toml
 [server]
 executable = "/home/container/sbox/sbox-server.exe"
-project    = "/home/container/projects/applejackrp/applejackrp.sbproj"
+project    = "/home/container/projects/my-game/my-game.sbproj"
 launcher   = "wine"          # "native" on Windows
-hostname   = "AppleJackRP Dev"
+hostname   = "S&box Server"
 
 [database]
 enabled = false              # turned on in step 6
@@ -73,7 +74,7 @@ On Windows, the same three server lines with Windows paths:
 ```toml
 [server]
 executable = 'C:\sbox\sbox-server.exe'
-project    = 'C:\Projects\AppleJackRP-sandbox\applejackrp.sbproj'
+project    = 'C:\Projects\MyGame\my-game.sbproj'
 launcher   = "native"
 ```
 
@@ -152,10 +153,7 @@ to reset what it omits.
 
 ## 6. Optional: turn on persistence
 
-Without this, characters live on the pod's disk and die with it. The bridge is
-the half of AppleJackRP's storage contract that nothing implemented until now.
-
-Start MariaDB or MySQL, then:
+Start the MySQL or MariaDB database supplied by the gamemode, then:
 
 ```sh
 export CELLAR_DATABASE_URL='mysql://cellar:secret@127.0.0.1/cellar'
@@ -164,37 +162,18 @@ export CELLAR_DATABASE_URL='mysql://cellar:secret@127.0.0.1/cellar'
 ```toml
 [database]
 enabled = true
-migrate_on_start = true
-
-[bridge]
-enabled     = true
-bind        = "127.0.0.1:8080"
-public_url  = "http://127.0.0.1:8080"
-scope       = "applejackrp-dev"
-
-[server]
-# Required for the bridge. Cellar writes hosting.json here so the gamemode
-# dials the bridge. Without it the gamemode silently keeps using local files.
-data_dir = "/home/container/.local/share/sbox/data"
+schema_owner = "gamemode"
+migrate_on_start = false
 ```
 
-Apply the schema and restart:
+Restart Cellar and open the Database tab. Cellar discovers the live tables and
+keeps queries read-only. It does not create game tables or run gamemode
+migrations. See [Game database](GAME_DATABASE.md) for the contract.
 
 ```sh
-cellar db migrate
 cellar db status
 cellar run
 ```
-
-Confirm it is actually being used, rather than assuming:
-
-```sh
-cellar doc ls
-```
-
-Characters appear as `characters/<steamid>.json` once someone joins. Full detail,
-including the status codes that are load-bearing and why, is in
-[The bridge](BRIDGE.md).
 
 ---
 

@@ -1,6 +1,6 @@
 [package]
 name = "cellar-store"
-description = "MySQL storage for Cellar: the bridge's documents and the operations tables."
+description = "MySQL storage for Cellar's read-only database browser and operations state."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

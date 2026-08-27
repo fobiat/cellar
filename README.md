@@ -1,9 +1,8 @@
 # Cellar
 
-A dedicated server runner and manager for [s&box](https://sbox.game). One binary
-that supervises the game process, gives it a console you can actually reach,
-and provides a responsive operator web UI for the game database the gamemode
-owns.
+The open-source dedicated server manager for [s&box](https://sbox.game). One
+binary supervises the game process, gives operators a console they can reach,
+and serves a responsive web control panel that works on desktop and phone.
 
 Runs on **Linux under Wine** (the container and Kubernetes case) and **Windows
 natively**. Same `cellar.toml` either way.
@@ -68,8 +67,8 @@ needs `stdin: true, tty: true`, and why `docker run` needs `-it`.
 
 What that buys: `DedicatedServerConsole.OnInput` dispatches through
 `ConVarSystem.Run` with `allowProtected: true`, which is **full privilege**.
-Native commands (`quit`, `kick`, `status`) and all 95 `applejack_*` commands,
-with **zero changes to the gamemode**. Gamemode C# itself cannot do this;
+Native commands (`quit`, `kick`, `status`) and the gamemode's own console
+commands are available with **zero changes to the gamemode**. Gamemode C# itself cannot do this;
 `ConsoleSystem.Run` refuses anything protected.
 
 There is no RCON in s&box. This is the substitute, and it is a better one.
@@ -94,15 +93,16 @@ There is no RCON in s&box. This is the substitute, and it is a better one.
   snapshot so they cannot disagree.
 - **Works from a phone**: the dashboard is responsive, installable, reactive to
   WebSocket state, and can send browser alerts for server events.
-- **Can host the database itself**: downloads, initializes and supervises a
-  local MariaDB (`cellar mariadb provision`), for machines with no MySQL
-  already available and no Docker to run one in. See [Configuration](docs/CONFIGURATION.md#mariadb).
+- **Supports hosted databases**: connects to the MySQL or MariaDB instance
+  supplied by the gamemode, introspects its live schema, and leaves migrations
+  and game tables under gamemode control. An optional local MariaDB supervisor
+  remains available for installations that need one.
 - **Captures configuration as a file**: the 41 features, the 7 catalogued
   settings and the engine's convars, dumped to TOML or YAML, diffed and applied.
 - **Checks versions and updates**: the gamemode's build stamp, the git checkout
   against its remote, and the Steam build id of the dedicated server, with a
   hands-off updater that **never restarts a populated server**.
-- **Sends webhooks**: batched Discord embeds in the Applejack palette.
+- **Sends webhooks**: batched Discord embeds in the Cellar palette.
 
 Full command list in the [CLI reference](docs/CLI.md).
 
@@ -134,6 +134,51 @@ published SHA-256 before installing anything, and both refuse when no checksum
 was published. System-wide installs, service registration, Docker, Kubernetes
 and building from source are all in [Installation](docs/INSTALLATION.md).
 
+For an image or service, installation can be followed by an automatic
+configuration check and foreground run. The container image uses this flow by
+default:
+
+```sh
+docker run --rm -it \
+  -v "$PWD/cellar.toml:/etc/cellar/cellar.toml" \
+  -v /path/to/sbox:/home/container/sbox \
+  -p 8081:8081 \
+  ghcr.io/fobiat/cellar:latest run
+```
+
+The entrypoint creates `/etc/cellar/cellar.toml` from the bundled example when
+needed, runs `cellar doctor`, then starts `cellar run`. Pass `doctor`, `config`,
+or another Cellar command to use the same image for that command.
+
+### Hosted database and web authentication
+
+Cellar treats the database as a gamemode-owned contract. Set the connection
+outside the config file and keep migrations disabled unless Cellar is the
+explicit schema owner:
+
+```powershell
+$env:CELLAR_DATABASE_URL = 'mysql://readonly_user:secret@db.example/cellargame'
+$env:CELLAR_WEB_PASSWORD_HASH = (cellar hash-password)
+```
+
+```toml
+[database]
+enabled = true
+schema_owner = "gamemode"
+migrate_on_start = false
+
+[web]
+enabled = true
+bind = "0.0.0.0:8081"
+auth = "password"
+```
+
+Use `auth = "auto"` for loopback development, or `auth = "none"` only on a
+loopback bind. The dashboard exposes connection metadata, table discovery,
+read-only queries, live controls, WebSocket state, and browser notifications.
+See [Game database](docs/GAME_DATABASE.md) for the ownership and least-privilege
+rules.
+
 ---
 
 ## Testing
@@ -156,7 +201,7 @@ export CELLAR_TEST_DATABASE_URL='mysql://root:cellartest@127.0.0.1:33061/cellar'
 cargo test --workspace
 ```
 
-**270 tests.** The gate before any commit:
+The gate before any commit:
 
 ```sh
 cargo build --workspace
@@ -165,13 +210,7 @@ cargo clippy --all-targets --workspace -- -D warnings
 cargo fmt --all --check
 ```
 
-**CI has never run.** Every GitHub Actions run on this repository fails before
-starting, on "recent account payments have failed or your spending limit needs
-to be increased". The workflow is therefore unproven. Private repositories bill
-Actions minutes and public ones do not, so making this repository public would
-resolve it; so would setting the repository variable `CI_RUNNER` to a
-self-hosted label, which the workflow already reads. Until then, releases are
-cut locally:
+Releases are cut locally after the same checks pass:
 
 ```sh
 cargo build --release -p cellar-cli -p cellar-fake-server
@@ -201,7 +240,7 @@ The full list, and what happens if that assumption fails, is in
 Both from engine source:
 
 - **`+maxplayers` does nothing.** There is no such convar or launch switch; the
-  real ceiling comes from `applejackrp.sbproj`'s `Metadata.MaxPlayers`. The
+  real ceiling comes from the project's `.sbproj` `Metadata.MaxPlayers`. The
   current `entrypoint.sh` passes it and it is inert.
 - **Steam A2S reports zero players.** The server calls `SteamGameServer_Init`
   with a real query port, but nothing calls `BUpdateUserData`, which is what

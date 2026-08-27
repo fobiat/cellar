@@ -40,7 +40,7 @@ serialisation path, so a config dump or a crash log cannot leak one.
 | `game` | unset | Published package ident such as `fobiat.applejackrp`. |
 | `map` | unset | Map ident appended to a published game ident, such as `thieves.rpdowntown3t`. |
 | `launcher` | `wine` | `wine` or `native`. `native` on Windows. |
-| `hostname` | `"AppleJackRP Dev"` | Server name, and what the status bar shows. |
+| `hostname` | `"S&box Server"` | Server name, and what the status bar shows. |
 | `working_dir` | executable's directory | Working directory for the child. |
 | `data_dir` | unset | The engine's data directory. **Required when the bridge is on**: Cellar writes `hosting.json` here. |
 | `log_file` | `<executable dir>/logs/sbox-server.log` | Where the engine writes its log. |

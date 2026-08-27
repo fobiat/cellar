@@ -1,6 +1,6 @@
 [package]
 name = "cellar-server"
-description = "Cellar's HTTP surface: the AppleJackRP bridge, health, and the web UI."
+description = "Cellar's HTTP surface: health, live control, database inspection, and the web UI."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

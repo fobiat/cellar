@@ -1,6 +1,6 @@
 # Cellar documentation
 
-A dedicated server runner and manager for s&box / AppleJackRP.
+An open-source dedicated server runner and manager for s&box.
 
 ## Start here
 
@@ -15,7 +15,7 @@ A dedicated server runner and manager for s&box / AppleJackRP.
 
 | | |
 | --- | --- |
-| **[The bridge](BRIDGE.md)** | Persistence for the gamemode: the protocol, the schema, and wiring it to AppleJackRP. |
+| **[Game database](GAME_DATABASE.md)** | Hosted database access, schema ownership, and the read-only operator browser. |
 | **[Operations](OPERATIONS.md)** | Running it for real: health probes, graceful shutdown, webhooks, updates, backups. |
 | **[Troubleshooting](TROUBLESHOOTING.md)** | Symptoms, causes and fixes, including the ones that look like something else. |
 | **[Architecture](ARCHITECTURE.md)** | How it is built and why, including the engine findings the design rests on. |

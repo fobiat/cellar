@@ -49,7 +49,7 @@ $exitTray.Add_Click({ $notify.Visible = $false; $notify.Dispose(); [System.Windo
 
 $notify = New-Object System.Windows.Forms.NotifyIcon
 $notify.Icon = [System.Drawing.SystemIcons]::Application
-$notify.Text = 'Cellar, AppleJackRP server'
+$notify.Text = 'Cellar, s&box server'
 $notify.ContextMenuStrip = $menu
 $notify.Visible = $true
 $notify.Add_DoubleClick({ Start-Process $Web })
