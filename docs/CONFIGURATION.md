@@ -104,11 +104,13 @@ over a month is fine, and one that restarted five times in a minute is not.
 | --- | --- | --- |
 | `enabled` | `false` | Needs `CELLAR_DATABASE_URL`. |
 | `max_connections` | `8` | Connection pool ceiling. |
-| `migrate_on_start` | `true` | Apply pending migrations when `run` starts. |
+| `schema_owner` | `gamemode` | `gamemode` means Cellar only inspects the live schema. `cellar` retains the legacy operational migrations. |
+| `migrate_on_start` | `false` | Legacy opt-in. Ignored when `schema_owner = "gamemode"`. |
 | `event_retention_days` | `90` | What `cellar db prune` deletes. |
 
-Retention applies to operational events only. Documents and their revision
-history are never pruned.
+The recommended setup is a hosted game database owned by the gamemode. See
+[Game database](GAME_DATABASE.md). The browser is read-only and should use a
+database account with a matching `SELECT` grant.
 
 MariaDB and MySQL are both supported and they are not identical; the differences
 that bite are recorded in [Troubleshooting](TROUBLESHOOTING.md#mariadb-and-mysql-differ).
@@ -213,11 +215,14 @@ security claim is worse than an absent one.
 | --- | --- | --- |
 | `enabled` | `false` | Serve the dashboard and the control API. The shipped example turns this on. |
 | `bind` | `127.0.0.1:8081` | Listen address. |
+| `auth` | `auto` | `auto` uses a password when configured, `password` always requires one, and `none` is loopback-only. |
 | `password_hash` | from env | Argon2 hash from `cellar hash-password`. |
 
-**A non-loopback `bind` requires `CELLAR_WEB_PASSWORD_HASH`, and Cellar refuses
-to start without it.** The console behind this page runs `ConVarSystem.Run` with
-`allowProtected: true`, which is full engine privilege. This is not overridable.
+`auth = "password"` requires `CELLAR_WEB_PASSWORD_HASH` even on loopback.
+`auth = "none"` is refused on a non-loopback bind. With `auth = "auto"`, a
+non-loopback bind still requires `CELLAR_WEB_PASSWORD_HASH`. The console behind
+this page runs `ConVarSystem.Run` with `allowProtected: true`, which is full
+engine privilege.
 
 `web.enabled` must be true for `cellar settings` to work at all, because those
 commands reach the running server through this API.
