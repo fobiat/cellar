@@ -3,7 +3,7 @@
  * The look is a city-RP dispatch board: a dark ground, azure as the only accent
  * that means "live", russet reserved for anything destructive or wanted, orchard
  * for lawful and healthy. Colours are never written here as hex; they arrive as
- * custom properties generated from the Applejack palette so a brand change is
+ * custom properties generated from the Cellar palette so a brand change is
  * one command upstream rather than a hunt through a stylesheet.
  */
 
@@ -53,6 +53,8 @@ a { color: var(--aj-azure); }
 }
 
 .masthead .spacer { flex: 1; }
+
+.connection { white-space: nowrap; font-size: 11px; }
 
 /* ---- the status strip --------------------------------------------------- */
 
@@ -160,6 +162,24 @@ section[hidden] { display: none; }
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 16px;
 }
+
+.database-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.database-summary > div {
+  display: grid;
+  gap: 2px;
+  padding: 10px;
+  background: var(--aj-shell);
+  border: 1px solid color-mix(in srgb, var(--aj-frost) 16%, transparent);
+  border-radius: 3px;
+}
+
+.database-summary strong { font-size: 14px; overflow-wrap: anywhere; }
 
 /* ---- tables ------------------------------------------------------------- */
 
@@ -299,6 +319,41 @@ button.action.danger:hover { background: color-mix(in srgb, var(--aj-russet) 16%
 
 .muted { color: var(--aj-text-muted); }
 .small { font-size: 11.5px; }
+
+.toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  max-width: min(420px, calc(100vw - 36px));
+  padding: 11px 14px;
+  color: var(--aj-text);
+  background: var(--aj-shell);
+  border: 1px solid var(--aj-azure);
+  border-radius: 4px;
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--aj-ink) 60%, transparent);
+  z-index: 20;
+}
+
+@media (max-width: 680px) {
+  body { font-size: 13px; }
+  .masthead { gap: 9px; padding: 11px 12px; }
+  .masthead .tagline { display: none; }
+  .masthead .action { padding: 7px 9px; }
+  .wordmark { letter-spacing: 0.2em; }
+  .connection { display: none; }
+  .strip { display: grid; grid-template-columns: repeat(2, 1fr); }
+  .stat { min-width: 0; padding: 8px 11px; }
+  .stat .value { font-size: 16px; }
+  nav.tabs { position: sticky; top: 52px; z-index: 9; padding: 0 4px; }
+  nav.tabs button { padding: 10px 11px; font-size: 10px; }
+  main { padding: 12px 10px 34px; }
+  .grid-2 { grid-template-columns: 1fr; gap: 10px; }
+  .database-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .console { height: 52vh; min-height: 220px; }
+  .line .who { flex-basis: 64px; }
+  table { min-width: 560px; }
+  .panel { margin-bottom: 10px; }
+}
 
 /* The page commits to its dark ground in both schemes: an operations console
  * that repaints itself white because a phone is in light mode is a console
