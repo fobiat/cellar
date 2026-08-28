@@ -8,11 +8,16 @@ param(
     [switch] $CheckOnly,
     [switch] $SkipSync,
     [switch] $NoTray,
+    [switch] $Development,
+    [switch] $Published,
+    [switch] $Watch,
     [switch] $OpenDashboard
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ( $Development -and $Published ) { throw 'Choose either -Development or -Published, not both.' }
 
 $script:RepoRoot = Split-Path -Parent $PSScriptRoot
 if ( [string]::IsNullOrWhiteSpace( $Cellar ) ) {
@@ -28,9 +33,11 @@ if ( [string]::IsNullOrWhiteSpace( $RuntimeRoot ) ) {
     $RuntimeRoot = 'C:\AppleJackServer\applejackrp-runtime'
 }
 
-$template = Join-Path $script:RepoRoot 'configs\applejackrp.toml'
+$templateName = if ( $Published ) { 'applejackrp-public-windows.toml' } else { 'applejackrp-windows.toml' }
+$template = Join-Path $script:RepoRoot "configs\$templateName"
 $syncScript = Join-Path $AppleJackRoot 'tools\sync-cellar-runtime.ps1'
 $trayScript = Join-Path $PSScriptRoot 'Cellar-Tray.ps1'
+$watchScript = Join-Path $PSScriptRoot 'watch-applejack.ps1'
 
 function Show-Notice([string] $Message, [string] $Title = 'AppleJackRP') {
     Add-Type -AssemblyName System.Windows.Forms
@@ -46,6 +53,22 @@ function Ensure-Config {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Config) | Out-Null
     Copy-Item -LiteralPath $template -Destination $Config
     Show-Notice "Created $Config from the AppleJackRP template. Review its server paths before starting."
+}
+
+function Repair-LegacyDatabaseUrlSetting {
+    if ( -not (Test-Path -LiteralPath $Config) ) { return }
+    $encoding = [Text.Encoding]::UTF8
+    $text = $encoding.GetString([IO.File]::ReadAllBytes($Config))
+    $match = [regex]::Match($text, "(?m)^\s*#\s*url_file\s*=\s*'([^']+)'\s*$")
+    if ( -not $match.Success ) { return }
+
+    $urlFile = $match.Groups[1].Value
+    if ( -not (Test-Path -LiteralPath $urlFile) ) { return }
+
+    Copy-Item -LiteralPath $Config -Destination "$Config.bak" -Force
+    $replacement = "url_file = '$urlFile'"
+    $text = $text.Remove($match.Index, $match.Length).Insert($match.Index, $replacement)
+    [IO.File]::WriteAllBytes($Config, $encoding.GetBytes($text))
 }
 
 function Invoke-Cellar([string[]] $Arguments) {
@@ -91,6 +114,17 @@ function Ensure-CellarTray {
         '-Cellar', $Cellar, '-Config', $Config, '-Web', $Web)
 }
 
+function Ensure-AppleJackWatch {
+    if ( -not $Watch -or -not (Test-Path -LiteralPath $watchScript) ) { return }
+    $watchProcesses = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
+        Where-Object { $_.CommandLine -like '*watch-applejack.ps1*' })
+    if ( $watchProcesses.Count -gt 0 ) { return }
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $watchScript,
+        '-Cellar', $Cellar, '-Config', $Config, '-AppleJackRoot', $AppleJackRoot,
+        '-RuntimeRoot', $RuntimeRoot, '-Web', $Web)
+}
+
 function Test-UpdateAvailable([string] $Output) {
     return $Output -match '(?i)update is available|is available \(running|published\s+build .+available|remote\s+.+differs'
 }
@@ -133,6 +167,7 @@ function Check-For-Updates([switch] $AllowApply) {
 
 try {
     Ensure-Config
+    Repair-LegacyDatabaseUrlSetting
     if ( -not (Test-Path -LiteralPath $Cellar) ) {
         throw "Cellar executable not found at $Cellar. Install Cellar first or pass -Cellar."
     }
@@ -149,6 +184,7 @@ try {
 
     if ( Test-CellarWeb ) {
         Ensure-CellarTray
+        Ensure-AppleJackWatch
         Start-Process $Web
         Show-Notice 'Cellar is already running. Opened the dashboard instead of starting a second instance.'
         exit 0
@@ -179,6 +215,7 @@ try {
     }
 
     Ensure-CellarTray
+    Ensure-AppleJackWatch
 
     if ( $OpenDashboard ) {
         Start-Sleep -Milliseconds 750

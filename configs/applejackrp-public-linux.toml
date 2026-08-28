@@ -1,0 +1,69 @@
+# Cellar published AppleJackRP profile for Linux under Wine.
+
+[server]
+executable = '/home/container/sbox/sbox-server.exe'
+game = "fobiat.applejackrp"
+map = "thieves.rpdowntown3t"
+launcher = "wine"
+working_dir = '/home/container/sbox'
+hostname = "AppleJackRP Dev"
+data_dir = '/home/container/sbox/data/fobiat/applejackrp#local'
+log_file = '/home/container/sbox/logs/sbox-server.log'
+direct_connect = false
+port = 27015
+query_port = 27016
+ready_pattern = "Lobby created - session is joinable"
+
+[database]
+enabled = true
+url_file = '/etc/cellar/external-database.url'
+max_connections = 8
+schema_owner = "gamemode"
+migrate_on_start = false
+event_retention_days = 90
+
+[mariadb]
+managed = true
+version = "11.4.5"
+sha256 = "b7c11d38657f16b837e68199d73670510aadb78f42dfa5d5fdea31a7aab342e3"
+install_dir = '/var/lib/cellar/mariadb/11.4.5'
+data_dir = '/var/lib/cellar/mariadb/data'
+port = 33306
+
+[backup]
+enabled = true
+directory = '/var/lib/cellar/backups'
+interval_hours = 24
+retain = 7
+
+[bridge]
+enabled = true
+bind = "127.0.0.1:8080"
+public_url = "http://127.0.0.1:8080"
+auth_audience = "applejack-bridge"
+auth = "trusted"
+scope = "applejackrp-local"
+max_body_bytes = 1048576
+rate_limit_per_minute = 600
+
+[web]
+enabled = true
+bind = "127.0.0.1:8081"
+auth = "auto"
+
+[notify]
+enabled = false
+batch_seconds = 5
+kinds = []
+
+[update]
+policy = "notify"
+check_interval_minutes = 60
+check_remote = true
+only_when_empty = true
+window_start_hour = 0
+window_end_hour = 0
+update_gamemode = true
+update_engine = false
+program_check = true
+program_check_interval_minutes = 60

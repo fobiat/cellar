@@ -4,11 +4,17 @@ param(
     [string] $TrayScript,
     [string] $Icon,
     [string] $Config,
+    [switch] $Development,
+    [switch] $Published,
+    [switch] $NoWatch,
     [switch] $NoStartup
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ( $Development -and $Published ) { throw 'Choose either -Development or -Published, not both.' }
+$developmentMode = $Development -or -not $Published
 
 if ( [string]::IsNullOrWhiteSpace( $Launcher ) ) { $Launcher = Join-Path $PSScriptRoot 'start-applejack.ps1' }
 if ( [string]::IsNullOrWhiteSpace( $TrayScript ) ) { $TrayScript = Join-Path $PSScriptRoot 'Cellar-Tray.ps1' }
@@ -22,11 +28,25 @@ foreach ( $required in @($Launcher, $TrayScript, $Icon) ) {
 }
 
 if ( -not (Test-Path -LiteralPath $Config) ) {
-    $publicConfig = Join-Path $PSScriptRoot '..\configs\applejackrp-public.toml'
-    if ( -not (Test-Path -LiteralPath $publicConfig) ) { throw "Cellar config not found at $Config." }
+    $templateName = if ( $developmentMode ) { 'applejackrp-windows.toml' } else { 'applejackrp-public-windows.toml' }
+    $profile = Join-Path $PSScriptRoot "..\configs\$templateName"
+    if ( -not (Test-Path -LiteralPath $profile) ) { throw "Cellar config not found at $Config." }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Config) | Out-Null
-    Copy-Item -LiteralPath $publicConfig -Destination $Config
-    Write-Output "Created $Config from the AppleJackRP public profile."
+    Copy-Item -LiteralPath $profile -Destination $Config
+    Write-Output "Created $Config from the AppleJackRP $(if ($developmentMode) { 'local development' } else { 'published' }) profile."
+}
+
+$profileDirectory = Split-Path -Parent $Config
+$profileCopies = @{
+    'applejackrp-development.toml' = 'applejackrp-windows.toml'
+    'applejackrp-published.toml' = 'applejackrp-public-windows.toml'
+}
+foreach ( $profileCopy in $profileCopies.GetEnumerator() ) {
+    $sourceProfile = Join-Path $PSScriptRoot "..\configs\$($profileCopy.Value)"
+    $targetProfile = Join-Path $profileDirectory $profileCopy.Key
+    if ( (Test-Path -LiteralPath $sourceProfile) -and -not (Test-Path -LiteralPath $targetProfile) ) {
+        Copy-Item -LiteralPath $sourceProfile -Destination $targetProfile
+    }
 }
 
 $shell = New-Object -ComObject WScript.Shell
@@ -45,7 +65,9 @@ function New-AppleJackShortcut([string] $Destination, [string] $TargetScript, [s
 
 $desktop = [Environment]::GetFolderPath('Desktop')
 $desktopShortcut = Join-Path $desktop 'AppleJackRP.lnk'
-New-AppleJackShortcut $desktopShortcut $Launcher "-Config `"$Config`" -OpenDashboard"
+$modeArgument = if ( $developmentMode ) { ' -Development' } else { ' -Published' }
+$watchArgument = if ( $developmentMode -and -not $NoWatch ) { ' -Watch' } else { '' }
+New-AppleJackShortcut $desktopShortcut $Launcher "-Config `"$Config`" -OpenDashboard$modeArgument$watchArgument"
 
 if ( -not $NoStartup ) {
     $startup = [Environment]::GetFolderPath('Startup')

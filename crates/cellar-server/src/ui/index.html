@@ -195,7 +195,8 @@
       <div class="panel">
         <h2>Config manager</h2>
         <div class="body">
-          <p class="muted small">Switching a profile restarts the supervised server. Bindings and database ownership stay with the running Cellar instance.</p>
+          <p class="muted small">Development mode runs the local AppleJackRP project, syncs the latest checkout, and uses the watcher when one is running. Published mode runs the configured <code>sbox.game</code> package. Switching mode restarts the supervised server.</p>
+          <div class="row" id="config-mode-actions"></div>
           <div class="row" id="config-list"><p class="muted small">Loading profiles…</p></div>
           <p class="notice" id="config-notice"></p>
         </div>

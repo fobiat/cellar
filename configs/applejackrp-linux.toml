@@ -1,25 +1,18 @@
-# Cellar v0.1.11 configuration for a local AppleJackRP Windows server.
-#
-# Copy this file to the machine's Cellar config location, then adjust the
-# engine and runtime paths when the project is not under the default Windows
-# workspace. Sync the checkout to the external runtime directory before use.
+# Cellar local AppleJackRP development profile for Linux under Wine.
+# Sync the checkout to the runtime copy before starting.
 
 [server]
-executable = 'C:\AppleJackServer\sbox\sbox-server.exe'
-project = 'C:\AppleJackServer\applejackrp-runtime\applejackrp.sbproj'
-launcher = "native"
-working_dir = 'C:\AppleJackServer\sbox'
+executable = '/home/container/sbox/sbox-server.exe'
+project = '/home/container/applejackrp-runtime/applejackrp.sbproj'
+launcher = "wine"
+working_dir = '/home/container/sbox'
 hostname = "AppleJackRP Dev"
-data_dir = 'C:\AppleJackServer\sbox\data\fobiat\applejackrp#local'
-log_file = 'C:\AppleJackServer\sbox\logs\sbox-server.log'
+data_dir = '/home/container/sbox/data/fobiat/applejackrp#local'
+log_file = '/home/container/sbox/logs/sbox-server.log'
 direct_connect = false
 port = 27015
 query_port = 27016
 ready_pattern = "Lobby created - session is joinable"
-
-# To run the published package instead, remove `project` and use:
-# game = "fobiat.applejackrp"
-# map = "thieves.rpdowntown3t"
 
 [supervisor]
 restart = "on_failure"
@@ -36,9 +29,7 @@ healthy_after = 60
 
 [database]
 enabled = true
-# For a hosted source, set this to a protected file outside the repository and
-# set [mariadb].managed = false. CELLAR_DATABASE_URL takes precedence.
-url_file = 'C:\ProgramData\Cellar\external-database.url'
+url_file = '/etc/cellar/external-database.url'
 max_connections = 8
 schema_owner = "gamemode"
 migrate_on_start = false
@@ -48,13 +39,13 @@ event_retention_days = 90
 managed = true
 version = "11.4.5"
 sha256 = "b7c11d38657f16b837e68199d73670510aadb78f42dfa5d5fdea31a7aab342e3"
-install_dir = 'C:\ProgramData\Cellar\mariadb\11.4.5'
-data_dir = 'C:\ProgramData\Cellar\mariadb\data'
+install_dir = '/var/lib/cellar/mariadb/11.4.5'
+data_dir = '/var/lib/cellar/mariadb/data'
 port = 33306
 
 [backup]
 enabled = true
-directory = 'C:\ProgramData\Cellar\backups'
+directory = '/var/lib/cellar/backups'
 interval_hours = 24
 retain = 7
 
@@ -72,7 +63,6 @@ rate_limit_per_minute = 600
 enabled = true
 bind = "127.0.0.1:8081"
 auth = "auto"
-# Set CELLAR_API_TOKEN in the service environment to enable read-only /api/v1.
 
 [notify]
 enabled = false

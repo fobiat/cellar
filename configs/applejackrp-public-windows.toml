@@ -1,12 +1,9 @@
-# Cellar v0.1.11 configuration for a local AppleJackRP Windows server.
-#
-# Copy this file to the machine's Cellar config location, then adjust the
-# engine and runtime paths when the project is not under the default Windows
-# workspace. Sync the checkout to the external runtime directory before use.
+# Cellar published AppleJackRP profile for Windows.
 
 [server]
 executable = 'C:\AppleJackServer\sbox\sbox-server.exe'
-project = 'C:\AppleJackServer\applejackrp-runtime\applejackrp.sbproj'
+game = "fobiat.applejackrp"
+map = "thieves.rpdowntown3t"
 launcher = "native"
 working_dir = 'C:\AppleJackServer\sbox'
 hostname = "AppleJackRP Dev"
@@ -17,27 +14,8 @@ port = 27015
 query_port = 27016
 ready_pattern = "Lobby created - session is joinable"
 
-# To run the published package instead, remove `project` and use:
-# game = "fobiat.applejackrp"
-# map = "thieves.rpdowntown3t"
-
-[supervisor]
-restart = "on_failure"
-graceful_timeout_seconds = 30
-sample_interval_seconds = 2
-
-[supervisor.backoff]
-initial = 2
-maximum = 120
-multiplier = 2.0
-crash_loop_threshold = 5
-window = 300
-healthy_after = 60
-
 [database]
 enabled = true
-# For a hosted source, set this to a protected file outside the repository and
-# set [mariadb].managed = false. CELLAR_DATABASE_URL takes precedence.
 url_file = 'C:\ProgramData\Cellar\external-database.url'
 max_connections = 8
 schema_owner = "gamemode"
@@ -72,7 +50,6 @@ rate_limit_per_minute = 600
 enabled = true
 bind = "127.0.0.1:8081"
 auth = "auto"
-# Set CELLAR_API_TOKEN in the service environment to enable read-only /api/v1.
 
 [notify]
 enabled = false

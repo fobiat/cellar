@@ -12,7 +12,7 @@
     install, which does need an elevated shell.
 
 .EXAMPLE
-    $version = 'v0.1.10'
+    $version = 'v0.1.11'
     Invoke-WebRequest "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.ps1" -OutFile install-cellar.ps1
     Get-Content .\install-cellar.ps1
     .\install-cellar.ps1 -Version $version

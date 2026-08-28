@@ -4,6 +4,22 @@ All notable changes to Cellar are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.11] - 2026-08-28
+
+### Added
+
+- **Automatic local development sync.** The Windows AppleJackRP launcher now
+  repairs the legacy database URL setting when its protected URL file exists,
+  defaults to the local runtime profile, and watches source changes for a
+  debounced sync and supervised restart.
+- **Platform-specific AppleJackRP profiles.** Local and published Windows and
+  Linux under-Wine profiles keep executable, project, data, log, database, and
+  backup paths explicit.
+- **Coordinated gamemode release bundles.** Releases can attach an
+  AppleJackRP source/build bundle with its generated build identity,
+  `CHANGELOG.md`, and `GAMEMODE_CHANGELOG.md` when the private repository token
+  is configured.
+
 ## [0.1.10] - 2026-08-28
 
 ### Added
@@ -15,6 +31,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   across all logical cores. Monitoring keeps the raw per-core total, the
   normalized average, core count, process count, host CPU, memory, and network
   rates, with 0 to 100% grid scales on the CPU charts.
+- **Local AppleJackRP development loop.** The Windows shortcut now defaults to
+  the local `.sbproj` profile and can sync source changes into the runtime copy,
+  then restart the supervised game without publishing to sbox.game.
+- **Platform-specific profiles.** AppleJackRP local and published examples now
+  have explicit Windows and Linux under-Wine files, so executable, project,
+  data, log, database, and backup paths are not mixed between hosts.
 
 ### Fixed
 

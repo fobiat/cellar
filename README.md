@@ -117,7 +117,7 @@ The public releases are available without a token. The installers and
 **Windows**
 
 ```powershell
-$version = 'v0.1.10'
+$version = 'v0.1.11'
 Invoke-WebRequest "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.ps1" -OutFile install-cellar.ps1
 Get-Content .\install-cellar.ps1
 .\install-cellar.ps1 -Version $version
@@ -127,7 +127,7 @@ Remove-Item .\install-cellar.ps1
 **Linux**
 
 ```sh
-version=v0.1.10
+version=v0.1.11
 curl -fsSLO "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.sh"
 less install.sh
 sh install.sh --version "$version"
@@ -159,6 +159,16 @@ The useful part is the safety boundary: update checks are automatic, but an
 update asks first, and the launcher will not apply a game update while the
 server is running. Existing files are never overwritten when the config is
 created, so a local setup stays yours to review.
+
+For local development, the runtime project is a managed copy of the AppleJackRP
+checkout at `C:\AppleJackServer\applejackrp-runtime`. The launcher syncs the
+latest local source into that copy before starting, and the default desktop
+shortcut watches source files and restarts the game after changes. This keeps
+s&box generated state out of Git while avoiding a `sbox.game` publish for local
+testing. Use the platform profiles in [AppleJackRP configuration](docs/APPLEJACKRP.md)
+when switching between Windows, Linux under Wine, local source, and published
+package modes. The web UI Configs tab exposes the same Development and Published
+mode switch, and the header always names the active mode.
 
 Cellar is a good fit when you want a repeatable local server that survives
 crashes, exposes health and readiness checks, and remains easy to operate from

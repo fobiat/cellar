@@ -382,9 +382,11 @@ async function refreshStatus() {
   const bridge = data.bridge;
   const game = data.game || "gamemode unknown";
   const profile = data.scope || "profile unknown";
+  const mode = data.mode || "mode unknown";
+  const modeLabel = mode === "development" ? "Development" : mode === "published" ? "Published" : mode;
 
-  $("#header-profile").textContent = `${text(game)} · ${text(profile)}`;
-  $("#header-profile").title = `Gamemode: ${text(game)}, profile: ${text(profile)}`;
+  $("#header-profile").textContent = `${text(modeLabel)} · ${text(game)} · ${text(profile)}`;
+  $("#header-profile").title = `Mode: ${text(modeLabel)}, gamemode: ${text(game)}, profile: ${text(profile)}`;
 
   const cellar = data.cellar || {};
   const cellarVersion = text(cellar.version || "unknown").replace(/^v/, "");
@@ -1147,8 +1149,22 @@ async function loadConfigs() {
     target.append(el("p", "notice", text(data.error)));
     return;
   }
-  for (const profile of data.profiles || []) {
-    const button = el("button", `chip ${profile.active ? "live" : ""}`, `${profile.name} · ${profile.game || profile.project || "local"}`);
+  const profiles = data.profiles || [];
+  const modeActions = $("#config-mode-actions");
+  modeActions.replaceChildren();
+  for (const mode of ["development", "published"]) {
+    const profile = profiles.find((candidate) => candidate.mode === mode);
+    const label = mode === "development" ? "Use Development mode" : "Use Published mode";
+    const button = el("button", `action ${profile?.active ? "live" : ""}`, profile ? label : `${label} unavailable`);
+    button.disabled = !profile || profile.active;
+    button.title = profile ? `Switch to ${profile.name}` : "Install or copy the matching AppleJackRP profile beside the active config";
+    if (profile) button.onclick = () => activateConfig(profile.name);
+    modeActions.append(button);
+  }
+  for (const profile of profiles) {
+    const mode = profile.mode === "published" ? "Published" : "Development";
+    const targetName = profile.game || profile.project || "local project";
+    const button = el("button", `chip ${profile.active ? "live" : ""}`, `${mode} · ${profile.name} · ${targetName}`);
     button.disabled = profile.active;
     button.onclick = () => activateConfig(profile.name);
     target.append(button);

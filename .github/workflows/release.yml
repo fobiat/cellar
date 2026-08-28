@@ -16,8 +16,60 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  gamemode-release:
+    name: package AppleJackRP
+    runs-on: windows-latest
+    outputs:
+      available: ${{ steps.credentials.outputs.present }}
+    steps:
+      - name: Check AppleJackRP release access
+        id: credentials
+        env:
+          APPLEJACK_RELEASE_TOKEN: ${{ secrets.APPLEJACK_RELEASE_TOKEN }}
+        shell: bash
+        run: |
+          if [ -n "${APPLEJACK_RELEASE_TOKEN:-}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "APPLEJACK_RELEASE_TOKEN is not configured; skipping the gamemode bundle."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.credentials.outputs.present == 'true'
+
+      - uses: actions/checkout@v4
+        if: steps.credentials.outputs.present == 'true'
+        with:
+          repository: fobiat/AppleJackRP-sandbox
+          token: ${{ secrets.APPLEJACK_RELEASE_TOKEN }}
+          path: applejackrp
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        if: steps.credentials.outputs.present == 'true'
+        with:
+          python-version: '3.x'
+
+      - name: Verify gamemode build metadata
+        if: steps.credentials.outputs.present == 'true'
+        run: python tools/stamp_build.py --check
+        working-directory: applejackrp
+
+      - name: Package gamemode release bundle
+        if: steps.credentials.outputs.present == 'true'
+        run: .\scripts\package-applejack-release.ps1 -AppleJackRoot .\applejackrp -OutputDirectory .\dist\gamemode -Version '${{ inputs.tag || github.ref_name }}'
+
+      - uses: actions/upload-artifact@v4
+        if: steps.credentials.outputs.present == 'true'
+        with:
+          name: applejackrp-release
+          path: dist/gamemode/*
+
   release:
     name: build and publish
+    needs: [gamemode-release]
+    if: always()
     # Public releases use GitHub-hosted capacity so a missing private runner
     # cannot leave a pushed tag queued forever.
     runs-on: ubuntu-latest
@@ -45,6 +97,13 @@ jobs:
       # The script is the same one used by hand, so the two cannot drift.
       - name: package
         run: ./scripts/package-release.sh
+
+      - name: add AppleJackRP release bundle
+        if: needs.gamemode-release.outputs.available == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: applejackrp-release
+          path: dist/release
 
       # Both installers and self-update refuse anything whose checksum was not
       # published. Better to fail the release than to publish something nobody

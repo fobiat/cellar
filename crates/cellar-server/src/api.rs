@@ -361,6 +361,7 @@ async fn external_configs(State(state): State<Arc<AppState>>, _: ExternalApi) ->
             // disclose more than a remote dashboard needs.
             serde_json::json!({
                 "name": profile.name,
+                "mode": profile.mode,
                 "active": profile.active,
                 "game": profile.game,
                 "map": profile.map,
@@ -699,7 +700,19 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         Some(handle) => handle.snapshot().await,
         None => None,
     };
-    let map_log = match (&state.log_file, &state.configured_map) {
+    let active_config = state.config_path.lock().ok().and_then(|path| {
+        path.as_ref()
+            .and_then(|path| crate::config_manager::load(path).ok())
+    });
+    let configured_game = active_config
+        .as_ref()
+        .and_then(|config| config.server.game.clone())
+        .or_else(|| state.configured_game.clone());
+    let configured_map = active_config
+        .as_ref()
+        .and_then(|config| config.server.map.clone())
+        .or_else(|| state.configured_map.clone());
+    let map_log = match (&state.log_file, configured_map.as_deref()) {
         (Some(path), Some(map)) => tokio::fs::read_to_string(path)
             .await
             .map(|log| log.contains(map) && !log.contains("failed to load map"))
@@ -725,6 +738,15 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         .await
         .ok()
         .map(|(features, _)| feature_enabled(&features, "admin.inviteonly"));
+    let mode = active_config
+        .map(|config| {
+            if config.server.game.is_some() {
+                "published"
+            } else {
+                "development"
+            }
+        })
+        .unwrap_or("unknown");
 
     Json(serde_json::json!({
         "server": snapshot,
@@ -741,7 +763,8 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
             "version": env!("CARGO_PKG_VERSION"),
             "commit": option_env!("CELLAR_BUILD_COMMIT").unwrap_or("unknown"),
         },
-        "game": state.configured_game,
+        "game": configured_game,
+        "mode": mode,
         "scope": state.scope,
         "addresses": addresses,
         "access": { "invite_only": invite_only },
