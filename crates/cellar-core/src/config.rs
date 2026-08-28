@@ -173,6 +173,45 @@ pub struct ServerConfig {
     pub data_dir: Option<PathBuf>,
 }
 
+/// The engine's suffix for a package loaded from a local `.sbproj`.
+pub const LOCAL_PROJECT_SUFFIX: &str = "#local";
+
+impl ServerConfig {
+    /// True when this profile runs a published package rather than a local
+    /// `.sbproj`.
+    pub fn is_published(&self) -> bool {
+        self.game
+            .as_deref()
+            .is_some_and(|game| !game.trim().is_empty())
+    }
+
+    /// Why `data_dir` cannot be the directory the game reads, if it cannot.
+    ///
+    /// The engine appends `#local` to the ident for a local `.sbproj` and names
+    /// the data directory after the ident, so a profile carrying the other
+    /// mode's leaf still starts: `hosting.json` goes where nothing reads it, and
+    /// neither mode can see the other's characters, permissions or features.
+    /// Every AppleJackRP profile shipped with the `#local` leaf, published ones
+    /// included, until 2026-08-28.
+    pub fn data_dir_mode_mismatch(&self) -> Option<String> {
+        let leaf = self.data_dir.as_ref()?.file_name()?.to_str()?;
+
+        match (self.is_published(), leaf.ends_with(LOCAL_PROJECT_SUFFIX)) {
+            (true, true) => Some(format!(
+                "'{leaf}' is the local-project directory, but server.game runs the published \
+                 package. Drop the '{LOCAL_PROJECT_SUFFIX}' suffix, or the game will never read \
+                 the hosting.json written here."
+            )),
+            (false, false) => Some(format!(
+                "'{leaf}' is the published package directory, but this profile runs a local \
+                 .sbproj. Append '{LOCAL_PROJECT_SUFFIX}', or the game will never read the \
+                 hosting.json written here."
+            )),
+            _ => None,
+        }
+    }
+}
+
 /// How the executable gets launched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -927,6 +966,83 @@ mod tests {
     #[test]
     fn a_minimal_config_is_valid() {
         minimal().validate().unwrap();
+    }
+
+    fn with_data_dir(game: Option<&str>, leaf: &str) -> ServerConfig {
+        ServerConfig {
+            game: game.map(str::to_owned),
+            data_dir: Some(PathBuf::from(format!(
+                "/home/container/sbox/data/fobiat/{leaf}"
+            ))),
+            ..minimal().server
+        }
+    }
+
+    #[test]
+    fn a_published_profile_may_not_point_at_the_local_project_directory() {
+        let why = with_data_dir(Some("fobiat.applejackrp"), "applejackrp#local")
+            .data_dir_mode_mismatch()
+            .expect("the published package never reads the #local directory");
+
+        assert!(why.contains("Drop the '#local' suffix"), "{why}");
+    }
+
+    #[test]
+    fn a_local_project_profile_may_not_point_at_the_published_directory() {
+        let why = with_data_dir(None, "applejackrp")
+            .data_dir_mode_mismatch()
+            .expect("a local .sbproj run only reads the #local directory");
+
+        assert!(why.contains("Append '#local'"), "{why}");
+    }
+
+    #[test]
+    fn a_matching_data_dir_is_accepted_in_either_mode() {
+        assert!(
+            with_data_dir(Some("fobiat.applejackrp"), "applejackrp")
+                .data_dir_mode_mismatch()
+                .is_none()
+        );
+        assert!(
+            with_data_dir(None, "applejackrp#local")
+                .data_dir_mode_mismatch()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn an_unset_data_dir_has_no_mode_to_disagree_with() {
+        assert!(minimal().server.data_dir_mode_mismatch().is_none());
+    }
+
+    /// Every AppleJackRP profile shipped with the `#local` leaf, published ones
+    /// included, until 2026-08-28. Reading the files is the only way to catch
+    /// that: nothing else in the workspace loads them.
+    #[test]
+    fn the_shipped_applejackrp_profiles_agree_with_their_own_mode() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../configs");
+        let mut checked = 0;
+
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_str().unwrap().to_owned();
+            if !name.starts_with("applejackrp") || !name.ends_with(".toml") {
+                continue;
+            }
+
+            let text = std::fs::read_to_string(&path).unwrap();
+            let config: Config =
+                toml::from_str(&text).unwrap_or_else(|why| panic!("{name}: {why}"));
+
+            assert!(
+                config.server.data_dir_mode_mismatch().is_none(),
+                "{name}: {}",
+                config.server.data_dir_mode_mismatch().unwrap()
+            );
+            checked += 1;
+        }
+
+        assert!(checked >= 6, "only {checked} profiles read from {dir:?}");
     }
 
     #[test]

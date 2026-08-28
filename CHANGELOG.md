@@ -4,6 +4,27 @@ All notable changes to Cellar are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Point the published AppleJackRP profiles at the published package's data
+  directory. All three carried the `#local` leaf, which is the local `.sbproj`
+  directory, so `hosting.json` was written where the game never read it and
+  neither mode could see the other's characters, permissions or features.
+- Read back a `hosting.json` whose `apiKey` is empty. The field is skipped on
+  write when empty but had no serde `default`, so every locally provisioned
+  document failed to deserialise. Written documents are unchanged.
+
+### Added
+
+- `cellar doctor` checks that a local project's `Libraries` directory exists.
+  The engine's `StartGame` enumerates it and throws when it is absent, and the
+  server then exits to a bare console with no gamemode loaded, which
+  `restart = "on_failure"` retries into the same wall.
+- `cellar doctor` checks that `server.data_dir` agrees with the configured
+  mode, so the `#local` mismatch above cannot come back unnoticed.
+
 ## [0.1.13] - 2026-08-28
 
 ### Added

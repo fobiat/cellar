@@ -124,6 +124,27 @@ pub async fn doctor(path: &Path) -> Result<()> {
             "server.project",
             format!("{}", project.display()),
         );
+
+        // StartGame enumerates this and throws DirectoryNotFoundException when it
+        // is absent, so the server exits to a bare console with no gamemode
+        // loaded and on_failure retries it into the same wall. Git does not keep
+        // empty directories, which is how a checkout loses it.
+        if let Some(libraries) = project.parent().map(|dir| dir.join("Libraries")) {
+            let present = libraries.is_dir();
+            check(
+                present,
+                "project Libraries",
+                if present {
+                    format!("{}", libraries.display())
+                } else {
+                    format!(
+                        "{} is missing, so the server will start and exit without loading the \
+                         gamemode",
+                        libraries.display()
+                    )
+                },
+            );
+        }
     }
 
     if let Some(map) = config.server.map.as_deref() {
@@ -147,6 +168,13 @@ pub async fn doctor(path: &Path) -> Result<()> {
             .map(|text| text.contains("GroundedOrAuthored") && text.contains("Scene.Trace"))
             .unwrap_or(false);
         check(grounded, "spawn validation", format!("{}", path.display()));
+    }
+
+    if let Some(dir) = &config.server.data_dir {
+        match config.server.data_dir_mode_mismatch() {
+            Some(why) => check(false, "server.data_dir mode", why),
+            None => check(true, "server.data_dir mode", format!("{}", dir.display())),
+        }
     }
 
     if config.server.launcher == cellar_core::Launcher::Wine {

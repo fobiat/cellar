@@ -24,6 +24,15 @@ run a published package, remove `server.project` and set `server.game` plus
 that contains `features.json` and `permissions.json`; Cellar writes
 `hosting.json` there before launching the game.
 
+**The data directory differs between the two modes, and switching one without
+the other loses the server's state.** The engine appends `#local` to the package
+ident when it loads a local `.sbproj`, and names the data directory after the
+ident, so development mode reads `data/fobiat/applejackrp#local` and published
+mode reads `data/fobiat/applejackrp`. A profile carrying the wrong leaf still
+starts: `hosting.json` lands where the game never reads it, and characters,
+permissions and feature flags written in one mode are invisible from the other.
+`cellar doctor` reports the mismatch as `server.data_dir mode`.
+
 Before the first run, provision the managed MariaDB once. The shortcut and the
 public profile use the protected URL file below, so the password does not go
 into `cellar.toml` or a shortcut argument:

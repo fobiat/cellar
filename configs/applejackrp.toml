@@ -20,6 +20,9 @@ ready_pattern = "Lobby created - session is joinable"
 # To run the published package instead, remove `project` and use:
 # game = "fobiat.applejackrp"
 # map = "thieves.rpdowntown3t"
+# Drop the '#local' from data_dir as well. The engine only appends it for a
+# local .sbproj, so leaving it puts hosting.json where the game never reads it.
+# data_dir = 'C:\AppleJackServer\sbox\data\fobiat\applejackrp'
 
 [supervisor]
 restart = "on_failure"

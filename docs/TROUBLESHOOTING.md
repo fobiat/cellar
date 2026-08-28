@@ -53,6 +53,29 @@ By design, rather than running in a state that confuses you later.
 | `facepunch` auth refused | There is no published endpoint to verify a platform token. Use `trusted` on loopback, or `shared_secret`. |
 | `trusted` auth on a non-loopback bind | `trusted` does not verify anything; it relies on being unreachable. Bind loopback or change mode. |
 
+## The server starts, exits within seconds, and Cellar restarts it forever
+
+The map never loads, and every convar Cellar sends comes back as
+`Unknown Command`. The gamemode was never loaded, so there was nothing to
+receive them, and `restart = "on_failure"` retries into the same wall until the
+crash-loop threshold stops it.
+
+Read the engine's own log rather than Cellar's status. The cause is usually near
+the top, tagged `[Bootstrap]`:
+
+```
+Could not find a part of the path '...\applejackrp-runtime\Libraries'.
+   at Sandbox.GameInstanceDll.StartGame(String gameIdent, String mapIdent)
+```
+
+`StartGame` enumerates `<project>/Libraries` and throws when it is absent. Git
+does not track empty directories, so a checkout that never committed a
+placeholder there loses it on clone or `git clean`, and a `robocopy /MIR` sync
+copies the absence into the runtime tree. Create the directory, and commit a
+`.gitkeep` in it so it survives the next clone.
+
+`cellar doctor` reports this as `project Libraries`.
+
 ## The gamemode still writes to local files
 
 The bridge is running and nothing errors, but nothing lands in the database.
@@ -101,6 +124,12 @@ Exactly `404`. If a database outage produces `404` rather than `500`, stop the
 server and fix that before anyone joins.
 
 `cellar doc history <key>` shows every revision and who wrote it.
+
+**If they vanished right after a mode switch, look at `server.data_dir` before
+suspecting the database.** Development and published mode read different
+directories, `applejackrp#local` and `applejackrp`, and a profile pointing at
+the wrong one shows an empty roster with nothing logged. `cellar doctor` reports
+that as `server.data_dir mode`.
 
 ## MariaDB and MySQL differ
 
