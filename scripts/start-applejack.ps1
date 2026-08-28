@@ -49,9 +49,16 @@ function Ensure-Config {
 }
 
 function Invoke-Cellar([string[]] $Arguments) {
-    $output = @(& $Cellar -c $Config @Arguments 2>&1)
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $Cellar -c $Config @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
     [pscustomobject]@{
-        ExitCode = $LASTEXITCODE
+        ExitCode = $exitCode
         Output = ($output -join [Environment]::NewLine)
     }
 }
@@ -63,6 +70,15 @@ function Test-CellarWeb {
     } catch {
         return $false
     }
+}
+
+function Wait-CellarWeb([int] $TimeoutSeconds = 30) {
+    $deadline = (Get-Date).AddSeconds( $TimeoutSeconds )
+    do {
+        if ( Test-CellarWeb ) { return $true }
+        Start-Sleep -Milliseconds 500
+    } while ( (Get-Date) -lt $deadline )
+    return $false
 }
 
 function Test-UpdateAvailable([string] $Output) {
@@ -105,50 +121,70 @@ function Check-For-Updates([switch] $AllowApply) {
     }
 }
 
-Ensure-Config
-if ( -not (Test-Path -LiteralPath $Cellar) ) {
-    throw "Cellar executable not found at $Cellar. Install Cellar first or pass -Cellar."
-}
-
-if ( $CheckOnly ) {
-    Check-For-Updates
-    exit 0
-}
-
-if ( Test-CellarWeb ) {
-    Start-Process $Web
-    Show-Notice 'Cellar is already running. Opened the dashboard instead of starting a second instance.'
-    exit 0
-}
-
-Check-For-Updates -AllowApply
-
-if ( -not $SkipSync -and (Test-Path -LiteralPath $syncScript) ) {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $syncScript `
-        -SourceRoot $AppleJackRoot -RuntimeRoot $RuntimeRoot
-    if ( $LASTEXITCODE -gt 7 ) {
-        throw "AppleJackRP runtime sync failed with robocopy exit code $LASTEXITCODE."
+try {
+    Ensure-Config
+    if ( -not (Test-Path -LiteralPath $Cellar) ) {
+        throw "Cellar executable not found at $Cellar. Install Cellar first or pass -Cellar."
     }
+
+    $configCheck = Invoke-Cellar @('config')
+    if ( $configCheck.ExitCode -ne 0 ) {
+        throw "Cellar configuration is invalid.`n`n$($configCheck.Output)"
+    }
+
+    if ( $CheckOnly ) {
+        Check-For-Updates
+        exit 0
+    }
+
+    if ( Test-CellarWeb ) {
+        Start-Process $Web
+        Show-Notice 'Cellar is already running. Opened the dashboard instead of starting a second instance.'
+        exit 0
+    }
+
+    Check-For-Updates -AllowApply
+
+    if ( -not $SkipSync -and (Test-Path -LiteralPath $syncScript) ) {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $syncScript `
+            -SourceRoot $AppleJackRoot -RuntimeRoot $RuntimeRoot
+        if ( $LASTEXITCODE -gt 7 ) {
+            throw "AppleJackRP runtime sync failed with robocopy exit code $LASTEXITCODE."
+        }
+    }
+
+    $process = Start-Process -FilePath $Cellar -ArgumentList @('-c', $Config, 'run') `
+        -WorkingDirectory (Split-Path -Parent $Cellar) -WindowStyle Hidden -PassThru
+
+    if ( -not (Wait-CellarWeb) ) {
+        $doctor = Invoke-Cellar @('doctor')
+        $details = if ( $doctor.Output ) { $doctor.Output } else { 'Cellar did not expose its health endpoint within 30 seconds.' }
+        throw "AppleJackRP did not start.`n`n$details"
+    }
+
+    $doctor = Invoke-Cellar @('doctor')
+    if ( $doctor.ExitCode -ne 0 ) {
+        Show-Notice "Cellar started, but its health check found a problem.`n`n$($doctor.Output)" 'AppleJackRP needs attention'
+    }
+
+    if ( -not $NoTray -and (Test-Path -LiteralPath $trayScript) ) {
+        Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $trayScript,
+            '-Cellar', $Cellar, '-Config', $Config, '-Web', $Web)
+    }
+
+    if ( $OpenDashboard ) {
+        Start-Sleep -Milliseconds 750
+        Start-Process $Web
+    }
+
+    Write-Output "AppleJackRP Cellar started with process id $($process.Id)."
+} catch {
+    $message = ($_ | Out-String).Trim()
+    try {
+        Show-Notice $message 'AppleJackRP cannot start'
+    } catch {
+        Write-Error $message
+    }
+    exit 1
 }
-
-$doctor = Invoke-Cellar @('doctor')
-if ( $doctor.ExitCode -ne 0 ) {
-    Show-Notice "Cellar doctor found a problem.`n`n$($doctor.Output)" 'AppleJackRP cannot start'
-    exit $doctor.ExitCode
-}
-
-$process = Start-Process -FilePath $Cellar -ArgumentList @('-c', $Config, 'run') `
-    -WorkingDirectory (Split-Path -Parent $Cellar) -WindowStyle Hidden -PassThru
-
-if ( -not $NoTray -and (Test-Path -LiteralPath $trayScript) ) {
-    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $trayScript,
-        '-Cellar', $Cellar, '-Config', $Config, '-Web', $Web)
-}
-
-if ( $OpenDashboard ) {
-    Start-Sleep -Milliseconds 750
-    Start-Process $Web
-}
-
-Write-Output "AppleJackRP Cellar started with process id $($process.Id)."

@@ -18,6 +18,8 @@ ready_pattern = "Lobby created - session is joinable"
 
 [database]
 enabled = true
+# Provision MariaDB once, then store the generated URL in this protected file.
+url_file = 'C:\ProgramData\Cellar\external-database.url'
 max_connections = 8
 schema_owner = "gamemode"
 migrate_on_start = false

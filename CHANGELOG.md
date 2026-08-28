@@ -4,13 +4,25 @@ All notable changes to Cellar are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-08-28
+
+### Fixed
+
+- **AppleJackRP's Windows shortcut now starts the server.** The launcher uses a
+  per-user config that reads the protected MariaDB URL file, validates the
+  profile before starting, waits for Cellar health, and runs `doctor` after
+  Cellar has started its managed database child.
+- **Startup failures are visible.** Native Cellar errors now reach the launcher
+  notice instead of being swallowed by a hidden PowerShell process.
+
 ## [0.1.8] - 2026-08-28
 
 ### Added
 
 - **AppleJackRP one-click Windows startup.** The launcher validates the
   configuration, syncs the checked-out gamemode into its external runtime,
-  runs `cellar doctor`, starts the supervised server, and opens the dashboard.
+  starts the supervised server, waits for health, runs `cellar doctor`, and
+  opens the dashboard.
 - **Desktop and tray integration.** The shortcut installer creates an
   AppleJackRP desktop shortcut, a startup tray shortcut, and uses the bundled
   Cellar AppleJackRP icon for both surfaces.

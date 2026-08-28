@@ -117,7 +117,7 @@ The public releases are available without a token. The installers and
 **Windows**
 
 ```powershell
-$version = 'v0.1.8'
+$version = 'v0.1.9'
 Invoke-WebRequest "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.ps1" -OutFile install-cellar.ps1
 Get-Content .\install-cellar.ps1
 .\install-cellar.ps1 -Version $version
@@ -127,7 +127,7 @@ Remove-Item .\install-cellar.ps1
 **Linux**
 
 ```sh
-version=v0.1.8
+version=v0.1.9
 curl -fsSLO "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.sh"
 less install.sh
 sh install.sh --version "$version"

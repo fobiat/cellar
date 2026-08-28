@@ -26,7 +26,8 @@ docs=(cellar.toml.example README.md CHANGELOG.md LICENSE-MIT)
 # ------------------------------------------------------------------- linux
 
 linux_bin="$root/target/release/cellar"
-if [ -x "$linux_bin" ]; then
+host_os="$(uname -s)"
+if [[ "$host_os" != MINGW* && "$host_os" != MSYS* && "$host_os" != CYGWIN* ]] && [ -x "$linux_bin" ]; then
     staging="$(mktemp -d)"
     trap 'rm -rf "$staging"' EXIT
 
@@ -55,7 +56,18 @@ if [ -f "$windows_bin" ]; then
 
     # zip, not tar: Windows expands a zip with no extra software, and
     # Expand-Archive is what install.ps1 calls.
-    ( cd "$staging" && zip -qr "$out/cellar-x86_64-pc-windows.zip" . )
+    windows_archive="$out/cellar-x86_64-pc-windows.zip"
+    if command -v zip >/dev/null 2>&1; then
+        ( cd "$staging" && zip -qr "$windows_archive" . )
+    elif command -v powershell.exe >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1; then
+        staging_win="$(cygpath -w "$staging")"
+        archive_win="$(cygpath -w "$windows_archive")"
+        powershell.exe -NoProfile -Command \
+            "Compress-Archive -Path '${staging_win}\\*' -DestinationPath '${archive_win}' -Force"
+    else
+        echo "no zip or PowerShell archive tool is available" >&2
+        exit 1
+    fi
     cp "$windows_bin" "$out/cellar-x86_64-pc-windows.exe"
 
     rm -rf "$staging"

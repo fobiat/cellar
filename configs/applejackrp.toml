@@ -1,4 +1,4 @@
-# Cellar v0.1.8 configuration for a local AppleJackRP Windows server.
+# Cellar v0.1.9 configuration for a local AppleJackRP Windows server.
 #
 # Copy this file to the machine's Cellar config location, then adjust the
 # engine and runtime paths when the project is not under the default Windows
