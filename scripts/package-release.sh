@@ -21,7 +21,7 @@ out="$root/dist/release"
 rm -rf "$out"
 mkdir -p "$out"
 
-docs=(cellar.toml.example README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE)
+docs=(cellar.toml.example README.md CHANGELOG.md LICENSE-MIT)
 
 # ------------------------------------------------------------------- linux
 

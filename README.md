@@ -117,7 +117,7 @@ The public releases are available without a token. The installers and
 **Windows**
 
 ```powershell
-$version = 'v0.1.7'
+$version = 'v0.1.8'
 Invoke-WebRequest "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.ps1" -OutFile install-cellar.ps1
 Get-Content .\install-cellar.ps1
 .\install-cellar.ps1 -Version $version
@@ -127,7 +127,7 @@ Remove-Item .\install-cellar.ps1
 **Linux**
 
 ```sh
-version=v0.1.7
+version=v0.1.8
 curl -fsSLO "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.sh"
 less install.sh
 sh install.sh --version "$version"
@@ -139,6 +139,33 @@ published SHA-256 before installing anything, and both refuse when no checksum
 was published. System-wide installs, service registration, Docker, Kubernetes
 and building from source are all in [Installation](docs/INSTALLATION.md).
 The AppleJackRP-specific setup is in [docs/APPLEJACKRP.md](docs/APPLEJACKRP.md).
+
+### AppleJackRP quick start on Windows
+
+Cellar can turn a checked-out AppleJackRP server into a desktop workflow. From
+the Cellar checkout, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-applejack-shortcut.ps1
+```
+
+That creates an `AppleJackRP` desktop shortcut and a tray shortcut that starts
+with Windows. The desktop launcher checks the config, syncs the gamemode into
+the external runtime, runs `cellar doctor`, starts the supervised server, and
+opens the dashboard. The tray menu gives you start, restart, stop, dashboard,
+and update-check controls without hunting for a terminal window.
+
+The useful part is the safety boundary: update checks are automatic, but an
+update asks first, and the launcher will not apply a game update while the
+server is running. Existing files are never overwritten when the config is
+created, so a local setup stays yours to review.
+
+Cellar is a good fit when you want a repeatable local server that survives
+crashes, exposes health and readiness checks, and remains easy to operate from
+a phone or desktop. It still expects you to install s&box and build the
+gamemode yourself. It does not replace deployment infrastructure, database
+migrations, or game-specific administration policy. Use
+`-NoStartup` with the installer when you want the desktop shortcut only.
 
 For an image or service, installation can be followed by an automatic
 configuration check and foreground run. The container image uses this flow by

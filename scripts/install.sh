@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Install Cellar on Linux.
 #
-#   version=v0.1.6
+#   version=v0.1.8
 #   curl -fsSLO "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.sh"
 #   less install.sh && sh install.sh --version "$version"
 #   rm install.sh

@@ -1,0 +1,154 @@
+[CmdletBinding()]
+param(
+    [string] $Cellar,
+    [string] $Config,
+    [string] $AppleJackRoot,
+    [string] $RuntimeRoot,
+    [string] $Web = 'http://127.0.0.1:8081/',
+    [switch] $CheckOnly,
+    [switch] $SkipSync,
+    [switch] $NoTray,
+    [switch] $OpenDashboard
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$script:RepoRoot = Split-Path -Parent $PSScriptRoot
+if ( [string]::IsNullOrWhiteSpace( $Cellar ) ) {
+    $Cellar = Join-Path $env:LOCALAPPDATA 'Programs\Cellar\cellar.exe'
+}
+if ( [string]::IsNullOrWhiteSpace( $Config ) ) {
+    $Config = Join-Path $env:ProgramData 'Cellar\cellar.toml'
+}
+if ( [string]::IsNullOrWhiteSpace( $AppleJackRoot ) ) {
+    $AppleJackRoot = Join-Path (Split-Path -Parent $script:RepoRoot) 'AppleJackRP-sandbox'
+}
+if ( [string]::IsNullOrWhiteSpace( $RuntimeRoot ) ) {
+    $RuntimeRoot = 'C:\AppleJackServer\applejackrp-runtime'
+}
+
+$template = Join-Path $script:RepoRoot 'configs\applejackrp.toml'
+$syncScript = Join-Path $AppleJackRoot 'tools\sync-cellar-runtime.ps1'
+$trayScript = Join-Path $PSScriptRoot 'Cellar-Tray.ps1'
+
+function Show-Notice([string] $Message, [string] $Title = 'AppleJackRP') {
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show(
+        $Message, $Title, 'OK', 'Information') | Out-Null
+}
+
+function Ensure-Config {
+    if ( Test-Path -LiteralPath $Config ) { return }
+    if ( -not ( Test-Path -LiteralPath $template ) ) {
+        throw "Cellar config not found at $Config and no AppleJackRP template exists at $template."
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Config) | Out-Null
+    Copy-Item -LiteralPath $template -Destination $Config
+    Show-Notice "Created $Config from the AppleJackRP template. Review its server paths before starting."
+}
+
+function Invoke-Cellar([string[]] $Arguments) {
+    $output = @(& $Cellar -c $Config @Arguments 2>&1)
+    [pscustomobject]@{
+        ExitCode = $LASTEXITCODE
+        Output = ($output -join [Environment]::NewLine)
+    }
+}
+
+function Test-CellarWeb {
+    try {
+        $response = Invoke-WebRequest -Uri ($Web.TrimEnd('/') + '/healthz') -UseBasicParsing -TimeoutSec 2
+        return $response.StatusCode -eq 200
+    } catch {
+        return $false
+    }
+}
+
+function Test-UpdateAvailable([string] $Output) {
+    return $Output -match '(?i)update is available|is available \(running|published\s+build .+available|remote\s+.+differs'
+}
+
+function Confirm-Update([string] $Label, [string] $CheckOutput, [string[]] $ApplyArguments) {
+    if ( -not ( Test-UpdateAvailable $CheckOutput ) ) { return }
+    Add-Type -AssemblyName System.Windows.Forms
+    $answer = [System.Windows.Forms.MessageBox]::Show(
+        "$Label update is available.`n`n$CheckOutput`n`nInstall it now?",
+        'AppleJackRP update available', 'YesNo', 'Question')
+    if ( $answer -ne [System.Windows.Forms.DialogResult]::Yes ) { return }
+
+    $result = Invoke-Cellar $ApplyArguments
+    if ( $result.ExitCode -ne 0 ) {
+        Show-Notice "$Label update failed.`n`n$($result.Output)" 'AppleJackRP update failed'
+        return
+    }
+    Show-Notice "$Label update completed.`n`n$($result.Output)"
+}
+
+function Check-For-Updates([switch] $AllowApply) {
+    $cellarCheck = Invoke-Cellar @('self-update', '--check')
+    if ( $cellarCheck.ExitCode -eq 0 ) {
+        if ( $AllowApply ) {
+            Confirm-Update 'Cellar' $cellarCheck.Output @('self-update')
+        } elseif ( Test-UpdateAvailable $cellarCheck.Output ) {
+            Show-Notice 'A Cellar update is available. Stop Cellar and launch AppleJackRP from the desktop to install it.'
+        }
+    }
+
+    $gameCheck = Invoke-Cellar @('update', '--check')
+    if ( $gameCheck.ExitCode -eq 0 ) {
+        if ( $AllowApply ) {
+            Confirm-Update 'AppleJackRP' $gameCheck.Output @('update', '--now')
+        } elseif ( Test-UpdateAvailable $gameCheck.Output ) {
+            Show-Notice 'An AppleJackRP update is available. Stop the server and launch AppleJackRP from the desktop to install it.'
+        }
+    }
+}
+
+Ensure-Config
+if ( -not (Test-Path -LiteralPath $Cellar) ) {
+    throw "Cellar executable not found at $Cellar. Install Cellar first or pass -Cellar."
+}
+
+if ( $CheckOnly ) {
+    Check-For-Updates
+    exit 0
+}
+
+if ( Test-CellarWeb ) {
+    Start-Process $Web
+    Show-Notice 'Cellar is already running. Opened the dashboard instead of starting a second instance.'
+    exit 0
+}
+
+Check-For-Updates -AllowApply
+
+if ( -not $SkipSync -and (Test-Path -LiteralPath $syncScript) ) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $syncScript `
+        -SourceRoot $AppleJackRoot -RuntimeRoot $RuntimeRoot
+    if ( $LASTEXITCODE -gt 7 ) {
+        throw "AppleJackRP runtime sync failed with robocopy exit code $LASTEXITCODE."
+    }
+}
+
+$doctor = Invoke-Cellar @('doctor')
+if ( $doctor.ExitCode -ne 0 ) {
+    Show-Notice "Cellar doctor found a problem.`n`n$($doctor.Output)" 'AppleJackRP cannot start'
+    exit $doctor.ExitCode
+}
+
+$process = Start-Process -FilePath $Cellar -ArgumentList @('-c', $Config, 'run') `
+    -WorkingDirectory (Split-Path -Parent $Cellar) -WindowStyle Hidden -PassThru
+
+if ( -not $NoTray -and (Test-Path -LiteralPath $trayScript) ) {
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $trayScript,
+        '-Cellar', $Cellar, '-Config', $Config, '-Web', $Web)
+}
+
+if ( $OpenDashboard ) {
+    Start-Sleep -Milliseconds 750
+    Start-Process $Web
+}
+
+Write-Output "AppleJackRP Cellar started with process id $($process.Id)."

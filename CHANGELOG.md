@@ -4,6 +4,28 @@ All notable changes to Cellar are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-08-28
+
+### Added
+
+- **AppleJackRP one-click Windows startup.** The launcher validates the
+  configuration, syncs the checked-out gamemode into its external runtime,
+  runs `cellar doctor`, starts the supervised server, and opens the dashboard.
+- **Desktop and tray integration.** The shortcut installer creates an
+  AppleJackRP desktop shortcut, a startup tray shortcut, and uses the bundled
+  Cellar AppleJackRP icon for both surfaces.
+- **Prompted update checks.** The launcher checks Cellar and AppleJackRP
+  updates automatically, asks before applying either one, and refuses to apply
+  a game update while the server is running.
+- **Feature planning research.** Added a ten-item, source-backed AppleJackRP
+  feature opportunity report covering onboarding, property controls, stats,
+  presence, input, performance, notifications, and seasonal rankings.
+
+### Fixed
+
+- **Release packaging no longer names a missing license file.** Archives now
+  contain the license that is actually present in the repository.
+
 ## [0.1.7] - 2026-08-27
 
 ### Added

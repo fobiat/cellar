@@ -45,3 +45,23 @@ the public profile beside the active config before starting Cellar.
 AppleJackRP no longer has a repository-owned server entrypoint, Docker image,
 hosted API, or Windows supervisor. Do not launch `sbox-server.exe` directly:
 doing so skips Cellar's bridge document, graceful shutdown and restart policy.
+
+## Windows one-click startup
+
+From a Cellar checkout, run:
+
+```powershell
+.\scripts\install-applejack-shortcut.ps1
+```
+
+This creates `AppleJackRP.lnk` on the desktop and starts the Cellar tray icon at
+login. The desktop shortcut syncs the AppleJackRP checkout to the external
+runtime, runs `cellar doctor`, checks both Cellar and AppleJackRP for updates,
+asks before installing either update, and then starts Cellar. The tray menu
+opens the dashboard and provides start, stop, restart, status, and update
+checks. Pass `-NoStartup` if the login tray shortcut is not wanted.
+
+The launcher keeps update policy opt-in: a failed or declined update never
+prevents an offline local start, while a failed `doctor` check stops startup
+with the diagnostic message. Update application remains protected by Cellar's
+empty-server and checksum checks.
