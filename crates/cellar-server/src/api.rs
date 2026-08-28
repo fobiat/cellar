@@ -16,6 +16,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
+use cellar_core::lifecycle::RestartPolicy;
+
 use crate::session::{ExternalApi, Operator};
 use crate::state::AppState;
 
@@ -739,12 +741,21 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         .ok()
         .map(|(features, _)| feature_enabled(&features, "admin.inviteonly"));
     let mode = active_config
+        .as_ref()
         .map(|config| {
             if config.server.game.is_some() {
                 "published"
             } else {
                 "development"
             }
+        })
+        .unwrap_or("unknown");
+    let restart_policy = active_config
+        .as_ref()
+        .map(|config| match config.supervisor.restart {
+            RestartPolicy::Never => "never",
+            RestartPolicy::Always => "always",
+            RestartPolicy::OnFailure => "on_failure",
         })
         .unwrap_or("unknown");
 
@@ -766,6 +777,10 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         "game": configured_game,
         "mode": mode,
         "scope": state.scope,
+        "supervisor": {
+            "restart_policy": restart_policy,
+            "auto_restart_on_crash": matches!(restart_policy, "always" | "on_failure"),
+        },
         "addresses": addresses,
         "access": { "invite_only": invite_only },
         "anti_cheat": anti_cheat,

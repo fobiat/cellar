@@ -383,10 +383,14 @@ async function refreshStatus() {
   const game = data.game || "gamemode unknown";
   const profile = data.scope || "profile unknown";
   const mode = data.mode || "mode unknown";
-  const modeLabel = mode === "development" ? "Development" : mode === "published" ? "Published" : mode;
+  const modeLabel = mode === "development" ? "LIVE - DEVELOPMENT" : mode === "published" ? "LIVE - PUBLISHED" : mode;
+  const supervisor = data.supervisor || {};
+  const restartLabel = supervisor.auto_restart_on_crash ? "AUTO-RESTART ON CRASH" : "MANUAL RESTART";
 
   $("#header-profile").textContent = `${text(modeLabel)} · ${text(game)} · ${text(profile)}`;
   $("#header-profile").title = `Mode: ${text(modeLabel)}, gamemode: ${text(game)}, profile: ${text(profile)}`;
+  $("#header-restart").textContent = restartLabel;
+  $("#header-restart").title = `Supervisor policy: ${text(supervisor.restart_policy || "unknown")}`;
 
   const cellar = data.cellar || {};
   const cellarVersion = text(cellar.version || "unknown").replace(/^v/, "");

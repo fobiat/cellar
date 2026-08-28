@@ -53,6 +53,9 @@ for the full commit. The Configs tab has explicit Use Development mode and Use
 Published mode actions. Development mode is the local `.sbproj` path and the
 watcher-backed sync/restart loop. Published mode is the `sbox.game` package and
 does not use local source hot reload.
+Both modes use `restart = "on_failure"`, so a crashed s&box process is retried
+with exponential backoff. Five failures inside the crash window stops the loop
+and leaves a visible crash-loop state for investigation.
 
 The checked-in published profiles run the published
 package with `thieves.rpdowntown3t`, so the s&box lobby can resolve the game and

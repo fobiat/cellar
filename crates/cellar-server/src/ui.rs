@@ -252,7 +252,10 @@ mod tests {
         assert!(!page.contains("/*APP*/"));
         assert!(page.contains(AUTH_SLOT));
         assert!(page.contains("id=\"header-profile\""));
+        assert!(page.contains("id=\"header-restart\""));
         assert!(page.contains("id=\"header-build\""));
+        assert!(page.contains("LIVE - DEVELOPMENT"));
+        assert!(page.contains("AUTO-RESTART ON CRASH"));
         assert!(page.contains("id=\"config-mode-actions\""));
         assert!(page.contains("Development mode"));
         assert!(page.contains("Published mode"));

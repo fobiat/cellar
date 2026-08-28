@@ -14,6 +14,19 @@ port = 27015
 query_port = 27016
 ready_pattern = "Lobby created - session is joinable"
 
+[supervisor]
+restart = "on_failure"
+graceful_timeout_seconds = 30
+sample_interval_seconds = 2
+
+[supervisor.backoff]
+initial = 2
+maximum = 120
+multiplier = 2.0
+crash_loop_threshold = 5
+window = 300
+healthy_after = 60
+
 [database]
 enabled = true
 url_file = '/etc/cellar/external-database.url'

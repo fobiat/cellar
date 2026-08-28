@@ -14,7 +14,7 @@ built `.sbproj`). Cellar supervises that; it does not install the game server.
 **Windows** (PowerShell, pinned bootstrap):
 
 ```powershell
-$version = 'v0.1.12'
+$version = 'v0.1.13'
 Invoke-WebRequest "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.ps1" -OutFile install-cellar.ps1
 Get-Content .\install-cellar.ps1
 .\install-cellar.ps1 -Version $version
@@ -24,7 +24,7 @@ Remove-Item .\install-cellar.ps1
 **Linux** (pinned bootstrap):
 
 ```sh
-version=v0.1.12
+version=v0.1.13
 curl -fsSLO "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.sh"
 less install.sh
 sh install.sh --version "$version"
@@ -51,7 +51,7 @@ Cellar reads `cellar.toml` from the working directory unless you pass
 setup, start from the shipped example, which is commented throughout:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/fobiat/cellar/v0.1.12/cellar.toml.example
+curl -fsSLO https://raw.githubusercontent.com/fobiat/cellar/v0.1.13/cellar.toml.example
 cp cellar.toml.example cellar.toml
 ```
 
