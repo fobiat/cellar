@@ -159,6 +159,12 @@ pub struct ResourceSample {
     pub at: DateTime<Utc>,
     /// Percent of one core, so a four-thread server reads above 100.
     pub cpu_percent: f32,
+    /// Process-tree CPU normalized across all logical host cores.
+    #[serde(default)]
+    pub cpu_percent_all_cores: f32,
+    /// Logical host cores used to normalize process CPU.
+    #[serde(default)]
+    pub cpu_core_count: usize,
     pub memory_bytes: u64,
     pub process_count: usize,
     /// Host-wide CPU percentage, normalized to the whole machine.

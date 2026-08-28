@@ -380,6 +380,17 @@ async function refreshStatus() {
 
   const server = data.server;
   const bridge = data.bridge;
+  const game = data.game || "gamemode unknown";
+  const profile = data.scope || "profile unknown";
+
+  $("#header-profile").textContent = `${text(game)} · ${text(profile)}`;
+  $("#header-profile").title = `Gamemode: ${text(game)}, profile: ${text(profile)}`;
+
+  const cellar = data.cellar || {};
+  const cellarVersion = text(cellar.version || "unknown").replace(/^v/, "");
+  const cellarCommit = text(cellar.commit || "unknown");
+  $("#header-build").textContent = `Cellar v${cellarVersion} · ${cellarCommit.slice(0, 8)}`;
+  $("#header-build").title = `Cellar v${cellarVersion}, build commit ${cellarCommit}`;
 
   if (!server) {
     setLamp($("#stat-state"), "down", "no server");
@@ -399,20 +410,27 @@ async function refreshStatus() {
 
     if (server.resources) {
       $("#stat-memory").textContent = formatBytes(server.resources.memory_bytes);
-      $("#stat-cpu").textContent = `${server.resources.cpu_percent.toFixed(0)}%`;
-      cpuHistory.push(server.resources.cpu_percent);
+      const processCpu = processCpuAverage(server.resources);
+      $("#stat-cpu").textContent = `${Math.max(0, Math.min(100, processCpu)).toFixed(0)}%`;
+      cpuHistory.push(processCpu);
       if (cpuHistory.length > 120) cpuHistory.shift();
       drawSpark($("#spark-cpu"), cpuHistory);
       resourceHistory = server.resource_history || [server.resources];
       const latest = server.resources;
-      $("#metric-process-cpu").textContent = `${latest.cpu_percent.toFixed(1)}%`;
-      $("#metric-host-cpu").textContent = `${latest.host_cpu_percent.toFixed(1)}%`;
+      $("#metric-process-cpu").textContent = percent(processCpuAverage(latest));
+      $("#metric-process-cpu-raw").textContent = `${Number(latest.cpu_percent || 0).toFixed(1)}%`;
+      $("#metric-cpu-cores").textContent = text(latest.cpu_core_count || "unknown");
+      $("#metric-host-cpu").textContent = percent(latest.host_cpu_percent);
       $("#metric-process-memory").textContent = formatBytes(latest.memory_bytes);
-      $("#metric-host-memory").textContent = `${latest.host_memory_percent.toFixed(1)}%`;
+      $("#metric-host-memory").textContent = percent(latest.host_memory_percent);
+      $("#metric-process-count").textContent = text(latest.process_count || 0);
       $("#metric-network-in").textContent = `${formatBytes(latest.network_rx_bytes_per_sec)}/s`;
       $("#metric-network-out").textContent = `${formatBytes(latest.network_tx_bytes_per_sec)}/s`;
-      drawSeries($("#spark-resources"), resourceHistory.map((sample) => sample.host_cpu_percent), 100);
-      $("#telemetry-state").textContent = `${resourceHistory.length} samples · updates every 2s · process CPU is per-core`;
+      drawPercentChart($("#spark-resources"), [
+        { values: resourceHistory.map(processCpuAverage), className: "chart-process" },
+        { values: resourceHistory.map((sample) => sample.host_cpu_percent), className: "chart-host" },
+      ]);
+      $("#telemetry-state").textContent = `${resourceHistory.length} samples · updates every 2s · process CPU avg across ${latest.cpu_core_count || "unknown"} logical cores`;
     }
 
     renderRoster(server.players);
@@ -431,7 +449,9 @@ async function refreshStatus() {
   $("#bridge-error").textContent = text(bridge.last_error);
 
   const mariadb = data.mariadb;
-  if (!mariadb) {
+  if (data.database) {
+    setLamp($("#stat-mariadb"), "up", "connected");
+  } else if (!mariadb) {
     setLamp($("#stat-mariadb"), "wait", "off");
   } else {
     const lamps = { running: "up", starting: "wait", stopping: "wait", backoff: "wait" };
@@ -439,8 +459,7 @@ async function refreshStatus() {
   }
 
   const health = data.health || {};
-  setLamp($("#stat-map"), health.map && health.spawn_validation ? "up" : "down",
-    health.map && health.spawn_validation ? "validated" : "check needed");
+  setLamp($("#stat-map"), health.map ? "up" : "down", health.map ? "loaded" : "check needed");
   renderAddresses(data.addresses);
   renderAntiCheat(data.anti_cheat);
   renderWebAuth(data.web_auth);
@@ -928,6 +947,18 @@ function formatBytes(bytes) {
   return unit === 0 ? `${value} B` : `${value.toFixed(1)} ${units[unit]}`;
 }
 
+function processCpuAverage(sample) {
+  const normalized = Number(sample.cpu_percent_all_cores);
+  if (Number.isFinite(normalized)) return normalized;
+  const raw = Number(sample.cpu_percent) || 0;
+  const cores = Math.max(1, Number(sample.cpu_core_count) || 1);
+  return raw / cores;
+}
+
+function percent(value) {
+  return `${Math.max(0, Math.min(100, Number(value) || 0)).toFixed(1)}%`;
+}
+
 function formatDuration(seconds) {
   seconds = Number(seconds) || 0;
   const hours = Math.floor(seconds / 3600);
@@ -941,46 +972,55 @@ const formatUptime = (iso) =>
   iso ? formatDuration(Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000)) : "—";
 
 function drawSpark(svg, values) {
-  svg.replaceChildren();
-  if (values.length < 2) return;
-
-  const width = svg.clientWidth || 300;
-  const height = 40;
-  const peak = Math.max(100, ...values);
-
-  const points = values
-    .map((value, index) => {
-      const x = (index / (values.length - 1)) * width;
-      const y = height - (value / peak) * (height - 4) - 2;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
-
-  const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-  line.setAttribute("points", points);
-  line.setAttribute("fill", "none");
-  line.setAttribute("stroke", "currentColor");
-  line.setAttribute("stroke-width", "1.5");
-  svg.append(line);
+  drawPercentChart(svg, [{ values, className: "chart-process" }], true);
 }
 
-function drawSeries(svg, values, floor = 0) {
+function drawPercentChart(svg, series, compact = false) {
   svg.replaceChildren();
-  if (values.length < 2) return;
-  const width = svg.clientWidth || 600;
-  const height = 130;
-  const peak = Math.max(floor, ...values, 1);
-  const points = values.map((value, index) => {
-    const x = (index / (values.length - 1)) * width;
-    const y = height - (value / peak) * (height - 8) - 4;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(" ");
-  const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-  line.setAttribute("points", points);
-  line.setAttribute("fill", "none");
-  line.setAttribute("stroke", "currentColor");
-  line.setAttribute("stroke-width", "2");
-  svg.append(line);
+  const view = svg.viewBox.baseVal;
+  const width = view.width || (compact ? 320 : 640);
+  const height = view.height || (compact ? 64 : 154);
+  const left = compact ? 24 : 32;
+  const right = width - 4;
+  const top = 7;
+  const bottom = height - (compact ? 10 : 13);
+  const chartHeight = bottom - top;
+  const ns = "http://www.w3.org/2000/svg";
+
+  for (const value of [0, 25, 50, 75, 100]) {
+    const y = bottom - (value / 100) * chartHeight;
+    const grid = document.createElementNS(ns, "line");
+    grid.setAttribute("x1", left);
+    grid.setAttribute("x2", right);
+    grid.setAttribute("y1", y.toFixed(1));
+    grid.setAttribute("y2", y.toFixed(1));
+    grid.setAttribute("class", "chart-grid");
+    svg.append(grid);
+    if (value === 0 || value === 50 || value === 100) {
+      const label = document.createElementNS(ns, "text");
+      label.setAttribute("x", "1");
+      label.setAttribute("y", (y + 3).toFixed(1));
+      label.setAttribute("class", "chart-label");
+      label.textContent = `${value}%`;
+      svg.append(label);
+    }
+  }
+
+  for (const item of series) {
+    if (item.values.length < 2) continue;
+    const points = item.values.map((value, index) => {
+      const x = left + (index / (item.values.length - 1)) * (right - left);
+      const bounded = Math.max(0, Math.min(100, Number(value) || 0));
+      const y = bottom - (bounded / 100) * chartHeight;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+    const line = document.createElementNS(ns, "polyline");
+    line.setAttribute("points", points);
+    line.setAttribute("fill", "none");
+    line.setAttribute("class", item.className || "chart-process");
+    line.setAttribute("stroke-width", compact ? "1.5" : "2");
+    svg.append(line);
+  }
 }
 
 /* ---- sign in ------------------------------------------------------------ */
@@ -1017,6 +1057,7 @@ function start() {
   loadLogs();
   connect();
   refreshStatus();
+  loadReleases();
   refreshBuildHealth();
   setInterval(() => {
     refreshStatus();

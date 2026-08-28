@@ -69,6 +69,18 @@ a { color: var(--aj-azure); }
   text-transform: uppercase;
 }
 
+.header-meta {
+  color: var(--aj-text-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  opacity: 0.7;
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .masthead .spacer { flex: 1; }
 
 .connection { white-space: nowrap; font-size: 11px; }
@@ -379,8 +391,16 @@ button.action.danger:hover { background: color-mix(in srgb, var(--aj-russet) 16%
 
 /* ---- sparkline ---------------------------------------------------------- */
 
-.spark { width: 100%; height: 40px; display: block; }
-.spark.large { height: 130px; color: var(--aj-azure); background: color-mix(in srgb, var(--aj-ink) 70%, transparent); }
+.spark { width: 100%; height: 64px; display: block; }
+.spark.large { height: 154px; color: var(--aj-azure); background: color-mix(in srgb, var(--aj-ink) 70%, transparent); }
+.chart-grid { stroke: color-mix(in srgb, var(--aj-frost) 25%, transparent); stroke-width: 1; }
+.chart-label { fill: var(--aj-text-muted); font-size: 8px; }
+.chart-process { stroke: var(--aj-azure); }
+.chart-host { stroke: var(--aj-orchard); }
+.chart-legend { display: flex; gap: 12px; margin: 10px 0 4px 32px; color: var(--aj-text-muted); font-size: 11px; }
+.chart-key::before { content: ""; display: inline-block; width: 9px; height: 2px; margin: 0 5px 3px 0; background: currentColor; }
+.chart-key-process { color: var(--aj-azure); }
+.chart-key-host { color: var(--aj-orchard); }
 
 /* ---- login -------------------------------------------------------------- */
 
@@ -418,6 +438,7 @@ button.action.danger:hover { background: color-mix(in srgb, var(--aj-russet) 16%
   body { font-size: 13px; }
   .masthead { gap: 9px; padding: 11px 12px; }
   .masthead .tagline { display: none; }
+  .masthead .header-meta { display: none; }
   .masthead .action { padding: 7px 9px; }
   .wordmark { letter-spacing: 0.2em; }
   .connection { display: none; }

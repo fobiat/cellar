@@ -133,6 +133,20 @@ async fn metrics(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response
             resources.cpu_percent,
             &[("scope", scope.as_str())],
         );
+        gauge_float(
+            &mut output,
+            "cellar_process_cpu_all_cores_percent",
+            "Supervised process tree CPU normalized across all logical cores",
+            resources.cpu_percent_all_cores,
+            &[("scope", scope.as_str())],
+        );
+        gauge(
+            &mut output,
+            "cellar_cpu_core_count",
+            "Logical host CPU cores used for normalization",
+            resources.cpu_core_count,
+            &[("scope", scope.as_str())],
+        );
         gauge(
             &mut output,
             "cellar_process_memory_bytes",
@@ -723,6 +737,11 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
             "spawn_validation": spawn_validation,
             "console": state.log_file.as_ref().is_some_and(|path| path.exists()),
         },
+        "cellar": {
+            "version": env!("CARGO_PKG_VERSION"),
+            "commit": option_env!("CELLAR_BUILD_COMMIT").unwrap_or("unknown"),
+        },
+        "game": state.configured_game,
         "scope": state.scope,
         "addresses": addresses,
         "access": { "invite_only": invite_only },

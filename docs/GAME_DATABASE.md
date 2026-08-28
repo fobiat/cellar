@@ -65,7 +65,8 @@ The web UI Database panel provides:
 
 Cellar exposes the current operational metrics in Prometheus text format at
 `/metrics`. It includes server state, players, uptime, restarts, parser health,
-process and host CPU/memory, network rates, bridge counters, and database
+raw and all-core-normalized process CPU, logical CPU count, host CPU/memory,
+network rates, bridge counters, and database
 connectivity. It also labels the configured database source as `managed`,
 `external`, or `disabled`. Protect the endpoint with the read-only bearer token:
 

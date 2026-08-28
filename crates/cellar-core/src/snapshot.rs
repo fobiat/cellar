@@ -368,6 +368,8 @@ mod tests {
                 &Event::Resources(ResourceSample {
                     at: now(),
                     cpu_percent: 1.0,
+                    cpu_percent_all_cores: 0.5,
+                    cpu_core_count: 2,
                     memory_bytes: 1,
                     process_count: 1,
                     host_cpu_percent: 1.0,

@@ -41,6 +41,9 @@ managed database as well as the server configuration.
 
 The dashboard is at `http://127.0.0.1:8081`. Use `/readyz` for the game-server
 readiness probe and `/healthz` for the Cellar process liveness probe.
+The dashboard header keeps a compact record of the active profile, installed
+Cellar version, and AppleJackRP commit; hover the muted build marker for the
+full commit.
 
 The checked-in `configs/applejackrp-public.toml` profile runs the published
 package with `thieves.rpdowntown3t`, so the s&box lobby can resolve the game and

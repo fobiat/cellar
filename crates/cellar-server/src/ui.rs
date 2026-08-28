@@ -251,6 +251,8 @@ mod tests {
         assert!(!page.contains("/*STYLE*/"));
         assert!(!page.contains("/*APP*/"));
         assert!(page.contains(AUTH_SLOT));
+        assert!(page.contains("id=\"header-profile\""));
+        assert!(page.contains("id=\"header-build\""));
     }
 
     #[test]

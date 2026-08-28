@@ -4,6 +4,27 @@ All notable changes to Cellar are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.10] - 2026-08-28
+
+### Added
+
+- **Build identity in the dashboard header.** The compact header now shows the
+  installed Cellar version, the active profile scope, and the current
+  AppleJackRP commit. Hover the muted metadata for the full commit value.
+- **Normalized CPU telemetry.** The header now reports process CPU averaged
+  across all logical cores. Monitoring keeps the raw per-core total, the
+  normalized average, core count, process count, host CPU, memory, and network
+  rates, with 0 to 100% grid scales on the CPU charts.
+
+### Fixed
+
+- **The AppleJackRP tray returns when it is missing.** Clicking the desktop
+  shortcut while Cellar is already healthy now recreates the tray process, and
+  repeated starts do not create duplicate tray processes.
+- **Settings put features first.** The Features panel now appears above the
+  export and import controls so the live gameplay switches are immediately
+  visible when Settings opens.
+
 ## [0.1.9] - 2026-08-28
 
 ### Fixed

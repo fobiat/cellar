@@ -39,6 +39,8 @@
     <span class="mark">★</span>
     <span class="wordmark">C E L L A R</span>
     <span class="tagline">server control</span>
+    <span class="header-meta" id="header-profile" title="Active document and database scope">profile loading</span>
+    <span class="header-meta" id="header-build" title="Installed Cellar and AppleJackRP build">build loading</span>
     <span class="spacer"></span>
     <span class="connection lamp wait" id="connection-state">connecting</span>
     <button class="action" id="notification-toggle" type="button">Enable alerts</button>
@@ -139,7 +141,7 @@
         <div class="panel">
           <h2>Load</h2>
           <div class="body">
-            <svg class="spark live" id="spark-cpu" viewBox="0 0 300 40" preserveAspectRatio="none"></svg>
+            <svg class="spark live" id="spark-cpu" viewBox="0 0 320 64" preserveAspectRatio="none" role="img" aria-label="Average process CPU over time"></svg>
             <p class="muted small">CPU across the whole process tree. Under Wine that is the wine
             process and sbox-server.exe beneath it.</p>
           </div>
@@ -157,14 +159,21 @@
           <h2>Resource telemetry</h2>
           <div class="body">
             <div class="metric-grid">
-              <div><span class="muted small">process CPU</span><strong id="metric-process-cpu">—</strong></div>
+              <div><span class="muted small">process CPU avg</span><strong id="metric-process-cpu">—</strong></div>
+              <div><span class="muted small">process CPU raw</span><strong id="metric-process-cpu-raw">—</strong></div>
+              <div><span class="muted small">logical cores</span><strong id="metric-cpu-cores">—</strong></div>
               <div><span class="muted small">host CPU</span><strong id="metric-host-cpu">—</strong></div>
               <div><span class="muted small">process memory</span><strong id="metric-process-memory">—</strong></div>
               <div><span class="muted small">host memory</span><strong id="metric-host-memory">—</strong></div>
+              <div><span class="muted small">processes</span><strong id="metric-process-count">—</strong></div>
               <div><span class="muted small">network in</span><strong id="metric-network-in">—</strong></div>
               <div><span class="muted small">network out</span><strong id="metric-network-out">—</strong></div>
             </div>
-            <svg class="spark large" id="spark-resources" viewBox="0 0 600 130" preserveAspectRatio="none"></svg>
+            <div class="chart-legend" aria-label="CPU chart legend">
+              <span class="chart-key chart-key-process">process CPU avg</span>
+              <span class="chart-key chart-key-host">host CPU</span>
+            </div>
+            <svg class="spark large" id="spark-resources" viewBox="0 0 640 154" preserveAspectRatio="none" role="img" aria-label="Process and host CPU over time"></svg>
             <p class="muted small" id="telemetry-state">Waiting for resource samples.</p>
           </div>
         </div>
@@ -288,7 +297,18 @@
         </div>
       </div>
       <div class="panel">
-        <h2>Export</h2>
+        <h2>Features</h2>
+        <div class="body scroll">
+          <div class="table-tools"><input type="search" id="feature-search" placeholder="search features…"><select id="feature-sort"><option value="0">sort name</option><option value="1">sort state</option></select></div>
+          <table>
+            <thead><tr><th>Feature</th><th>State</th><th>Class</th><th></th></tr></thead>
+            <tbody id="features"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Export and import</h2>
         <div class="body">
           <div class="row">
             <button class="chip" onclick="exportSettings('toml', false)">whole config, TOML</button>
@@ -309,17 +329,6 @@
             Apply a file elsewhere with <code>cellar settings apply &lt;file&gt;</code>.
           </p>
           <pre id="export" class="small" style="max-height:240px;overflow:auto"></pre>
-        </div>
-      </div>
-
-      <div class="panel">
-        <h2>Features</h2>
-        <div class="body scroll">
-          <div class="table-tools"><input type="search" id="feature-search" placeholder="search features…"><select id="feature-sort"><option value="0">sort name</option><option value="1">sort state</option></select></div>
-          <table>
-            <thead><tr><th>Feature</th><th>State</th><th>Class</th><th></th></tr></thead>
-            <tbody id="features"></tbody>
-          </table>
         </div>
       </div>
 

@@ -175,6 +175,8 @@ mod tests {
             Event::Resources(ResourceSample {
                 at: chrono::Utc::now(),
                 cpu_percent: 1.0,
+                cpu_percent_all_cores: 1.0,
+                cpu_core_count: 1,
                 memory_bytes: 1,
                 process_count: 1,
                 host_cpu_percent: 1.0,

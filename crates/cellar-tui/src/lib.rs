@@ -142,7 +142,12 @@ impl App {
                 }
             }
             Event::Resources(sample) => {
-                push_bounded(&mut self.cpu, sample.cpu_percent.max(0.0) as u64, 240);
+                let cpu = if sample.cpu_core_count > 0 {
+                    sample.cpu_percent_all_cores
+                } else {
+                    sample.cpu_percent
+                };
+                push_bounded(&mut self.cpu, cpu.max(0.0) as u64, 240);
                 push_bounded(&mut self.memory, sample.memory_bytes / (1024 * 1024), 240);
             }
             Event::CommandDispatched { .. } | Event::Status(_) | Event::BridgeHealth { .. } => {}
@@ -429,6 +434,8 @@ mod tests {
         app.apply(&Event::Resources(cellar_core::event::ResourceSample {
             at: chrono::Utc::now(),
             cpu_percent: 141.0,
+            cpu_percent_all_cores: 17.625,
+            cpu_core_count: 8,
             memory_bytes: 3 * 1024 * 1024 * 1024,
             process_count: 2,
             host_cpu_percent: 24.0,
@@ -437,7 +444,7 @@ mod tests {
             network_tx_bytes_per_sec: 0,
         }));
 
-        assert_eq!(app.cpu.back().copied(), Some(141));
+        assert_eq!(app.cpu.back().copied(), Some(17));
         assert_eq!(app.memory.back().copied(), Some(3072));
     }
 }

@@ -93,11 +93,15 @@ impl Sampler {
         } else {
             self.system.used_memory() as f32 * 100.0 / total_memory as f32
         };
+        let cpu_core_count = self.system.cpus().len().max(1);
+        let process_cpu_percent = if first { 0.0 } else { cpu_percent };
 
         Some(ResourceSample {
             at: chrono::Utc::now(),
             // A cpu percentage needs two refreshes to mean anything.
-            cpu_percent: if first { 0.0 } else { cpu_percent },
+            cpu_percent: process_cpu_percent,
+            cpu_percent_all_cores: process_cpu_percent / cpu_core_count as f32,
+            cpu_core_count,
             memory_bytes,
             process_count: members.len(),
             host_cpu_percent: if first {

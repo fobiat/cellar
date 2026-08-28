@@ -210,6 +210,7 @@ fn build_state(
     state.server_port = config.server.port;
     state.query_port = config.server.query_port;
     state.server_direct_connect = config.server.direct_connect;
+    state.configured_game = config.server.game.clone();
     state.configured_map = config.server.map.clone();
     state.game_data_dir = config
         .server

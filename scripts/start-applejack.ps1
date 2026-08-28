@@ -81,6 +81,16 @@ function Wait-CellarWeb([int] $TimeoutSeconds = 30) {
     return $false
 }
 
+function Ensure-CellarTray {
+    if ( $NoTray -or -not (Test-Path -LiteralPath $trayScript) ) { return }
+    $trayProcesses = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
+        Where-Object { $_.CommandLine -like '*Cellar-Tray.ps1*' })
+    if ( $trayProcesses.Count -gt 0 ) { return }
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $trayScript,
+        '-Cellar', $Cellar, '-Config', $Config, '-Web', $Web)
+}
+
 function Test-UpdateAvailable([string] $Output) {
     return $Output -match '(?i)update is available|is available \(running|published\s+build .+available|remote\s+.+differs'
 }
@@ -138,6 +148,7 @@ try {
     }
 
     if ( Test-CellarWeb ) {
+        Ensure-CellarTray
         Start-Process $Web
         Show-Notice 'Cellar is already running. Opened the dashboard instead of starting a second instance.'
         exit 0
@@ -167,11 +178,7 @@ try {
         Show-Notice "Cellar started, but its health check found a problem.`n`n$($doctor.Output)" 'AppleJackRP needs attention'
     }
 
-    if ( -not $NoTray -and (Test-Path -LiteralPath $trayScript) ) {
-        Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
-            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $trayScript,
-            '-Cellar', $Cellar, '-Config', $Config, '-Web', $Web)
-    }
+    Ensure-CellarTray
 
     if ( $OpenDashboard ) {
         Start-Sleep -Milliseconds 750
