@@ -90,12 +90,14 @@ requires editing or replacing its config first. The installer places
 development and published Windows profiles beside the per-user config so the
 web UI can switch modes at runtime.
 
-Cellar releases can also attach an AppleJackRP release bundle. It contains the
-checked-out `.sbproj`, game source and assets, generated build identity, and
-both gamemode changelogs. Configure the Cellar repository secret
+The Cellar release workflow can also package an AppleJackRP release bundle. It
+contains the checked-out `.sbproj`, game source and assets, generated build
+identity, and both gamemode changelogs. Because AppleJackRP is private, the
+bundle is retained as a private GitHub Actions artifact and is never attached
+to Cellar's public release. Configure the Cellar repository secret
 `APPLEJACK_RELEASE_TOKEN` with read access to the private AppleJackRP repository
-to enable that release asset. Publishing the compiled package to `sbox.game`
-still requires the s&box editor's package workflow.
+to enable that artifact. Publishing the compiled package to `sbox.game` still
+requires the s&box editor's package workflow.
 
 The launcher keeps update policy opt-in: a failed or declined update never
 prevents an offline local start. An invalid config stops startup with a visible

@@ -4,6 +4,13 @@ All notable changes to Cellar are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.12] - 2026-08-28
+
+### Fixed
+
+- Keep private AppleJackRP source bundles in GitHub Actions artifacts instead
+  of attaching them to Cellar's public release assets.
+
 ## [0.1.11] - 2026-08-28
 
 ### Added
@@ -15,10 +22,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Platform-specific AppleJackRP profiles.** Local and published Windows and
   Linux under-Wine profiles keep executable, project, data, log, database, and
   backup paths explicit.
-- **Coordinated gamemode release bundles.** Releases can attach an
+- **Coordinated gamemode release bundles.** The release workflow can package an
   AppleJackRP source/build bundle with its generated build identity,
-  `CHANGELOG.md`, and `GAMEMODE_CHANGELOG.md` when the private repository token
-  is configured.
+  `CHANGELOG.md`, and `GAMEMODE_CHANGELOG.md` as a private Actions artifact when
+  the private repository token is configured.
 
 ## [0.1.10] - 2026-08-28
 

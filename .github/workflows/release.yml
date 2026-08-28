@@ -60,6 +60,8 @@ jobs:
         if: steps.credentials.outputs.present == 'true'
         run: .\scripts\package-applejack-release.ps1 -AppleJackRoot .\applejackrp -OutputDirectory .\dist\gamemode -Version '${{ inputs.tag || github.ref_name }}'
 
+      # AppleJackRP is private. Keep its source bundle inside the private
+      # Actions artifact store and never copy it into Cellar's public release.
       - uses: actions/upload-artifact@v4
         if: steps.credentials.outputs.present == 'true'
         with:
@@ -97,13 +99,6 @@ jobs:
       # The script is the same one used by hand, so the two cannot drift.
       - name: package
         run: ./scripts/package-release.sh
-
-      - name: add AppleJackRP release bundle
-        if: needs.gamemode-release.outputs.available == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: applejackrp-release
-          path: dist/release
 
       # Both installers and self-update refuse anything whose checksum was not
       # published. Better to fail the release than to publish something nobody
