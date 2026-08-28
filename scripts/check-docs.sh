@@ -47,11 +47,13 @@ check_links() {
 
 # House style: no em dashes anywhere, in prose or in code comments.
 #
-# The character is built from its escape rather than written literally, so this
-# file does not match its own check.
+# The character is built from its bytes rather than written literally, so this
+# file does not match its own check. Not '\u2014': printf only expands that in
+# a shell whose builtin supports it, and Git Bash emits the escape text instead,
+# so the check matched this very line and never looked for an em dash at all.
 check_em_dashes() {
     local hits em_dash
-    em_dash=$(printf '\u2014')
+    em_dash=$(printf '\xe2\x80\x94')
     hits=$(grep -rn "$em_dash" --include='*.md' --include='*.rs' --include='*.sh' \
         --include='*.ps1' --include='*.toml' . 2>/dev/null \
         | grep -v '^./target/' || true)

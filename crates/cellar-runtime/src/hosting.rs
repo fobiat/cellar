@@ -28,7 +28,9 @@ pub struct HostingDocument {
     pub bridge_url: String,
     #[serde(rename = "authAudience")]
     pub auth_audience: String,
-    #[serde(rename = "apiKey", skip_serializing_if = "String::is_empty")]
+    /// `default` pairs with `skip_serializing_if`: without it a document written
+    /// with an empty key has no `apiKey` at all, and reading it back fails.
+    #[serde(rename = "apiKey", default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
 }
 
