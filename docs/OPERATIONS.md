@@ -196,6 +196,44 @@ tracking "latest". After bumping the version, run `cellar mariadb provision`
 again; a major version jump against an existing data directory may also need
 `mariadb-upgrade` run once by hand, which Cellar does not automate.
 
+### Taking a new gamemode build: the runbook
+
+The updater automates the middle of this. The edges stay an operator's job,
+and the order is the point:
+
+1. **Back up first.** `applejack_storage_backup` at the console copies every
+   game document, journal included, in seconds and destroys nothing. If the
+   bridge is on, dump the database too (see [Backups](#backups)). The game
+   migrates its documents forward on the next boot and never backward, so the
+   backup taken before the upgrade is the only way to run the old build again
+   with its old data.
+2. **Stop gracefully.** `cellar update --now` does this itself: `quit` at the
+   console, wait out `supervisor.graceful_timeout_seconds`, update, start
+   again. Stopping by hand from the dashboard first is equivalent. Never kill
+   the process; the engine has no SIGTERM handler, so a kill skips the convar
+   save and the Steam logoff.
+3. **Update.** Development mode: `cellar update` pulls the gamemode checkout
+   (a dirty checkout is refused, even by `--now`), then re-run the runtime
+   sync so the external copy matches the checkout. Published mode: publish the
+   new package version from the s&box editor; the server resolves the package
+   at launch, so the restart itself is the update and there is no checkout to
+   pull (`update_gamemode = false` in the published profiles). Engine: through
+   SteamCMD, only when `steam_dir` and `steamcmd` are configured.
+4. **Migrations run themselves; know whose they are.** The game owns its
+   document migrations and applies them when it boots. Cellar's own `srv_`
+   tables migrate on start (`database.migrate_on_start`, or `cellar db
+   migrate` by hand), and with `schema_owner = "gamemode"` Cellar applies
+   nothing to game tables at all. There is no separate migrate step to run,
+   which is exactly why step 1 is not optional.
+5. **Verify, then walk away.** `cellar doctor` before the start catches the
+   config class of failure: `server.data_dir mode`, `project Libraries`, the
+   executable. After the start: `/readyz` answers `200`, `cellar version`
+   shows the new build stamp beside the remote HEAD (the dashboard's Releases
+   tab runs the same drift check), the unparsed-line counter stays flat, and
+   one real client joins and sees their character. If any of that fails: stop,
+   `applejack_storage_restore <name>` from step 1's backup, start the previous
+   build, and investigate offline.
+
 ---
 
 ## Backups

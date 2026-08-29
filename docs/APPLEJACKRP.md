@@ -72,6 +72,10 @@ map thumbnails. The local project profile is for development and does not have
 published package branding. Switch profiles from Cellar's Configs tab, or copy
 the public profile beside the active config before starting Cellar.
 
+To take a new gamemode build safely, follow the update runbook in
+[Operations](OPERATIONS.md#taking-a-new-gamemode-build-the-runbook): back up,
+stop, update, start, verify, in that order.
+
 AppleJackRP no longer has a repository-owned server entrypoint, Docker image,
 hosted API, or Windows supervisor. Do not launch `sbox-server.exe` directly:
 doing so skips Cellar's bridge document, graceful shutdown and restart policy.
