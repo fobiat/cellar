@@ -12,6 +12,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   directory. All three carried the `#local` leaf, which is the local `.sbproj`
   directory, so `hosting.json` was written where the game never read it and
   neither mode could see the other's characters, permissions or features.
+- Point the published Facepunch Sandbox profiles at the published package's
+  data directory too. `configs/facepunch-sandbox.toml`, `deploy/cellar.toml`
+  and the Kubernetes ConfigMap all ran `facepunch.sandbox` with the `#local`
+  leaf, and the profile-mode test only read `applejackrp*` files, so they
+  slipped past it. The test now reads every shipped profile, the deploy config
+  and the ConfigMap's embedded block.
 - Read back a `hosting.json` whose `apiKey` is empty. The field is skipped on
   write when empty but had no serde `default`, so every locally provisioned
   document failed to deserialise. Written documents are unchanged.

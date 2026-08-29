@@ -1016,21 +1016,47 @@ mod tests {
     }
 
     /// Every AppleJackRP profile shipped with the `#local` leaf, published ones
-    /// included, until 2026-08-28. Reading the files is the only way to catch
-    /// that: nothing else in the workspace loads them.
+    /// included, until 2026-08-28, and the published Facepunch Sandbox profiles
+    /// slipped past the first version of this test because it only read
+    /// `applejackrp*` files. Reading the files is the only way to catch any of
+    /// them: nothing else in the workspace loads them.
     #[test]
-    fn the_shipped_applejackrp_profiles_agree_with_their_own_mode() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../configs");
-        let mut checked = 0;
+    fn the_shipped_profiles_agree_with_their_own_mode() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut profiles = Vec::new();
 
-        for entry in std::fs::read_dir(&dir).unwrap() {
+        for entry in std::fs::read_dir(root.join("configs")).unwrap() {
             let path = entry.unwrap().path();
             let name = path.file_name().unwrap().to_str().unwrap().to_owned();
-            if !name.starts_with("applejackrp") || !name.ends_with(".toml") {
+            if !name.ends_with(".toml") {
                 continue;
             }
+            profiles.push((name, std::fs::read_to_string(&path).unwrap()));
+        }
 
-            let text = std::fs::read_to_string(&path).unwrap();
+        profiles.push((
+            "deploy/cellar.toml".to_owned(),
+            std::fs::read_to_string(root.join("deploy/cellar.toml")).unwrap(),
+        ));
+
+        // The Kubernetes manifest embeds the same profile as a ConfigMap; pull
+        // the indented block back out rather than leaving it unchecked.
+        let manifest = std::fs::read_to_string(root.join("deploy/kubernetes.yaml")).unwrap();
+        let embedded: String = manifest
+            .lines()
+            .skip_while(|line| line.trim_end() != "  cellar.toml: |")
+            .skip(1)
+            .take_while(|line| line.starts_with("    ") || line.trim().is_empty())
+            .map(|line| format!("{}\n", line.strip_prefix("    ").unwrap_or(line)))
+            .collect();
+        assert!(
+            embedded.contains("[server]"),
+            "no cellar.toml block found in deploy/kubernetes.yaml"
+        );
+        profiles.push(("deploy/kubernetes.yaml".to_owned(), embedded));
+
+        let checked = profiles.len();
+        for (name, text) in profiles {
             let config: Config =
                 toml::from_str(&text).unwrap_or_else(|why| panic!("{name}: {why}"));
 
@@ -1039,10 +1065,9 @@ mod tests {
                 "{name}: {}",
                 config.server.data_dir_mode_mismatch().unwrap()
             );
-            checked += 1;
         }
 
-        assert!(checked >= 6, "only {checked} profiles read from {dir:?}");
+        assert!(checked >= 9, "only {checked} profiles read from {root:?}");
     }
 
     #[test]

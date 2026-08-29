@@ -10,7 +10,7 @@ data:
     launcher = "wine"
     working_dir = "/home/container/sbox"
     hostname = "Cellar Sandbox"
-    data_dir = "/home/container/sbox/data/facepunch/sandbox#local"
+    data_dir = "/home/container/sbox/data/facepunch/sandbox"
     log_file = "/home/container/sbox/logs/sbox-server.log"
     direct_connect = true
     port = 27015
