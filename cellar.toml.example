@@ -28,7 +28,11 @@ hostname = "My S&box Server"
 # The engine's data directory, beside features.json and permissions.json.
 # Cellar writes hosting.json here before starting the server. Required when the
 # bridge is enabled: without it the gamemode silently keeps using local files.
-# data_dir = "/home/container/.local/share/sbox/data"
+# The engine names it after the package ident and appends '#local' for a local
+# .sbproj, so the leaf must match the mode ('cellar doctor' checks this):
+# data_dir = "/home/container/sbox/data/your-org/your-game#local"
+# For a published package, the same directory without the suffix:
+# data_dir = "/home/container/sbox/data/your-org/your-game"
 
 # Where the engine writes its log. Defaults to <executable dir>/logs/sbox-server.log,
 # which is what the engine does unless FACEPUNCH_ENGINE says otherwise.
