@@ -8,6 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Stop the two Linux AppleJackRP profiles shipping `mariadb.managed = true`.
+  A managed instance cannot work there, so both now ship `managed = false`
+  with the reason beside it.
 - Point the published AppleJackRP profiles at the published package's data
   directory. All three carried the `#local` leaf, which is the local `.sbproj`
   directory, so `hosting.json` was written where the game never read it and
@@ -30,6 +33,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `restart = "on_failure"` retries into the same wall.
 - `cellar doctor` checks that `server.data_dir` agrees with the configured
   mode, so the `#local` mismatch above cannot come back unnoticed.
+- `cellar mariadb provision` refuses on a non-Windows host instead of failing
+  halfway. `release::archive_url` serves the winx64 zip unconditionally and
+  every binary the provisioner spawns is an `.exe`, so a Linux host paid a
+  400MB download, unpacked Windows binaries, and then died on the first exec
+  with a bare `Permission denied (os error 13)` naming nothing. The error now
+  says so and points at `mariadb.managed = false` plus `database.url_file`.
 - `scripts/bootstrap-linux.sh`, which sets up a bare Linux host: curl, tar,
   rsync and Wine, then optionally steamcmd, the Windows .NET runtime inside the
   Wine prefix, and MariaDB, then Cellar itself. `install.sh` installs only
