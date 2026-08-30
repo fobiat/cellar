@@ -30,6 +30,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `restart = "on_failure"` retries into the same wall.
 - `cellar doctor` checks that `server.data_dir` agrees with the configured
   mode, so the `#local` mismatch above cannot come back unnoticed.
+- `scripts/bootstrap-linux.sh`, which sets up a bare Linux host: curl, tar,
+  rsync and Wine, then optionally steamcmd, the Windows .NET runtime inside the
+  Wine prefix, and MariaDB, then Cellar itself. `install.sh` installs only
+  Cellar, which suits a container image that already carries Wine; a bare
+  machine is also missing everything Cellar supervises. It probes each
+  component before touching anything, handles pacman, apt, dnf and zypper, and
+  prints the exact command for anything it cannot install rather than failing
+  the run. `--with-dotnet` uses Microsoft's own installer, because
+  `sbox-server.dll` asks for `Microsoft.NETCore.App` 10.0.0 and winetricks
+  stops at `dotnet9`.
 
 ## [0.1.13] - 2026-08-28
 
