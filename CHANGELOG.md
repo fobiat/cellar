@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Report sizes in decimal KB/MB/GB rather than KiB/MiB/GiB, in the web UI and
+  in the TUI and CLI both. The two error strings naming a fixed binary limit
+  (the 512 KiB settings import and the 2 MiB MCP response cap) keep their
+  units, because the limits themselves are unchanged and relabelling them
+  alone would misstate them.
+- Move the mode, gamemode and profile readout, the restart policy and the
+  connection lamp to the right of the masthead, leaving the Cellar version and
+  build commit on the left. Dropped the "server control" tagline.
+
 ### Fixed
 
 - Stop the two Linux AppleJackRP profiles shipping `mariadb.managed = true`.
