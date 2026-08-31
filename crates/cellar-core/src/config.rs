@@ -205,6 +205,25 @@ impl ServerConfig {
         Some(path)
     }
 
+    /// Where the engine writes its log file.
+    ///
+    /// `Logging.cs` builds `{base}/logs/{processName}.log`, where the process
+    /// name for `sbox-server.exe` is `sbox-server` and `{base}` is the
+    /// `FACEPUNCH_ENGINE` environment variable when set, otherwise the
+    /// executable's own directory. `server.log_file` overrides Cellar's read
+    /// path and does not move the engine's write path.
+    pub fn engine_log_file(&self) -> PathBuf {
+        if let Some(explicit) = &self.log_file {
+            return explicit.clone();
+        }
+        self.executable
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default()
+            .join("logs")
+            .join("sbox-server.log")
+    }
+
     /// Why `data_dir` cannot be the directory the game reads, if it cannot.
     ///
     /// The engine appends `#local` to the ident for a local `.sbproj` and names
@@ -882,8 +901,124 @@ impl Config {
             }
         }
 
+        refuse_shared_resources(&self.exclusive_resources())?;
+
         Ok(())
     }
+
+    /// What each running instance must hold to itself.
+    ///
+    /// One element today, because a config has one `[server]` table. The
+    /// concurrent-instance work returns one per enabled instance, and the
+    /// refusals below start being reachable at that point rather than being
+    /// written then.
+    fn exclusive_resources(&self) -> Vec<Exclusive> {
+        vec![Exclusive {
+            id: "server".to_owned(),
+            log_file: self.server.engine_log_file(),
+            data_dir: self.server.game_data_dir(),
+            scope: self.scope(),
+            bridge_bind: self
+                .bridge
+                .enabled
+                .then(|| self.bridge.bind.clone())
+                .filter(|bind| !bind.trim().is_empty()),
+            direct_port: self.server.direct_connect.then_some(self.server.port),
+        }]
+    }
+}
+
+/// The resources exactly one instance may hold.
+///
+/// Sharing any of these is not a degraded configuration, it is two servers
+/// writing over each other, and every one of them has a silent failure mode:
+/// two tailers parsing both servers' lines, one `hosting.json`, one document
+/// scope taking both servers' writes, one socket.
+#[derive(Debug)]
+struct Exclusive {
+    id: String,
+    log_file: PathBuf,
+    data_dir: Option<PathBuf>,
+    scope: String,
+    /// `None` when the bridge is disabled, so a disabled bridge cannot collide.
+    bridge_bind: Option<String>,
+    /// `Some` only under `direct_connect`. Without it the engine reaches
+    /// players through Steam's relay and the port is not a shared resource.
+    direct_port: Option<u16>,
+}
+
+fn refuse_shared_resources(instances: &[Exclusive]) -> Result<(), ConfigError> {
+    // The invariant that keeps this safe to add before it is reachable: a
+    // config with one instance cannot collide with itself, and every config
+    // that exists today has one. Nothing below may fire for them.
+    if instances.len() < 2 {
+        return Ok(());
+    }
+
+    for (index, one) in instances.iter().enumerate() {
+        for other in &instances[index + 1..] {
+            let clash = |what: &str, value: &str, fix: &str| {
+                ConfigError::Invalid(format!(
+                    "instances '{}' and '{}' both use {what} {value}. {fix}",
+                    one.id, other.id
+                ))
+            };
+
+            if one.log_file == other.log_file {
+                return Err(clash(
+                    "the log file",
+                    &one.log_file.display().to_string(),
+                    "The engine writes one logs/sbox-server.log per install directory, so both \
+                     tailers would parse both servers' lines and every player join would be \
+                     counted twice. Give each instance its own install directory.",
+                ));
+            }
+
+            if let (Some(one_dir), Some(other_dir)) = (&one.data_dir, &other.data_dir)
+                && one_dir == other_dir
+            {
+                return Err(clash(
+                    "the data directory",
+                    &one_dir.display().to_string(),
+                    "hosting.json, features.json and permissions.json all live there, so each \
+                     instance needs its own server.data_dir.",
+                ));
+            }
+
+            if one.scope == other.scope {
+                return Err(clash(
+                    "the document scope",
+                    &one.scope,
+                    "The scope is the storage key, so one server's document writes would land on \
+                     the other's documents. Give each instance its own scope.",
+                ));
+            }
+
+            if let (Some(one_bind), Some(other_bind)) = (&one.bridge_bind, &other.bridge_bind)
+                && one_bind == other_bind
+            {
+                return Err(clash(
+                    "the bridge address",
+                    one_bind,
+                    "Only one listener may hold an address. Give each instance its own \
+                     bridge.bind, or disable the bridge on one of them.",
+                ));
+            }
+
+            if let (Some(one_port), Some(other_port)) = (one.direct_port, other.direct_port)
+                && one_port == other_port
+            {
+                return Err(clash(
+                    "server.port",
+                    &one_port.to_string(),
+                    "direct_connect publishes the real address, so the port is a real socket and \
+                     the second bind would fail.",
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Whether a name is safe to interpolate into a bootstrap SQL statement.
@@ -1081,8 +1216,20 @@ mod tests {
     /// them: nothing else in the workspace loads them.
     #[test]
     fn the_shipped_profiles_agree_with_their_own_mode() {
+        for (name, config) in shipped_profiles() {
+            assert!(
+                config.server.data_dir_mode_mismatch().is_none(),
+                "{name}: {}",
+                config.server.data_dir_mode_mismatch().unwrap()
+            );
+        }
+    }
+
+    /// Every profile that ships, parsed. Reading the files is the only way to
+    /// catch a mistake in one: nothing else in the workspace loads them.
+    fn shipped_profiles() -> Vec<(String, Config)> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let mut profiles = Vec::new();
+        let mut sources = Vec::new();
 
         for entry in std::fs::read_dir(root.join("configs")).unwrap() {
             let path = entry.unwrap().path();
@@ -1090,10 +1237,10 @@ mod tests {
             if !name.ends_with(".toml") {
                 continue;
             }
-            profiles.push((name, std::fs::read_to_string(&path).unwrap()));
+            sources.push((name, std::fs::read_to_string(&path).unwrap()));
         }
 
-        profiles.push((
+        sources.push((
             "deploy/cellar.toml".to_owned(),
             std::fs::read_to_string(root.join("deploy/cellar.toml")).unwrap(),
         ));
@@ -1112,21 +1259,128 @@ mod tests {
             embedded.contains("[server]"),
             "no cellar.toml block found in deploy/kubernetes.yaml"
         );
-        profiles.push(("deploy/kubernetes.yaml".to_owned(), embedded));
+        sources.push(("deploy/kubernetes.yaml".to_owned(), embedded));
 
-        let checked = profiles.len();
-        for (name, text) in profiles {
-            let config: Config =
-                toml::from_str(&text).unwrap_or_else(|why| panic!("{name}: {why}"));
+        assert!(sources.len() >= 9, "only {} profiles read", sources.len());
 
-            assert!(
-                config.server.data_dir_mode_mismatch().is_none(),
-                "{name}: {}",
-                config.server.data_dir_mode_mismatch().unwrap()
+        sources
+            .into_iter()
+            .map(|(name, text)| {
+                let config = toml::from_str(&text).unwrap_or_else(|why| panic!("{name}: {why}"));
+                (name, config)
+            })
+            .collect()
+    }
+
+    fn instance(id: &str) -> Exclusive {
+        Exclusive {
+            id: id.to_owned(),
+            log_file: PathBuf::from(format!("/srv/{id}/logs/sbox-server.log")),
+            data_dir: Some(PathBuf::from(format!("/srv/{id}/data/fobiat/applejackrp"))),
+            scope: id.to_owned(),
+            bridge_bind: Some(format!(
+                "127.0.0.1:{}",
+                8000 + u16::from(id.as_bytes().first().copied().unwrap_or(b'a'))
+            )),
+            direct_port: None,
+        }
+    }
+
+    /// The invariant the whole refusal rests on. Every config that can be
+    /// written today has one instance, so none of the refusals can reach a
+    /// deployment that starts now. Remove this and the collision checks become
+    /// a way to break a working server.
+    #[test]
+    fn a_single_instance_config_never_reaches_a_collision_refusal() {
+        assert_eq!(minimal().exclusive_resources().len(), 1);
+        refuse_shared_resources(&[instance("a")]).unwrap();
+    }
+
+    #[test]
+    fn every_shipped_profile_still_resolves_to_exactly_one_instance() {
+        for (name, config) in shipped_profiles() {
+            assert_eq!(
+                config.exclusive_resources().len(),
+                1,
+                "{name} resolved to more than one instance"
             );
         }
+    }
 
-        assert!(checked >= 9, "only {checked} profiles read from {root:?}");
+    #[test]
+    fn two_instances_may_not_write_to_one_log_file() {
+        let mut second = instance("b");
+        second.log_file = instance("a").log_file;
+
+        let error = refuse_shared_resources(&[instance("a"), second])
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("the log file"), "{error}");
+        assert!(error.contains("counted twice"), "{error}");
+    }
+
+    #[test]
+    fn two_instances_may_not_share_a_data_directory() {
+        let mut second = instance("b");
+        second.data_dir = instance("a").data_dir;
+
+        let error = refuse_shared_resources(&[instance("a"), second])
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("server.data_dir"), "{error}");
+    }
+
+    #[test]
+    fn two_instances_may_not_share_a_document_scope() {
+        let mut second = instance("b");
+        second.scope = instance("a").scope;
+
+        let error = refuse_shared_resources(&[instance("a"), second])
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("document scope"), "{error}");
+    }
+
+    #[test]
+    fn two_instances_may_not_bind_one_bridge_address() {
+        let mut second = instance("b");
+        second.bridge_bind = instance("a").bridge_bind;
+
+        let error = refuse_shared_resources(&[instance("a"), second])
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("bridge.bind"), "{error}");
+    }
+
+    #[test]
+    fn a_disabled_bridge_is_not_an_address_to_collide_over() {
+        let mut one = instance("a");
+        let mut other = instance("b");
+        one.bridge_bind = None;
+        other.bridge_bind = None;
+
+        refuse_shared_resources(&[one, other]).unwrap();
+    }
+
+    #[test]
+    fn only_direct_connect_makes_the_game_port_a_shared_resource() {
+        let (mut one, mut other) = (instance("a"), instance("b"));
+        one.direct_port = None;
+        other.direct_port = None;
+        refuse_shared_resources(&[one, other]).unwrap();
+
+        let (mut one, mut other) = (instance("a"), instance("b"));
+        one.direct_port = Some(27015);
+        other.direct_port = Some(27015);
+        let error = refuse_shared_resources(&[one, other])
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("server.port"), "{error}");
     }
 
     #[test]

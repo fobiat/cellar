@@ -117,21 +117,11 @@ pub fn command_for(config: &ServerConfig, bridge_needs_local_http: bool) -> Comm
 
 /// Where the engine writes its log file.
 ///
-/// `Logging.cs` builds `{base}/logs/{processName}.log`, where the process name
-/// for `sbox-server.exe` is `sbox-server`, and `{base}` is the `FACEPUNCH_ENGINE`
-/// environment variable when set, otherwise the executable's own directory.
+/// The derivation lives on [`ServerConfig`] because `validate()` needs it to
+/// refuse two instances that would write to one file, and a second copy of it
+/// here is a second copy that goes stale.
 pub fn log_file_for(config: &ServerConfig) -> std::path::PathBuf {
-    if let Some(explicit) = &config.log_file {
-        return explicit.clone();
-    }
-
-    let base = config
-        .executable
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-
-    base.join("logs").join("sbox-server.log")
+    config.engine_log_file()
 }
 
 fn path_string(path: &Path) -> String {
