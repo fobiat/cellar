@@ -586,21 +586,21 @@ impl Supervisor {
                                 let _ = reply.send(Err(why));
                             } else {
                                 restart_requested = true;
-                                let status = self.graceful_stop(&mut child, &mut output, &mut assembler).await;
+                                let status = self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await;
                                 let _ = reply.send(Ok(()));
                                 break status;
                             }
                         }
                         Some(Control::Stop { reply }) => {
                             requested_stop = true;
-                            let status = self.graceful_stop(&mut child, &mut output, &mut assembler).await;
+                            let status = self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await;
                             let _ = reply.send(());
                             break status;
                         }
                         Some(Control::Restart { reply }) => {
                             restart_requested = true;
                             tracing::info!("restarting the server on request");
-                            let status = self.graceful_stop(&mut child, &mut output, &mut assembler).await;
+                            let status = self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await;
                             let _ = reply.send(());
                             break status;
                         }
@@ -611,13 +611,13 @@ impl Supervisor {
                         Some(Control::Shutdown { reply }) => {
                             requested_stop = true;
                             shutting_down = true;
-                            let status = self.graceful_stop(&mut child, &mut output, &mut assembler).await;
+                            let status = self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await;
                             let _ = reply.send(());
                             break status;
                         }
                         None => {
                             requested_stop = true;
-                            break self.graceful_stop(&mut child, &mut output, &mut assembler).await;
+                            break self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await;
                         }
                     }
                 }
@@ -709,6 +709,9 @@ impl Supervisor {
         child: &mut Child,
         output: &mut mpsc::Receiver<Output>,
         assembler: &mut LineAssembler,
+        pending: &mut Option<PendingReply>,
+        ready_pattern: &str,
+        console_is_the_source: bool,
     ) -> Option<i32> {
         self.tracker.set_state(State::Stopping);
 
@@ -735,14 +738,21 @@ impl Supervisor {
                 }
 
                 // Keep draining while it shuts down; the shutdown log is exactly
-                // what tells an operator the Steam logoff completed.
+                // what tells an operator the Steam logoff completed. Through
+                // the same ingest as the rest of the run, so the dedup still
+                // applies: the log file carries these lines too, and the final
+                // tailer poll after this returns picks them up with their
+                // logger names intact.
                 match tokio::time::timeout(Duration::from_millis(100), output.recv()).await {
                     Ok(Some(Output::Bytes(bytes))) => {
                         for line in assembler.push(&bytes) {
-                            let _ = self.events.send(Event::Unparsed {
-                                raw: line,
-                                origin: Origin::Console,
-                            });
+                            self.ingest(
+                                &line,
+                                Origin::Console,
+                                ready_pattern,
+                                pending,
+                                console_is_the_source,
+                            );
                         }
                     }
                     // The terminal closed. The child is on its way out; one more

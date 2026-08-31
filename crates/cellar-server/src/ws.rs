@@ -34,7 +34,7 @@ async fn pump(mut socket: WebSocket, state: Arc<AppState>) {
     let Some(supervisor) = &state.supervisor else {
         let _ = socket
             .send(Message::Text(
-                serde_json::json!({ "kind": "unparsed", "raw": "no server is being supervised" })
+                serde_json::json!({ "kind": "notice", "raw": "no server is being supervised" })
                     .to_string()
                     .into(),
             ))
@@ -56,9 +56,16 @@ async fn pump(mut socket: WebSocket, state: Arc<AppState>) {
                 // A slow browser must not stall the supervisor. It is told what
                 // it missed and the stream continues, rather than the connection
                 // being torn down or the sender being blocked.
+                //
+                // Its own kind, not `unparsed`. A gap in the console is a fact
+                // about the console and the browser has to be able to mark it
+                // as one; `unparsed` means the engine said something the
+                // grammar did not recognise, which is a different thing that
+                // wants a different treatment.
                 Err(broadcast::error::RecvError::Lagged(missed)) => {
                     let notice = serde_json::json!({
-                        "kind": "unparsed",
+                        "kind": "lagged",
+                        "missed": missed,
                         "raw": format!("dropped {missed} event(s): this browser fell behind"),
                         "origin": "cellar",
                     });

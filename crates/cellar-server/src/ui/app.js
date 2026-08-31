@@ -30,12 +30,70 @@ let buildDriftState = "";
 let activeTab = "dispatch";
 let serviceWorker = null;
 
+/* A queue, not a single slot. Killing a server produces several failures at
+ * once, and a toast that overwrites the previous one shows the least
+ * informative of them. */
+const toastQueue = [];
+let toastShowing = false;
+
 function showToast(message) {
+  toastQueue.push(String(message));
+  if (!toastShowing) drainToasts();
+}
+
+function drainToasts() {
   const toast = $("#toast");
-  toast.textContent = message;
+  const message = toastQueue.shift();
+  if (message === undefined) {
+    toastShowing = false;
+    toast.hidden = true;
+    return;
+  }
+  toastShowing = true;
+  toast.textContent = toastQueue.length ? `${message} (+${toastQueue.length} more)` : message;
   toast.hidden = false;
   clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(() => { toast.hidden = true; }, 4500);
+  showToast.timer = setTimeout(drainToasts, 4500);
+}
+
+/* The load-state contract every pane uses.
+ *
+ * A pane is loading, or it holds an answer, or it holds a reason it does not.
+ * There is no fourth state, and in particular there is no blank one: a fetch
+ * that threw used to leave whatever was on screen before, which during a phase
+ * of killing processes deliberately is the most misleading thing it could do.
+ *
+ * `load` takes the node the pane renders into so a failure has somewhere to go
+ * that is not only a toast. Pass null for a loader with no single container. */
+async function load(what, node, work) {
+  if (node) node.setAttribute("aria-busy", "true");
+  try {
+    const result = await work();
+    if (node) node.removeAttribute("data-load-error");
+    return result;
+  } catch (error) {
+    const why = error && error.message ? error.message : String(error);
+    showToast(`${what} failed: ${why}`);
+    if (node) {
+      node.setAttribute("data-load-error", why);
+      node.replaceChildren(el("p", "notice", `Could not load ${what}: ${why}`));
+    }
+    return null;
+  } finally {
+    if (node) node.removeAttribute("aria-busy");
+  }
+}
+
+/* Fetch and parse, turning every failure into one thrown error with a message
+ * worth reading. `fetch` rejects only on a network fault, so a 500 with a JSON
+ * body reached the caller as a successful parse of an error document. */
+async function api(path, options) {
+  const response = await fetch(path, options);
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error((body && body.error) || `${response.status} ${response.statusText}`);
+  }
+  return body;
 }
 
 function alertsEnabled() {
@@ -86,15 +144,23 @@ function showTab(name) {
     section.hidden = section.id !== `tab-${name}`;
   });
 
-  if (name === "records") loadDocuments();
-  if (name === "database") loadDatabase();
-  if (name === "players") loadPlayers();
-  if (name === "access") loadAccess();
-  if (name === "releases") loadReleases();
-  if (name === "settings") loadSettings();
-  if (name === "monitoring") refreshStatus();
-  if (name === "configs") loadConfigs();
+  const pane = TAB_LOADERS[name];
+  if (pane) load(pane.what, $(pane.into), pane.run);
 }
+
+/* What each tab loads, where a failure goes, and what to call the thing in the
+ * message. One table rather than a try/catch inside each loader, so a loader
+ * added later cannot quietly be the one without error handling. */
+const TAB_LOADERS = {
+  records: { what: "documents", into: "#documents", run: () => loadDocuments() },
+  database: { what: "the database", into: "#tables", run: () => loadDatabase() },
+  players: { what: "players", into: "#players", run: () => loadPlayers() },
+  access: { what: "access", into: "#access-list", run: () => loadAccess() },
+  releases: { what: "releases", into: "#versions", run: () => loadReleases() },
+  settings: { what: "settings", into: "#settings", run: () => loadSettings() },
+  monitoring: { what: "status", into: null, run: () => refreshStatus() },
+  configs: { what: "profiles", into: "#config-list", run: () => loadConfigs() },
+};
 
 /* ---- access ------------------------------------------------------------- */
 
@@ -551,15 +617,22 @@ function applyTableTools() {
   }
 }
 
+// An exit with no code was killed by a signal, which is not the same as a
+// clean exit and must not read as one.
+function describeExit(exit) {
+  if (!exit || exit.code === null || exit.code === undefined) return "killed by a signal";
+  return exit.code === 0 ? "code 0, cleanly" : `code ${exit.code}`;
+}
+
 // A state with no process reads as an absence unless it says how the last run
 // ended. Exit 0 after a stop and exit 137 after an OOM kill are the same word
 // otherwise.
 function stateLabel(server) {
   const word = server.state.replace("_", " ");
-  const exit = server.last_exit;
-  if (!exit || (server.state !== "stopped" && server.state !== "crash_looping")) return word;
-  if (exit.code === null || exit.code === undefined) return `${word}, killed by a signal`;
-  return `${word}, exit ${exit.code}`;
+  if (!server.last_exit || (server.state !== "stopped" && server.state !== "crash_looping")) {
+    return word;
+  }
+  return `${word}, ${describeExit(server.last_exit)}`;
 }
 
 function setLamp(node, state, label) {
@@ -745,16 +818,33 @@ function connect() {
         refreshStatus();
         break;
       case "process_started":
-      case "process_exited":
       case "server_ready":
         appendLine("echo", now(), "cellar", event.kind.replace("_", " "));
-        if (event.kind === "process_exited" && !event.graceful) {
-          notifyOperator("Cellar server alert", "The server exited unexpectedly.");
-        }
         if (event.kind === "server_ready") {
           notifyOperator("Cellar server ready", event.map ? `Ready on ${event.map}.` : "Ready for players.");
         }
         refreshStatus();
+        break;
+      case "process_exited":
+        appendLine("echo", now(), "cellar", `process exited: ${describeExit(event)}`);
+        if (!event.graceful) {
+          notifyOperator("Cellar server alert", `The server exited unexpectedly: ${describeExit(event)}.`);
+        }
+        refreshStatus();
+        break;
+      /* Everything the grammar did not recognise, and everything Cellar says
+       * about itself: the start timeout, a kill escalation, and the whole
+       * shutdown transcript, which graceful_stop publishes as unparsed lines
+       * and this used to drop on the floor. A clean shutdown was invisible
+       * from the web UI. */
+      case "unparsed":
+      case "notice":
+        appendLine("echo", now(), text(event.origin || "cellar"), text(event.raw));
+        break;
+      /* A gap, marked as a gap. The alternative is a console that silently
+       * skips lines and looks complete. */
+      case "lagged":
+        appendLine("error", now(), "cellar", `${event.missed} event(s) missed: this browser fell behind`);
         break;
       default:
         break;
@@ -1070,13 +1160,38 @@ async function signIn(event) {
 
 let started = false;
 
+/* Nothing fails quietly.
+ *
+ * An async loader whose fetch rejects produces an unhandled rejection and no
+ * other trace, which is exactly what a killed server causes and exactly what
+ * an operator watching for the kill needs to be told about. The periodic
+ * refreshes below stay quiet after the first complaint so a server that is
+ * down for a minute does not produce thirty toasts. */
+function watchForSilentFailures() {
+  let lastComplaint = 0;
+  const complain = (why) => {
+    const at = Date.now();
+    if (at - lastComplaint < 10000) return;
+    lastComplaint = at;
+    showToast(`Something went wrong: ${why}`);
+  };
+  window.addEventListener("error", (event) => complain(event.message || "script error"));
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = event.reason;
+    complain(reason && reason.message ? reason.message : String(reason));
+  });
+}
+
 function start() {
   if (started) return;
   started = true;
-  loadLogs();
+  watchForSilentFailures();
+  // Null: a failure here must not replace the console, which is where the
+  // operator is reading the very lines that explain the failure.
+  load("the log", null, () => loadLogs());
   connect();
   refreshStatus();
-  loadReleases();
+  load("releases", $("#versions"), () => loadReleases());
   refreshBuildHealth();
   setInterval(() => {
     refreshStatus();

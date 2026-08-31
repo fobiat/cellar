@@ -344,6 +344,45 @@ mod tests {
         assert!(!JS.contains("document.write"));
     }
 
+    /// The browser drops any event kind it does not name, silently. That is how
+    /// the whole shutdown transcript, which `graceful_stop` publishes as
+    /// `Unparsed`, went unrendered: a clean stop could not be watched from the
+    /// web UI at all.
+    #[test]
+    fn the_script_handles_every_event_kind_the_server_can_send() {
+        // The serde tag is the variant name in snake_case, so this is the same
+        // list the websocket actually puts on the wire.
+        for kind in [
+            "process_started",
+            "server_ready",
+            "process_exited",
+            "player_joined",
+            "player_left",
+            "log",
+            "unparsed",
+            // Not Event variants: ws.rs synthesises these two.
+            "notice",
+            "lagged",
+        ] {
+            assert!(
+                JS.contains(&format!("case \"{kind}\":")),
+                "app.js drops the '{kind}' event"
+            );
+        }
+    }
+
+    /// A gap in the console must be a gap, not a line that reads like engine
+    /// output the grammar failed on.
+    #[test]
+    fn the_lag_notice_is_not_dressed_up_as_an_unparsed_line() {
+        const WS: &str = include_str!("ws.rs");
+        assert!(WS.contains("\"kind\": \"lagged\""));
+        assert!(
+            !WS.contains("\"kind\": \"unparsed\""),
+            "ws.rs is synthesising an unparsed event again"
+        );
+    }
+
     #[test]
     fn every_tab_in_the_nav_has_a_section() {
         let tabs: Vec<&str> = HTML
