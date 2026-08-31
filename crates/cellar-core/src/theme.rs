@@ -62,6 +62,13 @@ token!(
     "Wanted, crime, destructive actions"
 );
 token!(
+    RUSSET_TEXT,
+    "russet-text",
+    "#E8776A",
+    "#8E2A1F",
+    "Destructive wording, on any ground"
+);
+token!(
     ORCHARD,
     "orchard",
     "#6FA862",
@@ -75,14 +82,14 @@ token!(TEXT, "text", "#F2F2F0", "#201F1D", "Primary text");
 token!(
     TEXT_MUTED,
     "text-muted",
-    "#7A7D81",
+    "#8B8E93",
     "#4A4642",
     "Secondary text"
 );
 token!(
     LOG_TRACE,
     "log-trace",
-    "#626A78",
+    "#7C8496",
     "#697386",
     "Trace and low-signal output"
 );
@@ -157,6 +164,7 @@ pub const TOKENS: &[Token] = &[
     AZURE_HOVER,
     FROST,
     RUSSET,
+    RUSSET_TEXT,
     ORCHARD,
     INK,
     SHELL,
@@ -270,6 +278,81 @@ mod tests {
         assert!(css.contains(":root{"));
         assert!(css.contains("prefers-color-scheme: dark"));
         assert!(css.contains("[data-theme=\"dark\"]"));
+    }
+
+    /// WCAG 2.x relative luminance, from the sRGB definition.
+    fn luminance(hex: &str) -> f64 {
+        let (r, g, b) = rgb(hex);
+        let channel = |raw: u8| {
+            let c = f64::from(raw) / 255.0;
+            if c <= 0.03928 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+    }
+
+    fn contrast(foreground: &str, background: &str) -> f64 {
+        let (a, b) = (luminance(foreground), luminance(background));
+        let (high, low) = if a > b { (a, b) } else { (b, a) };
+        (high + 0.05) / (low + 0.05)
+    }
+
+    /// Every ground the dark theme draws words on. `style.css:14` is `INK`,
+    /// panels and headers are `SHELL`, cards are `RAISED`.
+    const DARK_GROUNDS: &[Token] = &[INK, SHELL, RAISED];
+
+    #[test]
+    fn body_text_tokens_meet_wcag_aa_on_every_ground() {
+        // RUSSET and AZURE_HOVER are absent deliberately: they are borders and
+        // fills, where WCAG asks 3:1. RUSSET_TEXT exists so destructive wording
+        // has a value that clears 4.5:1 on a card as well as on the shell.
+        for token in [TEXT, TEXT_MUTED, RUSSET_TEXT, AZURE, FROST, ORCHARD] {
+            for ground in DARK_GROUNDS {
+                let ratio = contrast(token.dark, ground.dark);
+                assert!(
+                    ratio >= 4.5,
+                    "{} on {} is {ratio:.2}:1, below AA",
+                    token.name,
+                    ground.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn log_category_tokens_are_legible_in_the_console() {
+        // The console is the only place these are drawn, and it is INK
+        // (`style.css:292`). At 12.5px they are normal-size text, so 4.5:1.
+        for token in TOKENS.iter().filter(|t| t.name.starts_with("log-")) {
+            let ratio = contrast(token.dark, INK.dark);
+            assert!(
+                ratio >= 4.5,
+                "{} on ink is {ratio:.2}:1, below AA",
+                token.name
+            );
+        }
+    }
+
+    #[test]
+    fn no_token_is_accidentally_identical_across_themes() {
+        // INK is the known-broken light value: it renders #201F1D body text on
+        // a #0E0F11 ground at 1.15:1, which is the whole of the dead light
+        // theme. Fixing it repaints every light-mode screen, so it belongs with
+        // the rest of that work rather than here. Remove this entry then.
+        const DELIBERATE: &[&str] = &["ink"];
+        for token in TOKENS {
+            if DELIBERATE.contains(&token.name) {
+                continue;
+            }
+            assert_ne!(
+                token.dark, token.light,
+                "{} has one value doing two jobs",
+                token.name
+            );
+        }
     }
 
     #[test]

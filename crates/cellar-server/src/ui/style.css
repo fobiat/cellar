@@ -34,7 +34,7 @@ a { color: var(--aj-azure); }
 .security-banner.warning { border-color: color-mix(in srgb, var(--aj-log-warning) 50%, transparent); }
 .security-banner.warning strong { color: var(--aj-log-warning); }
 .security-banner.danger { border-color: color-mix(in srgb, var(--aj-russet) 65%, transparent); }
-.security-banner.danger strong { color: var(--aj-russet); }
+.security-banner.danger strong { color: var(--aj-russet-text); }
 
 /* ---- shell -------------------------------------------------------------- */
 
@@ -74,7 +74,6 @@ a { color: var(--aj-azure); }
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 9px;
   letter-spacing: 0.03em;
-  opacity: 0.7;
   max-width: 18ch;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -123,7 +122,7 @@ a { color: var(--aj-azure); }
 }
 
 .up    { color: var(--aj-orchard); }
-.down  { color: var(--aj-russet); }
+.down  { color: var(--aj-russet-text); }
 .wait  { color: var(--aj-frost); }
 .live  { color: var(--aj-azure); }
 
@@ -367,7 +366,7 @@ button.action {
 button.action:hover { background: color-mix(in srgb, var(--aj-azure) 16%, transparent); }
 button.action:disabled { opacity: 0.4; cursor: not-allowed; }
 
-button.action.danger { border-color: var(--aj-russet); color: var(--aj-russet); }
+button.action.danger { border-color: var(--aj-russet); color: var(--aj-russet-text); }
 button.action.danger:hover { background: color-mix(in srgb, var(--aj-russet) 16%, transparent); }
 
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -412,7 +411,7 @@ button.action.danger:hover { background: color-mix(in srgb, var(--aj-russet) 16%
 .gate .panel > .body { display: grid; gap: 12px; }
 
 .notice {
-  color: var(--aj-russet);
+  color: var(--aj-russet-text);
   font-size: 12px;
   min-height: 18px;
 }
