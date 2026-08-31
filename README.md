@@ -270,14 +270,12 @@ gh release create vX.Y.Z --verify-tag --notes-file CHANGELOG.md dist/release/*
 
 Written down rather than glossed.
 
-**The pty console under Wine specifically.** `Console.IsOutputRedirected`
-behaving as expected through Wine's console layer is the assumption the whole
-command channel rests on. It has been proven on Linux against a native child,
-and the Windows binary has been proven end to end under Wine supervising a
-Windows child on ConPTY. It has **not** been run against `sbox-server.exe`
-itself under Wine.
+The pty console under Wine was the headline entry here and is now **proven**, on
+2026-08-30, against a real `sbox-server.exe`: Cellar spawned it, typed a command,
+parsed the reply, and stopped it through the engine's own nine-step shutdown
+rather than killing it.
 
-The full list, and what happens if that assumption fails, is in
+The remaining list is in
 [Troubleshooting](docs/TROUBLESHOOTING.md#what-has-not-been-proven).
 
 ## Corrections Cellar makes to the existing setup

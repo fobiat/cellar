@@ -50,8 +50,13 @@ pub fn command_for(config: &ServerConfig, bridge_needs_local_http: bool) -> Comm
 
     let (program, mut args) = match config.launcher {
         Launcher::Native => (executable, Vec::new()),
-        // Facepunch's Linux dedicated server is roadmapped, not shipped, so on
-        // Linux the Windows binary under Wine is the only option there is.
+        // Facepunch's Linux dedicated server ships on the public branch and
+        // does not link: `ErrorReports::Breadcrumb` is referenced by
+        // libengine2, librendersystemvulkan and libtier0, and defined by none
+        // of the 33 shipped libraries. Stated this way on purpose. Anyone who
+        // notices that depot 1892933 has a public manifest will otherwise
+        // conclude the Wine decision was a mistake and reverse it. Worth a
+        // re-test each release; it is one symbol away from working.
         Launcher::Wine => ("wine".to_owned(), vec![executable]),
     };
 

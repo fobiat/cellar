@@ -185,7 +185,9 @@ cellar-server     axum: bridge, health, websocket, embedded web UI
 cellar-notify     Discord and generic webhooks, batched and rate-limit aware
 cellar-tui        ratatui dashboard
 cellar-update     version checking and self-update
-cellar-mariadb    downloads, provisions and supervises a local MariaDB
+cellar-mariadb    downloads, provisions and supervises a local MariaDB,
+                  and takes and restores logical dumps
+cellar-mcp        an MCP server over stdio, and a small MCP client
 cellar-cli        the `cellar` binary
 cellar-fake-server  a stand-in for sbox-server.exe, for tests
 ```
@@ -240,7 +242,7 @@ the two cannot drift), accepts console input including the `> ` echo, implements
 Every supervisor, TUI, web and webhook test runs against it, on any machine, in
 seconds.
 
-**270 tests**, including the adversarial player name, rotation mid-line, split
+**348 tests**, including the adversarial player name, rotation mid-line, split
 UTF-8, and the ported C# protocol expectations so both halves of the bridge are
 provably talking about the same thing.
 

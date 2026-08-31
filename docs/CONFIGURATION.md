@@ -299,6 +299,39 @@ and it announces itself before acting.
 
 ---
 
+## `[backup]`
+
+Logical dumps of whatever `database.url` points at. See
+[`cellar db restore`](CLI.md#cellar-db-restore-dump---yes) for the other half:
+a backup nobody has restored is a hypothesis.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Take a dump on a timer while `cellar run` is up. |
+| `directory` | unset | Where dumps go. Falls back to `mariadb.data_dir/backups`. |
+| `interval_hours` | `24` | Hours between dumps. |
+| `retain` | `7` | How many to keep. Older ones are deleted after each dump. |
+
+**Only one process may own this.** Two Cellar processes with `enabled = true`
+and the same directory run two loops with the same `retain`, so each prunes the
+other's dumps and neither keeps seven.
+
+---
+
+## `[release]`
+
+Project-local commands for building and publishing the game, exposed on the
+Releases tab. Cellar never invents an s&box editor command: the editor owns the
+Steam session, so the exact commands come from the operator.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `build_command` | empty | Argv for a build. Empty disables the button. |
+| `publish_command` | empty | Argv for a publish. Empty disables the button. |
+| `working_dir` | unset | Where to run them. Defaults to the project directory. |
+
+---
+
 ## Validation
 
 Cellar refuses to start rather than running in a state that will confuse you
@@ -310,5 +343,9 @@ later. It rejects:
 - `bridge.auth = "trusted"` on a non-loopback `bind`
 - `web.enabled` on a non-loopback `bind` without `CELLAR_WEB_PASSWORD_HASH`
 - a missing `executable` or `project`
+- two enabled instances sharing a log file, a data directory, a document scope,
+  a bridge address, or `server.port` under `direct_connect`. Not reachable
+  today, since a config has one `[server]` table; it exists so the
+  concurrent-instance work cannot introduce the collision
 
 `cellar doctor` reports all of these before you start anything.

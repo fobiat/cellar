@@ -320,6 +320,34 @@ cellar settings apply server.toml                 # send it
 
 ---
 
+## `cellar exec`
+
+Type a command into the running server's console and print what comes back.
+Needs a running `cellar run` to talk to.
+
+```
+cellar exec status
+cellar exec applejack_features
+cellar exec --file boot.cfg --keep-going
+cellar exec --json status
+```
+
+The console runs at full engine privilege, which is why native commands like
+`status`, `kick` and `quit` work there and are refused to gamemode code. Every
+call is audited the same way the web UI's console is: operator, command and
+reply land in `srv_command`.
+
+Quoting is optional, so `cellar exec status` and `cellar exec "status"` are the
+same call. `--file` runs every non-blank, non-`#` line in order and stops at the
+first failure unless `--keep-going` is given; the exit code still reports a
+failure either way. `--json` emits one object per command rather than bare reply
+lines.
+
+A reply is bracketed by the console's own echo and status redraw rather than
+waited out on a timer, so it comes back as soon as the server is done with it.
+
+---
+
 ## `cellar hash-password`
 
 Hash an operator password for the web UI.

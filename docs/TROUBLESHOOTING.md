@@ -213,25 +213,36 @@ cannot run what Cellar supervises. Build the CLI from source with
 Stated rather than omitted. A claim you cannot check is worse than a gap you can
 see.
 
-- **`sbox-server.exe` under Wine has not been run through Cellar.** This is the
-  one assumption everything command-shaped rests on. The terminal check is read
-  from engine source, not observed under Wine.
-
-  What *has* been proven: the Windows `.exe` supervised a Windows child on
-  ConPTY, read readiness from the log, tracked players, answered `/readyz`, took
-  a command through ConPTY and returned the parsed reply, and stopped
-  gracefully. That covers the Windows-native path end to end. It does not cover
-  Wine.
-
-  If the console does not survive Wine, the console channel is gone and a
-  gamemode-side telemetry channel becomes mandatory rather than optional. Worth
-  knowing on day one rather than in week three.
-
-- **CI has never executed.** The workflow is committed but GitHub Actions is
-  blocked on account billing, so it is unproven. The local gate
-  (`cargo build`, `cargo test`, `cargo clippy --all-targets -- -D warnings`,
-  `cargo fmt --check`) is what has actually run.
-
 - **Gamemode telemetry is not built.** Balances, jobs, positions and feature
   state are carried by no log line. That needs a `Code/` file in AppleJackRP,
   which is expensive there, so it is deliberately last.
+
+- **Whether A2S reports players once players are connected.** The query port
+  answers with the right hostname and max players, an empty map and appid 0.
+  `SteamGameServer_Init` is called with a real query port but nothing calls
+  `BUpdateUserData`, which is where Steam derives the count from, so the count
+  is expected to stay zero. Settling it needs a real client connected.
+
+- **Where the engine caches packages downloaded from sbox.game.** Undocumented,
+  and it has already caused one failure: a development run stopped on a missing
+  `facepunch.sbox_content` that is in neither the engine source, the gamemode,
+  nor the Steam install. Until the location is known there is no offline story
+  and no way to pin a package version.
+
+### Proven since, and worth recording as proven
+
+- **`sbox-server.exe` under Wine.** Proven 2026-08-30 on Arch: Cellar spawned
+  it, typed a command into the pty, the engine parsed it and answered into the
+  log, and SIGTERM to Cellar produced a full `Source2Shutdown` rather than a
+  kill. This was the assumption everything command-shaped rested on.
+
+- **CI runs.** GitHub Actions was blocked on account billing until 2026-08-27.
+  The local gate (`cargo build`, `cargo test`, `cargo clippy --all-targets --
+  -D warnings`, `cargo fmt --check`, `bash scripts/check-docs.sh`) is still what
+  runs before every commit.
+
+- **Installing the dedicated server needs no Steam credential.** Verified
+  2026-08-31: `steamcmd +login anonymous +app_update 1892930 validate` answers
+  `Success! App '1892930' fully installed`, 4.9GB. The recorded blocker was
+  about app 590830, the paid client, which is a different app and does not carry
+  a dedicated server at all.
