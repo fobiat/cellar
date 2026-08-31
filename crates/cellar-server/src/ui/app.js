@@ -410,7 +410,7 @@ async function refreshStatus() {
       crash_looping: "down",
       stopped: "down",
     };
-    setLamp($("#stat-state"), lamps[server.state] || "wait", server.state.replace("_", " "));
+    setLamp($("#stat-state"), lamps[server.state] || "wait", stateLabel(server));
 
     $("#stat-players").textContent = `${server.players.length}/${server.max_players || "-"}`;
     $("#stat-uptime").textContent = formatUptime(server.started_at);
@@ -549,6 +549,17 @@ function applyTableTools() {
     sortable.sort((a, b) => (a.cells[column]?.textContent || "").localeCompare(b.cells[column]?.textContent || "", undefined, { numeric: true }));
     for (const row of sortable) body.append(row);
   }
+}
+
+// A state with no process reads as an absence unless it says how the last run
+// ended. Exit 0 after a stop and exit 137 after an OOM kill are the same word
+// otherwise.
+function stateLabel(server) {
+  const word = server.state.replace("_", " ");
+  const exit = server.last_exit;
+  if (!exit || (server.state !== "stopped" && server.state !== "crash_looping")) return word;
+  if (exit.code === null || exit.code === undefined) return `${word}, killed by a signal`;
+  return `${word}, exit ${exit.code}`;
 }
 
 function setLamp(node, state, label) {

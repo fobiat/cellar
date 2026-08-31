@@ -93,14 +93,17 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
 
     if with_tui {
         cellar_tui::run(handle.clone()).await?;
-        handle.stop().await;
     } else {
         wait_for_shutdown(state.shutdown_requested.clone()).await;
         tracing::info!("stopping the server gracefully");
-        // `quit` through the console, not a signal: the engine installs no
-        // SIGTERM handler, and a kill skips the Steam logoff and the convar save.
-        handle.stop().await;
     }
+
+    // `quit` through the console, not a signal: the engine installs no SIGTERM
+    // handler, and a kill skips the Steam logoff and the convar save. Shutdown
+    // rather than stop, because a stopped server leaves the supervisor resting
+    // and still answering, which is what the dashboard wants and not what an
+    // exiting process does.
+    handle.shutdown().await;
 
     let _ = tokio::time::timeout(std::time::Duration::from_secs(60), supervising).await;
 

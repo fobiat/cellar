@@ -50,10 +50,27 @@ pub struct BridgeStats {
     pub last_error: Option<String>,
 }
 
+/// How the last run of the server ended.
+///
+/// Kept after the process is gone. "Stopped" on its own is an absence rather
+/// than an answer, and the difference between exit 0, exit 137 and a signal
+/// with no code at all is the difference between a clean stop, an out-of-memory
+/// kill and something else killing the process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Exit {
+    /// `None` when the process died on a signal and reported no code.
+    pub code: Option<i32>,
+    /// Whether Cellar asked for this exit.
+    pub graceful: bool,
+    pub at: DateTime<Utc>,
+}
+
 /// Everything an interface needs to draw a screen.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     pub state: State,
+    /// How the last run ended, if one has. Survives the process.
+    pub last_exit: Option<Exit>,
     pub hostname: String,
     pub pid: Option<u32>,
     pub started_at: Option<DateTime<Utc>>,
@@ -85,6 +102,7 @@ impl Snapshot {
 #[derive(Debug, Clone)]
 pub struct Tracker {
     state: State,
+    last_exit: Option<Exit>,
     hostname: String,
     pid: Option<u32>,
     started_at: Option<DateTime<Utc>>,
@@ -103,6 +121,7 @@ impl Tracker {
     pub fn new(hostname: impl Into<String>, max_players: u32) -> Self {
         Self {
             state: State::Stopped,
+            last_exit: None,
             hostname: hostname.into(),
             pid: None,
             started_at: None,
@@ -153,6 +172,7 @@ impl Tracker {
                 self.pid = Some(*pid);
                 self.started_at = Some(now);
                 self.state = State::Starting;
+                self.last_exit = None;
                 // A restart cannot carry players over. Anything still listed is
                 // a leak from the previous run, not somebody connected.
                 self.players.clear();
@@ -164,7 +184,12 @@ impl Tracker {
                 }
                 self.state = State::Running;
             }
-            Event::ProcessExited { .. } => {
+            Event::ProcessExited { code, graceful } => {
+                self.last_exit = Some(Exit {
+                    code: *code,
+                    graceful: *graceful,
+                    at: now,
+                });
                 self.pid = None;
                 self.players.clear();
                 self.status_bar = None;
@@ -216,6 +241,7 @@ impl Tracker {
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
             state: self.state,
+            last_exit: self.last_exit,
             hostname: self.hostname.clone(),
             pid: self.pid,
             started_at: self.started_at,

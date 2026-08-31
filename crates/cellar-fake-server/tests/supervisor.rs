@@ -103,7 +103,7 @@ async fn the_server_starts_becomes_ready_and_stops_cleanly() {
     let snapshot = handle.snapshot().await.unwrap();
     assert!(snapshot.state.is_ready(), "readiness reaches the snapshot");
 
-    handle.stop().await;
+    handle.shutdown().await;
 
     let exit = wait_for(&mut events, Duration::from_secs(10), |e| {
         matches!(e, Event::ProcessExited { .. })
@@ -158,7 +158,7 @@ async fn players_joining_and_leaving_reach_the_roster() {
     let snapshot = handle.snapshot().await.unwrap();
     assert_eq!(snapshot.players.len(), 1);
 
-    handle.stop().await;
+    handle.shutdown().await;
     let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
 }
 
@@ -216,7 +216,7 @@ async fn a_console_command_returns_its_reply() {
         "the echoed command is not part of the reply: {reply:?}"
     );
 
-    handle.stop().await;
+    handle.shutdown().await;
     let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
 }
 
@@ -327,8 +327,54 @@ async fn the_configuration_can_be_captured_changed_and_read_back() {
     let text = snapshot.to_toml().unwrap();
     assert_eq!(convar::Snapshot::parse(&text).unwrap(), snapshot);
 
-    handle.stop().await;
+    handle.shutdown().await;
     let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+}
+
+/// After a stop the dashboard needs a reason, not an absence. The supervisor
+/// used to end its task here, taking the roster, the resource history and the
+/// restart button with it, and /api/status answered `"server": null`.
+#[tokio::test]
+async fn a_stopped_server_keeps_answering_and_says_how_it_ended() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = config(dir.path().join("logs/sbox-server.log"), &[]);
+    config.supervisor.restart = cellar_core::lifecycle::RestartPolicy::Never;
+
+    let (supervisor, handle, control) = Supervisor::new(config);
+    let mut events = handle.subscribe();
+    let task = tokio::spawn(supervisor.run(control));
+
+    wait_for(&mut events, Duration::from_secs(10), |e| {
+        matches!(e, Event::ServerReady { .. })
+    })
+    .await;
+
+    handle.stop().await;
+    wait_for(&mut events, Duration::from_secs(10), |e| {
+        matches!(e, Event::ProcessExited { .. })
+    })
+    .await;
+
+    let snapshot = handle
+        .snapshot()
+        .await
+        .expect("the supervisor still answers with no server running");
+    assert_eq!(snapshot.state, cellar_core::State::Stopped);
+    assert!(snapshot.pid.is_none());
+
+    let exit = snapshot.last_exit.expect("the exit is on the snapshot");
+    assert_eq!(exit.code, Some(0));
+    assert!(exit.graceful);
+
+    // And the server can be started again from the same handle.
+    handle.restart().await;
+    wait_for(&mut events, Duration::from_secs(15), |e| {
+        matches!(e, Event::ServerReady { .. })
+    })
+    .await;
+
+    handle.shutdown().await;
+    let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
 }
 
 async fn after_features(handle: &cellar_runtime::Handle) -> Vec<cellar_core::convar::Feature> {
@@ -353,7 +399,7 @@ async fn a_server_that_refuses_to_quit_is_killed_after_the_grace_period() {
     .await;
 
     let started = std::time::Instant::now();
-    handle.stop().await;
+    handle.shutdown().await;
 
     wait_for(&mut events, Duration::from_secs(15), |e| {
         matches!(e, Event::ProcessExited { .. })
@@ -390,7 +436,7 @@ async fn a_hanging_server_never_reports_ready() {
     let snapshot = handle.snapshot().await.unwrap();
     assert!(!snapshot.state.is_ready(), "state was {:?}", snapshot.state);
 
-    handle.stop().await;
+    handle.shutdown().await;
     let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
 }
 
@@ -426,7 +472,7 @@ async fn a_server_that_never_becomes_ready_stops_claiming_to_be_starting() {
     // one of the two causes, and killing it would be the wrong answer to it.
     assert!(snapshot.pid.is_some());
 
-    handle.stop().await;
+    handle.shutdown().await;
     let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
 }
 
@@ -452,6 +498,6 @@ async fn resource_samples_arrive_for_the_running_process() {
         other => panic!("expected a sample, got {other:?}"),
     }
 
-    handle.stop().await;
+    handle.shutdown().await;
     let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
 }

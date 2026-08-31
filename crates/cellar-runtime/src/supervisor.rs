@@ -89,6 +89,11 @@ pub enum Control {
     Stop { reply: oneshot::Sender<()> },
     /// Stop and start again, resetting the backoff.
     Restart { reply: oneshot::Sender<()> },
+    /// End the supervisor task itself.
+    ///
+    /// Distinct from [`Control::Stop`], which stops the game server and leaves
+    /// the supervisor answering. Cellar's own exit path is the only caller.
+    Shutdown { reply: oneshot::Sender<()> },
     /// Replace the server profile and restart it without rebinding Cellar.
     SwitchConfig {
         config: Box<Config>,
@@ -142,6 +147,14 @@ impl Handle {
     pub async fn restart(&self) {
         let (reply, rx) = oneshot::channel();
         if self.control.send(Control::Restart { reply }).await.is_ok() {
+            let _ = rx.await;
+        }
+    }
+
+    /// End the supervisor task. The server should be stopped first.
+    pub async fn shutdown(&self) {
+        let (reply, rx) = oneshot::channel();
+        if self.control.send(Control::Shutdown { reply }).await.is_ok() {
             let _ = rx.await;
         }
     }
@@ -232,19 +245,41 @@ impl Supervisor {
             .map_err(|e| format!("could not write {}: {e}", path.display()))
     }
 
-    /// Run until told to stop, or until the restart policy gives up.
+    /// Run until Cellar itself is shutting down.
+    ///
+    /// A stopped or crash-looping server does not end this task: it rests,
+    /// still answering snapshots and still able to be restarted. Returning
+    /// instead would take the roster, the resource history, the exit code and
+    /// the restart button with it, and leave `/api/status` reporting an absence
+    /// where an operator needs a reason.
     pub async fn run(mut self, mut control: mpsc::Receiver<Control>) {
         loop {
             match self.run_once(&mut control).await {
+                RunOutcome::ShutDown => return,
                 RunOutcome::Stopped => {
+                    tracing::info!("the server is stopped and will not be restarted");
                     self.tracker.set_state(State::Stopped);
-                    return;
+                    if self.rest(&mut control).await == Resting::Done {
+                        return;
+                    }
                 }
                 RunOutcome::GaveUp => {
+                    tracing::error!(
+                        "the server has restarted {} times inside the crash-loop window; giving \
+                         up rather than hiding the fault and burning the Steam registration",
+                        self.config.supervisor.backoff.crash_loop_threshold,
+                    );
                     self.tracker.set_state(State::CrashLooping);
-                    return;
+                    if self.rest(&mut control).await == Resting::Done {
+                        return;
+                    }
                 }
                 RunOutcome::RestartAfter(delay) => {
+                    tracing::info!(
+                        "restarting the server in {:?} (consecutive failures: {})",
+                        delay,
+                        self.restarts.consecutive_failures(),
+                    );
                     self.tracker.set_state(State::Backoff);
                     self.tracker
                         .set_consecutive_failures(self.restarts.consecutive_failures());
@@ -255,7 +290,14 @@ impl Supervisor {
                             match message {
                                 Some(Control::Stop { reply }) => {
                                     let _ = reply.send(());
+                                    tracing::info!("the backoff wait was cancelled by a stop");
                                     self.tracker.set_state(State::Stopped);
+                                    if self.rest(&mut control).await == Resting::Done {
+                                        return;
+                                    }
+                                }
+                                Some(Control::Shutdown { reply }) => {
+                                    let _ = reply.send(());
                                     return;
                                 }
                                 Some(Control::Snapshot { reply }) => {
@@ -286,6 +328,49 @@ impl Supervisor {
         }
     }
 
+    /// Answer control messages with no server running.
+    ///
+    /// Returns [`Resting::Resume`] when asked to start the server again, and
+    /// [`Resting::Done`] when Cellar is shutting down or the last handle has
+    /// been dropped.
+    async fn rest(&mut self, control: &mut mpsc::Receiver<Control>) -> Resting {
+        loop {
+            match control.recv().await {
+                Some(Control::Snapshot { reply }) => {
+                    let _ = reply.send(self.tracker.snapshot());
+                }
+                Some(Control::Restart { reply }) => {
+                    tracing::info!("starting the server again on request");
+                    self.restarts.record_healthy_run();
+                    let _ = reply.send(());
+                    return Resting::Resume;
+                }
+                // Already stopped. Answering rather than refusing keeps a
+                // second stop, or a stop racing a crash, from looking like an
+                // error to whoever asked.
+                Some(Control::Stop { reply }) => {
+                    let _ = reply.send(());
+                }
+                Some(Control::Exec { reply, .. }) => {
+                    let _ = reply.send(Err("the server is not running".to_owned()));
+                }
+                Some(Control::SwitchConfig { config, reply }) => {
+                    let previous = std::mem::replace(&mut self.config, *config);
+                    let result = self.prepare_hosting();
+                    if result.is_err() {
+                        self.config = previous;
+                    }
+                    let _ = reply.send(result.map(|_| ()));
+                }
+                Some(Control::Shutdown { reply }) => {
+                    let _ = reply.send(());
+                    return Resting::Done;
+                }
+                None => return Resting::Done,
+            }
+        }
+    }
+
     async fn run_once(&mut self, control: &mut mpsc::Receiver<Control>) -> RunOutcome {
         let needs_local_http = self.config.bridge.enabled;
         let command = launch::command_for(&self.config.server, needs_local_http);
@@ -307,6 +392,7 @@ impl Supervisor {
         let (mut child, mut output) = match spawned {
             Ok(pair) => pair,
             Err(error) => {
+                tracing::error!("could not start the server: {error}");
                 self.publish(Event::Unparsed {
                     raw: format!("could not start the server: {error}"),
                     origin: Origin::Cellar,
@@ -328,6 +414,7 @@ impl Supervisor {
         };
 
         let pid = child.pid().unwrap_or(0);
+        tracing::info!("started the server as pid {pid}: {redacted}");
         self.publish(Event::ProcessStarted {
             pid,
             command: redacted,
@@ -367,6 +454,7 @@ impl Supervisor {
         let mut said_unhealthy = false;
         let mut requested_stop = false;
         let mut restart_requested = false;
+        let mut shutting_down = false;
         // The command awaiting its reply, if any.
         let mut collecting: Option<PendingReply> = None;
 
@@ -511,6 +599,18 @@ impl Supervisor {
                         }
                         Some(Control::Restart { reply }) => {
                             restart_requested = true;
+                            tracing::info!("restarting the server on request");
+                            let status = self.graceful_stop(&mut child, &mut output, &mut assembler).await;
+                            let _ = reply.send(());
+                            break status;
+                        }
+                        // Cellar is exiting with the server still up. Stop it
+                        // the same way an explicit stop would: the engine has
+                        // no signal handler, so anything else skips the Steam
+                        // logoff and the convar save.
+                        Some(Control::Shutdown { reply }) => {
+                            requested_stop = true;
+                            shutting_down = true;
                             let status = self.graceful_stop(&mut child, &mut output, &mut assembler).await;
                             let _ = reply.send(());
                             break status;
@@ -552,10 +652,27 @@ impl Supervisor {
             });
         }
 
+        let graceful = requested_stop || restart_requested;
+        match (graceful, exit_code) {
+            (true, code) => tracing::info!(
+                "the server exited with {} after a stop Cellar asked for",
+                describe_exit(code),
+            ),
+            (false, code) => tracing::warn!(
+                "the server exited with {} without being asked to, after {}s",
+                describe_exit(code),
+                run_started.elapsed().as_secs(),
+            ),
+        }
+
         self.publish(Event::ProcessExited {
             code: exit_code,
-            graceful: requested_stop || restart_requested,
+            graceful,
         });
+
+        if shutting_down {
+            return RunOutcome::ShutDown;
+        }
 
         if restart_requested {
             self.restarts.record_healthy_run();
@@ -596,9 +713,17 @@ impl Supervisor {
         self.tracker.set_state(State::Stopping);
 
         if child.send_command("quit").is_err() {
+            tracing::warn!(
+                "could not reach the console to send `quit`; killing the server, which skips the \
+                 Steam logoff and the convar save"
+            );
             let _ = child.kill();
             return None;
         }
+        tracing::info!(
+            "sent `quit`; giving the engine {}s to run its nine shutdown steps",
+            self.config.supervisor.graceful_timeout_seconds.max(1),
+        );
 
         let deadline = Duration::from_secs(self.config.supervisor.graceful_timeout_seconds.max(1));
         let waited = tokio::time::timeout(deadline, async {
@@ -639,12 +764,14 @@ impl Supervisor {
         match waited {
             Ok(status) => status,
             Err(_) => {
+                let why = format!(
+                    "the server did not exit within {}s of `quit`; killing it, which skips the \
+                     Steam logoff and the convar save",
+                    deadline.as_secs()
+                );
+                tracing::warn!("{why}");
                 let _ = self.events.send(Event::Unparsed {
-                    raw: format!(
-                        "the server did not exit within {}s of `quit`; killing it, which skips the \
-                         Steam logoff and the convar save",
-                        deadline.as_secs()
-                    ),
+                    raw: why,
                     origin: Origin::Cellar,
                 });
                 let _ = child.kill();
@@ -728,6 +855,12 @@ impl Supervisor {
         }
 
         let event = grammar::classify(&parsed, origin, ready_pattern);
+        if let Event::ServerReady { hostname, .. } = &event {
+            tracing::info!(
+                "the server is ready and accepting players as '{}'",
+                hostname.as_deref().unwrap_or(&self.config.server.hostname),
+            );
+        }
         self.publish(event);
     }
 }
@@ -736,6 +869,24 @@ enum RunOutcome {
     Stopped,
     GaveUp,
     RestartAfter(Duration),
+    /// Cellar itself is exiting.
+    ShutDown,
+}
+
+/// An exit status in words. `None` means the process died on a signal and
+/// reported no code at all, which is not the same as exit 0.
+fn describe_exit(code: Option<i32>) -> String {
+    match code {
+        Some(0) => "code 0, cleanly".to_owned(),
+        Some(code) => format!("code {code}"),
+        None => "no exit code, so it was killed by a signal".to_owned(),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Resting {
+    Resume,
+    Done,
 }
 
 #[cfg(test)]
