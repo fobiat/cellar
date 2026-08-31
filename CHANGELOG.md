@@ -24,6 +24,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `cellar exec <command>` types a command into the running server's console and
+  prints the reply. The console was already reachable from the web UI and, when
+  `CELLAR_MCP_ENABLE_COMMAND=1`, over MCP, but not from the command line, so a
+  script had to speak HTTP to `/api/exec` itself. `--file` runs a list one per
+  line, skipping blanks and `#` comments; `--json` emits one object per command;
+  `--keep-going` continues past a failure and still exits non-zero. It reuses
+  the `LiveServer` client the `settings` subcommands already use, so it inherits
+  their loopback resolution, `CELLAR_WEB_PASSWORD` handling and audit trail.
+
+  Caveat worth knowing before scripting against it: the reply channel is
+  best-effort. Under load the engine's own log output interleaves into the
+  captured reply, replies can come back empty, and an unknown command is not an
+  error, it returns whatever was on the console and exits 0. Assert positively
+  on an expected token rather than treating a non-empty reply as success.
+
 - `cellar doctor` checks that a local project's `Libraries` directory exists.
   The engine's `StartGame` enumerates it and throws when it is absent, and the
   server then exits to a bare console with no gamemode loaded, which

@@ -710,6 +710,84 @@ pub async fn settings(path: &Path, action: crate::SettingsAction) -> Result<()> 
     Ok(())
 }
 
+pub async fn exec(
+    path: &Path,
+    command: Vec<String>,
+    file: Option<std::path::PathBuf>,
+    json: bool,
+    keep_going: bool,
+) -> Result<()> {
+    let commands = match &file {
+        Some(file) => {
+            let text = std::fs::read_to_string(file)
+                .with_context(|| format!("reading {}", file.display()))?;
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(str::to_owned)
+                .collect()
+        }
+        // Trailing args arrive already split, and the console takes one line.
+        None => vec![command.join(" ").trim().to_owned()],
+    };
+
+    if commands.iter().all(String::is_empty) {
+        anyhow::bail!("nothing to run: give a command, or a --file with one per line");
+    }
+
+    let config = Config::load(path)?;
+    let client = LiveServer::connect(&config).await?;
+
+    let mut failed = 0usize;
+
+    for command in &commands {
+        match client.exec(command).await {
+            Ok(reply) => {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({ "command": command, "reply": reply, "ok": true })
+                    );
+                } else {
+                    // A file of commands needs to say which reply belongs to
+                    // which; a single command's reply speaks for itself.
+                    if file.is_some() {
+                        println!("> {command}");
+                    }
+                    for line in &reply {
+                        println!("{line}");
+                    }
+                }
+            }
+            Err(why) => {
+                failed += 1;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "command": command,
+                            "error": why.to_string(),
+                            "ok": false,
+                        })
+                    );
+                } else {
+                    eprintln!("{command}: {why}");
+                }
+
+                if !keep_going {
+                    break;
+                }
+            }
+        }
+    }
+
+    if failed > 0 {
+        anyhow::bail!("{failed} of {} command(s) failed", commands.len());
+    }
+
+    Ok(())
+}
+
 fn print_changes(changes: &[cellar_core::convar::Change]) {
     if changes.is_empty() {
         println!("No changes.");

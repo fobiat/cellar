@@ -104,6 +104,27 @@ enum Command {
         action: SettingsAction,
     },
 
+    /// Type a command into the running server's console and print the reply.
+    ///
+    /// The console runs at full engine privilege, which is what makes a
+    /// gamemode's host-only commands reachable at all. Every call is audited
+    /// the same way the web UI's console is.
+    Exec {
+        /// The command and its arguments. Quoting is optional: `cellar exec
+        /// status` and `cellar exec "status"` are the same call.
+        #[arg(trailing_var_arg = true)]
+        command: Vec<String>,
+        /// Run every non-blank, non-`#` line of a file instead, in order.
+        #[arg(long, conflicts_with = "command")]
+        file: Option<std::path::PathBuf>,
+        /// Emit one JSON object per command rather than bare reply lines.
+        #[arg(long)]
+        json: bool,
+        /// Keep going after a command fails. The exit code still reports it.
+        #[arg(long)]
+        keep_going: bool,
+    },
+
     /// Update Cellar itself from the published releases.
     SelfUpdate {
         /// Report what is available without installing it.
@@ -259,6 +280,12 @@ async fn main() -> std::process::ExitCode {
         Command::Mariadb { action } => commands::mariadb(&cli.config, action).await,
         Command::Doc { action } => commands::doc(&cli.config, action).await,
         Command::Settings { action } => commands::settings(&cli.config, action).await,
+        Command::Exec {
+            command,
+            file,
+            json,
+            keep_going,
+        } => commands::exec(&cli.config, command, file, json, keep_going).await,
         Command::SelfUpdate { check } => commands::self_update(check).await,
         Command::HashPassword => commands::hash_password(),
         Command::Mcp { action } => commands::mcp(action).await,
