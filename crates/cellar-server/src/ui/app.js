@@ -1135,7 +1135,7 @@ async function scanLogs() {
   const level = $("#console-level").value;
   const category = $("#console-category").value;
   if (query) params.set("q", query);
-  if (level) params.set("level", level);
+  if (level) params.set("level_min", level);
   if (category) params.set("category", category);
   const response = await fetch(`/api/logs?${params}`);
   const data = await response.json();

@@ -16,7 +16,12 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 pub struct Query {
     pub text: Option<String>,
     pub tag: Option<String>,
+    /// Exactly this severity.
     pub level: Option<Level>,
+    /// This severity or worse. The console's severity control is a threshold,
+    /// so searching the rotated files has to be one too or the live view and
+    /// the search disagree about the same control.
+    pub level_min: Option<Level>,
     pub category: Option<String>,
     pub limit: usize,
 }
@@ -130,6 +135,11 @@ fn matches(query: &Query, record: &Record) -> bool {
     {
         return false;
     }
+    if let Some(floor) = query.level_min
+        && record.level < floor
+    {
+        return false;
+    }
     if let Some(tag) = &query.tag
         && !record.tag.eq_ignore_ascii_case(tag)
     {
@@ -164,5 +174,45 @@ pub fn category(tag: &str, message: &str) -> String {
         "cellar".to_owned()
     } else {
         "other".to_owned()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn record_at(level: Level) -> Record {
+        Record {
+            at: Utc::now(),
+            level,
+            tag: "Bootstrap".to_owned(),
+            category: "network".to_owned(),
+            message: "Lobby created".to_owned(),
+            origin: Origin::LogFile,
+            raw: "Lobby created".to_owned(),
+            file: "sbox-server.log".to_owned(),
+        }
+    }
+
+    #[test]
+    fn level_min_admits_everything_at_or_above_the_floor() {
+        let query = Query {
+            level_min: Some(Level::Warning),
+            ..Default::default()
+        };
+        assert!(!matches(&query, &record_at(Level::Info)));
+        assert!(matches(&query, &record_at(Level::Warning)));
+        assert!(matches(&query, &record_at(Level::Error)));
+    }
+
+    #[test]
+    fn level_stays_an_exact_match_for_callers_that_want_one() {
+        let query = Query {
+            level: Some(Level::Warning),
+            ..Default::default()
+        };
+        assert!(!matches(&query, &record_at(Level::Error)));
+        assert!(matches(&query, &record_at(Level::Warning)));
     }
 }

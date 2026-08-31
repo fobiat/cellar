@@ -939,6 +939,8 @@ struct LogsQuery {
     #[serde(default)]
     level: Option<cellar_core::event::Level>,
     #[serde(default)]
+    level_min: Option<cellar_core::event::Level>,
+    #[serde(default)]
     category: Option<String>,
 }
 
@@ -962,6 +964,7 @@ async fn logs(
             text: query.q.filter(|value| !value.trim().is_empty()),
             tag: query.tag.filter(|value| !value.trim().is_empty()),
             level: query.level,
+            level_min: query.level_min,
             category: query.category.filter(|value| !value.trim().is_empty()),
             limit: query.limit.unwrap_or(250).clamp(1, 5000),
         },
