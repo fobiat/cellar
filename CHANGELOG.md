@@ -6,8 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Report sizes in decimal KB/MB/GB rather than KiB/MiB/GiB, in the web UI and
+  in the TUI and CLI both. The two error strings naming a fixed binary limit
+  (the 512 KiB settings import and the 2 MiB MCP response cap) keep their
+  units, because the limits themselves are unchanged and relabelling them
+  alone would misstate them.
+- Move the mode, gamemode and profile readout, the restart policy and the
+  connection lamp to the right of the masthead, leaving the Cellar version and
+  build commit on the left. Dropped the "server control" tagline.
+
 ### Fixed
 
+- Stop the two Linux AppleJackRP profiles shipping `mariadb.managed = true`.
+  A managed instance cannot work there, so both now ship `managed = false`
+  with the reason beside it.
 - Point the published AppleJackRP profiles at the published package's data
   directory. All three carried the `#local` leaf, which is the local `.sbproj`
   directory, so `hosting.json` was written where the game never read it and
@@ -45,6 +59,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `restart = "on_failure"` retries into the same wall.
 - `cellar doctor` checks that `server.data_dir` agrees with the configured
   mode, so the `#local` mismatch above cannot come back unnoticed.
+- `cellar mariadb provision` refuses on a non-Windows host instead of failing
+  halfway. `release::archive_url` serves the winx64 zip unconditionally and
+  every binary the provisioner spawns is an `.exe`, so a Linux host paid a
+  400MB download, unpacked Windows binaries, and then died on the first exec
+  with a bare `Permission denied (os error 13)` naming nothing. The error now
+  says so and points at `mariadb.managed = false` plus `database.url_file`.
+- `scripts/bootstrap-linux.sh`, which sets up a bare Linux host: curl, tar,
+  rsync and Wine, then optionally steamcmd, the Windows .NET runtime inside the
+  Wine prefix, and MariaDB, then Cellar itself. `install.sh` installs only
+  Cellar, which suits a container image that already carries Wine; a bare
+  machine is also missing everything Cellar supervises. It probes each
+  component before touching anything, handles pacman, apt, dnf and zypper, and
+  prints the exact command for anything it cannot install rather than failing
+  the run. `--with-dotnet` uses Microsoft's own installer, because
+  `sbox-server.dll` asks for `Microsoft.NETCore.App` 10.0.0 and winetricks
+  stops at `dotnet9`.
 
 ## [0.1.13] - 2026-08-28
 

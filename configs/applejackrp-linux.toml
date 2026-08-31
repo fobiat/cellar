@@ -36,7 +36,10 @@ migrate_on_start = false
 event_retention_days = 90
 
 [mariadb]
-managed = true
+# Windows-only. The pinned archive is the winx64 build and every binary the
+# provisioner spawns is an .exe, so a Linux host uses a MariaDB it already
+# runs and points database.url_file at it.
+managed = false
 version = "11.4.5"
 sha256 = "b7c11d38657f16b837e68199d73670510aadb78f42dfa5d5fdea31a7aab342e3"
 install_dir = '/var/lib/cellar/mariadb/11.4.5'

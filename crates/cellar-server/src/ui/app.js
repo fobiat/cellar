@@ -942,12 +942,13 @@ function renderResult(result) {
 const now = () => new Date().toTimeString().slice(0, 8);
 const clock = (iso) => (iso ? new Date(iso).toTimeString().slice(0, 8) : "");
 
+// Decimal, matching how disks and dashboards are labelled everywhere else.
 function formatBytes(bytes) {
-  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  const units = ["B", "KB", "MB", "GB", "TB"];
   let value = Number(bytes) || 0;
   let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000;
     unit += 1;
   }
   return unit === 0 ? `${value} B` : `${value.toFixed(1)} ${units[unit]}`;

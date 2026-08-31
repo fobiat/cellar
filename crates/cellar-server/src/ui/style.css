@@ -437,7 +437,6 @@ button.action.danger:hover { background: color-mix(in srgb, var(--aj-russet) 16%
 @media (max-width: 680px) {
   body { font-size: 13px; }
   .masthead { gap: 9px; padding: 11px 12px; }
-  .masthead .tagline { display: none; }
   .masthead .header-meta { display: none; }
   .masthead .action { padding: 7px 9px; }
   .wordmark { letter-spacing: 0.2em; }

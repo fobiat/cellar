@@ -144,13 +144,15 @@ impl Sampler {
 }
 
 /// Bytes as a short human string, for the TUI and the CLI.
+///
+/// Decimal, matching how disks and dashboards are labelled everywhere else.
 pub fn format_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut value = bytes as f64;
     let mut unit = 0;
 
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
-        value /= 1024.0;
+    while value >= 1000.0 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
         unit += 1;
     }
 
@@ -239,8 +241,10 @@ mod tests {
     fn byte_formatting_reads_the_way_a_dashboard_wants() {
         assert_eq!(format_bytes(0), "0 B");
         assert_eq!(format_bytes(512), "512 B");
-        assert_eq!(format_bytes(1536), "1.5 KiB");
-        assert_eq!(format_bytes(2 * 1024 * 1024 * 1024), "2.0 GiB");
+        assert_eq!(format_bytes(1500), "1.5 KB");
+        assert_eq!(format_bytes(2_000_000_000), "2.0 GB");
+        // 1024 is no longer a boundary, so the old binary step reads as 1.0 KB.
+        assert_eq!(format_bytes(1024), "1.0 KB");
     }
 
     #[test]

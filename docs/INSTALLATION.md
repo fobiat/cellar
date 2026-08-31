@@ -109,6 +109,35 @@ than downloading something that will not run. The dedicated server is a Windows
 x86_64 binary under Wine, so an arm64 host cannot run what Cellar supervises
 anyway. Build the CLI from source if you want it there.
 
+### A bare host, including what Cellar supervises
+
+`install.sh` installs Cellar and nothing else, which is what a container image
+with Wine already in it needs. A bare machine is missing the other half: the
+things Cellar starts.
+
+```sh
+./scripts/bootstrap-linux.sh --check   # report what is missing, change nothing
+./scripts/bootstrap-linux.sh --all     # then install it
+```
+
+It handles pacman, apt, dnf and zypper, and probes each component before
+touching anything, so it re-runs safely and only asks for root for what is
+genuinely absent. Anything it cannot install prints the exact command instead of
+failing the run.
+
+| Flag | What it adds |
+| --- | --- |
+| (default) | curl, tar, rsync, Wine, then Cellar itself |
+| `--with-steamcmd` | steamcmd, which is how `sbox-server.exe` reaches the host |
+| `--with-dotnet` | the Windows .NET runtime, inside the Wine prefix |
+| `--with-mariadb` | MariaDB, for `[database]` and the web UI's history |
+| `--from-source` | build the CLI here rather than downloading the release |
+
+`--with-dotnet` fetches Microsoft's own installer rather than using a winetricks
+verb. `sbox-server.dll` asks for `Microsoft.NETCore.App` 10.0.0 and winetricks
+stops at `dotnet9`, so the verb route installs a runtime the server refuses to
+start on. Use `--dotnet-version` when the engine moves on.
+
 ## Verify what you downloaded
 
 Every release asset ships with a `.sha256` beside it.

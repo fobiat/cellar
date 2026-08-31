@@ -26,6 +26,12 @@ pub enum ProvisionError {
     MissingDataDir,
     #[error("mariadb.sha256 is not set")]
     MissingChecksum,
+    #[error(
+        "a managed MariaDB is Windows-only: the pinned archive is the winx64 build and every \
+         binary here is an .exe. Set mariadb.managed = false and point database.url_file or \
+         CELLAR_DATABASE_URL at a MariaDB this host already runs."
+    )]
+    UnsupportedHost,
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -98,6 +104,15 @@ pub async fn provision(
     config: &MariaDbConfig,
     client: &reqwest::Client,
 ) -> Result<String, ProvisionError> {
+    // Before the download, not after: `release::archive_url` serves the winx64
+    // zip unconditionally, and every binary this module spawns is named `.exe`.
+    // Without this the caller pays a 400MB download, unpacks Windows binaries
+    // onto a Linux host, and only then fails on the first exec with a bare
+    // "Permission denied (os error 13)" that names nothing.
+    if !cfg!(windows) {
+        return Err(ProvisionError::UnsupportedHost);
+    }
+
     let install_dir = config
         .install_dir
         .as_ref()
