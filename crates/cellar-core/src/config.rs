@@ -185,6 +185,26 @@ impl ServerConfig {
             .is_some_and(|game| !game.trim().is_empty())
     }
 
+    /// The directory the game reads its own state from: `features.json`,
+    /// `permissions.json` and the `hosting.json` Cellar writes.
+    ///
+    /// `data_dir` is the operator's answer and wins, because it is already what
+    /// `hosting.json` is written to and pointing the two at different places
+    /// cannot be right. The fallback reproduces the engine's own layout,
+    /// `<exe dir>/data/<ident split on dots>`, which is derivable only for a
+    /// published package: a local `.sbproj` run leaves `game` unset.
+    pub fn game_data_dir(&self) -> Option<PathBuf> {
+        if let Some(configured) = &self.data_dir {
+            return Some(configured.clone());
+        }
+        let root = self.executable.parent()?;
+        let mut path = root.join("data");
+        for segment in self.game.as_deref()?.split('.') {
+            path.push(segment);
+        }
+        Some(path)
+    }
+
     /// Why `data_dir` cannot be the directory the game reads, if it cannot.
     ///
     /// The engine appends `#local` to the ident for a local `.sbproj` and names
@@ -976,6 +996,45 @@ mod tests {
             ))),
             ..minimal().server
         }
+    }
+
+    #[test]
+    fn a_local_project_profile_still_finds_the_directory_the_operator_configured() {
+        // The whole of the bug: the derived path needs server.game, a local
+        // .sbproj run does not set it, and the Access panel then read
+        // features.json and permissions.json as their empty fallbacks while the
+        // operator had already named the directory.
+        let server = with_data_dir(None, "applejackrp#local");
+
+        assert_eq!(
+            server.game_data_dir(),
+            Some(PathBuf::from(
+                "/home/container/sbox/data/fobiat/applejackrp#local"
+            ))
+        );
+    }
+
+    #[test]
+    fn an_unset_data_dir_falls_back_to_the_engines_own_layout() {
+        let server = ServerConfig {
+            game: Some("fobiat.applejackrp".to_owned()),
+            data_dir: None,
+            ..minimal().server
+        };
+        let derived = server.game_data_dir().expect("a published profile derives");
+
+        assert!(derived.ends_with("data/fobiat/applejackrp"), "{derived:?}");
+    }
+
+    #[test]
+    fn a_local_project_with_no_data_dir_has_nothing_to_derive_from() {
+        let server = ServerConfig {
+            game: None,
+            data_dir: None,
+            ..minimal().server
+        };
+
+        assert_eq!(server.game_data_dir(), None);
     }
 
     #[test]

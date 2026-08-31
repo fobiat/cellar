@@ -212,18 +212,7 @@ fn build_state(
     state.server_direct_connect = config.server.direct_connect;
     state.configured_game = config.server.game.clone();
     state.configured_map = config.server.map.clone();
-    state.game_data_dir = config
-        .server
-        .executable
-        .parent()
-        .zip(config.server.game.as_deref())
-        .map(|(root, game)| {
-            let mut path = root.join("data");
-            for segment in game.split('.') {
-                path.push(segment);
-            }
-            path
-        });
+    state.game_data_dir = config.server.game_data_dir();
     state.version_probe = Some(cellar_update::Probe {
         project_dir: project_dir(config),
         steam_dir: config.update.steam_dir.clone(),
