@@ -22,6 +22,8 @@ zip = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+cellar-store = { workspace = true }
+sqlx = { workspace = true }
 
 [lints]
 workspace = true

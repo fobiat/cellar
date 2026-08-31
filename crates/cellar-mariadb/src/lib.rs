@@ -18,6 +18,6 @@ pub mod provision;
 pub mod release;
 pub mod supervisor;
 
-pub use backup::{BackupError, create as backup};
+pub use backup::{BackupError, create as backup, restore};
 pub use provision::{Marker, ProvisionError, provision, read_marker};
 pub use supervisor::{Control, Handle, Status, Supervisor};

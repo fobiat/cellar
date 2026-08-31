@@ -4,7 +4,7 @@
 //! answer and exit, which is what makes them safe to run against a live
 //! deployment and useful in a script.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use cellar_core::config::Config;
@@ -610,9 +610,101 @@ pub async fn db(path: &Path, action: DbAction) -> Result<()> {
                 .map_err(|why| anyhow::anyhow!(why))?;
             println!("Backup written to {}.", output.display());
         }
+        DbAction::Backups => {
+            let dumps = list_dumps(&config)?;
+            if dumps.is_empty() {
+                println!("No dumps yet. `cellar db backup` writes one.");
+            }
+            for dump in dumps {
+                println!(
+                    "{:<12} {}",
+                    cellar_runtime::metrics::format_bytes(dump.bytes),
+                    dump.path.display()
+                );
+            }
+        }
+        DbAction::Restore { dump, yes } => {
+            let dump =
+                match dump {
+                    Some(path) => path,
+                    None => list_dumps(&config)?
+                        .into_iter()
+                        .next()
+                        .context(
+                            "no dumps in the backup directory, and none named on the command line",
+                        )?
+                        .path,
+                };
+
+            refuse_if_a_cellar_is_running(&config).await?;
+
+            if !yes {
+                let database = url.expose().rsplit('/').next().unwrap_or("the database");
+                println!(
+                    "About to replace every table in '{database}' with the contents of {}.\n\
+                     This cannot be undone. Take a backup first if you have not.",
+                    dump.display()
+                );
+                print!("Type the database name to continue: ");
+                std::io::Write::flush(&mut std::io::stdout())?;
+                let mut typed = String::new();
+                std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut typed)?;
+                if typed.trim() != database {
+                    anyhow::bail!("that is not the database name; nothing was changed");
+                }
+            }
+
+            let restored = cellar_mariadb::restore(&dump, url.expose(), &config.mariadb)
+                .map_err(|why| anyhow::anyhow!(why))?;
+            println!(
+                "Restored {} into '{}' from {}.",
+                cellar_runtime::metrics::format_bytes(restored.bytes),
+                restored.database,
+                restored.from.display()
+            );
+        }
     }
 
     Ok(())
+}
+
+fn list_dumps(config: &Config) -> Result<Vec<cellar_mariadb::backup::Dump>> {
+    let directory = backup_directory(config)
+        .context("backup.directory is unset and there is no mariadb.data_dir to derive one from")?;
+    match cellar_mariadb::backup::list(&directory) {
+        Ok(dumps) => Ok(dumps),
+        Err(why) if why.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(why) => Err(why).with_context(|| format!("reading {}", directory.display())),
+    }
+}
+
+/// Where dumps live, matching what `backup::create` decides.
+fn backup_directory(config: &Config) -> Option<PathBuf> {
+    config.backup.directory.clone().or_else(|| {
+        config
+            .mariadb
+            .data_dir
+            .as_ref()
+            .map(|path| path.join("backups"))
+    })
+}
+
+/// Refuse a restore while a Cellar is up, because it is supervising a server
+/// that is writing to the database this is about to replace.
+async fn refuse_if_a_cellar_is_running(config: &Config) -> Result<()> {
+    if !config.web.enabled {
+        return Ok(());
+    }
+    if !matches!(address_is_free(&config.web.bind).await, Free::HeldByCellar) {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "a Cellar is answering on {}, so a supervised server is probably writing to this \
+         database. Stop it first: the gamemode writes through the bridge continuously, and a \
+         write landing mid-restore lands in a table that is about to be dropped.",
+        config.web.bind
+    )
 }
 
 /// Provision or report on the locally-hosted MariaDB.

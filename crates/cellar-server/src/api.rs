@@ -38,6 +38,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/db/info", get(db_info))
         .route("/api/db/table/{table}", get(db_browse))
         .route("/api/db/query", post(db_query))
+        .route("/api/db/backups", get(db_backups))
+        .route("/api/db/backup", post(db_backup))
+        .route("/api/db/restore", post(db_restore))
         .route("/api/settings", get(settings).post(set_setting))
         .route("/api/settings/export", get(export_settings))
         .route("/api/settings/import", post(import_settings))
@@ -1508,6 +1511,156 @@ async fn db_info(State(state): State<Arc<AppState>>, _: Operator) -> Response {
             "source": database_source(&state),
         }))
         .into_response(),
+        Err(why) => error(StatusCode::BAD_GATEWAY, why.to_string()),
+    }
+}
+
+/// Write an operator action to the audit table, warning rather than failing.
+///
+/// The action already happened; refusing to answer because the record could not
+/// be written would be a worse outcome than an unrecorded one.
+async fn record_action(state: &AppState, operator: &Operator, command: &str, detail: &str) {
+    let Some(pool) = &state.pool else { return };
+    if let Err(why) = cellar_store::ops::record_command(
+        pool,
+        None,
+        &operator.name,
+        command,
+        &[detail.to_owned()],
+        true,
+    )
+    .await
+    {
+        tracing::warn!("could not record '{command}': {why}");
+    }
+}
+
+/// Where dumps live, matching what `backup::create` decides.
+fn backup_directory(state: &AppState) -> Option<std::path::PathBuf> {
+    state.backup_config.directory.clone().or_else(|| {
+        state
+            .mariadb_config
+            .data_dir
+            .as_ref()
+            .map(|path| path.join("backups"))
+    })
+}
+
+async fn db_backups(State(state): State<Arc<AppState>>, _: Operator) -> Response {
+    let Some(directory) = backup_directory(&state) else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "backup.directory is unset and there is no mariadb.data_dir to derive one from",
+        );
+    };
+
+    let dumps = cellar_mariadb::backup::list(&directory).unwrap_or_default();
+    Json(serde_json::json!({
+        "directory": directory,
+        "dumps": dumps.iter().map(|dump| serde_json::json!({
+            "path": dump.path,
+            "name": dump.path.file_name().map(|n| n.to_string_lossy()),
+            "bytes": dump.bytes,
+            "modified": chrono::DateTime::<chrono::Utc>::from(dump.modified),
+        })).collect::<Vec<_>>(),
+    }))
+    .into_response()
+}
+
+async fn db_backup(State(state): State<Arc<AppState>>, operator: Operator) -> Response {
+    let Some(url) = &state.database_url else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "no database is configured");
+    };
+
+    match cellar_mariadb::backup(url.expose(), &state.mariadb_config, &state.backup_config) {
+        Ok(path) => {
+            record_action(&state, &operator, "db backup", &path.display().to_string()).await;
+            Json(serde_json::json!({ "path": path })).into_response()
+        }
+        Err(why) => error(StatusCode::BAD_GATEWAY, why.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct RestoreRequest {
+    /// A dump name from `/api/db/backups`, not a path.
+    name: String,
+}
+
+/// Replace every table the named dump carries.
+///
+/// The supervised server is stopped first, and the reply says so. The gamemode
+/// writes through the bridge continuously and a write landing mid-restore lands
+/// in a table that is about to be dropped, so this is not an optional courtesy.
+/// The server is not started again: whoever restored a database should look at
+/// it before players reach it.
+async fn db_restore(
+    State(state): State<Arc<AppState>>,
+    operator: Operator,
+    Json(request): Json<RestoreRequest>,
+) -> Response {
+    let Some(url) = &state.database_url else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "no database is configured");
+    };
+    let Some(directory) = backup_directory(&state) else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "backup.directory is unset and there is no mariadb.data_dir to derive one from",
+        );
+    };
+
+    // A name from the listing, resolved inside the directory. Taking a path
+    // would let an operator session read any file on the host into the database
+    // as SQL, and the listing is the only set that makes sense anyway.
+    let Some(dump) = cellar_mariadb::backup::list(&directory)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|dump| {
+            dump.path
+                .file_name()
+                .is_some_and(|name| name == request.name.as_str())
+        })
+    else {
+        return error(
+            StatusCode::NOT_FOUND,
+            format!(
+                "no dump named '{}' in {}",
+                request.name,
+                directory.display()
+            ),
+        );
+    };
+
+    let stopped = match &state.supervisor {
+        Some(supervisor) => {
+            supervisor.stop().await;
+            true
+        }
+        None => false,
+    };
+
+    match cellar_mariadb::restore(&dump.path, url.expose(), &state.mariadb_config) {
+        Ok(restored) => {
+            record_action(
+                &state,
+                &operator,
+                "db restore",
+                &format!("{} into {}", restored.from.display(), restored.database),
+            )
+            .await;
+            Json(serde_json::json!({
+                "restored": restored.from,
+                "database": restored.database,
+                "bytes": restored.bytes,
+                "server_stopped": stopped,
+                "detail": if stopped {
+                    "The server was stopped before the restore and has not been started again."
+                } else {
+                    "No server was running."
+                },
+            }))
+            .into_response()
+        }
         Err(why) => error(StatusCode::BAD_GATEWAY, why.to_string()),
     }
 }

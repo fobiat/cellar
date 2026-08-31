@@ -184,6 +184,20 @@ enum DbAction {
     Prune,
     /// Create a timestamped logical dump and prune old dumps.
     Backup,
+    /// List the dumps in the backup directory, newest first.
+    Backups,
+    /// Apply a dump back over the database, replacing every table it carries.
+    ///
+    /// Stop the supervised server first. The gamemode writes through the
+    /// bridge continuously, and a write landing mid-restore lands in a table
+    /// that is about to be dropped.
+    Restore {
+        /// The dump to apply. Defaults to the newest in the backup directory.
+        dump: Option<PathBuf>,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]

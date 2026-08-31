@@ -157,13 +157,44 @@ Database maintenance. Needs `CELLAR_DATABASE_URL`, not a running server.
 cellar db migrate     # apply pending migrations
 cellar db status      # show the schema and row counts
 cellar db prune       # delete events older than the configured retention
+cellar db backup      # write a timestamped dump and prune old ones
+cellar db backups     # list the dumps in the backup directory, newest first
+cellar db restore     # apply a dump back over the database
 ```
 
-`migrate` is safe to run repeatedly; it applies only what is pending. With
-`database.migrate_on_start = true` (the default) `cellar run` does this itself.
+`migrate` is safe to run repeatedly; it applies only what is pending. It is
+**not** run by `cellar run` while `database.schema_owner = "gamemode"`, which is
+the default, so a first run against a fresh database needs it explicitly.
 
 `prune` honours `database.event_retention_days`. It deletes operational events
 only. It never touches `aj_document` or its revision history.
+
+`backup` and `backups` use `backup.directory`, falling back to
+`mariadb.data_dir/backups`. Dumps are named `cellar-<unix seconds>.sql` and
+`backup.retain` bounds how many are kept.
+
+### `cellar db restore [dump] [--yes]`
+
+Applies a dump back over the database, replacing every table the dump carries.
+With no argument it takes the newest dump in the backup directory.
+
+**Stop the server first.** The gamemode writes through the bridge continuously,
+and a write landing mid-restore lands in a table that is about to be dropped.
+The command refuses to run while a Cellar is answering on `web.bind`, and the
+`POST /api/db/restore` endpoint stops the supervised server itself and says so
+in its reply. Neither starts it again: whoever restored a database should look
+at it before players reach it.
+
+Two other refusals, both before anything reaches the database:
+
+- The file must start like something `mariadb-dump` wrote. Without that check a
+  wrong path is piped into the database as SQL.
+- Without `--yes` it asks for the database name to be typed back.
+
+What restore does not undo: a dump carries `DROP TABLE IF EXISTS` before each
+`CREATE TABLE`, so tables the dump does not carry are left as they are. Applying
+an older dump over a newer schema can leave a table behind that the dump knows
+nothing about.
 
 ---
 

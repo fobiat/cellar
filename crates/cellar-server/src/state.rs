@@ -199,6 +199,12 @@ pub struct AppState {
     /// Absent for a remote database, same as `pool` above but one layer up:
     /// this is about who is running the server, not how Cellar talks to it.
     pub mariadb: Option<cellar_mariadb::Handle>,
+    /// The credential the dump and restore clients need. sqlx holds a pool, not
+    /// a URL, and `mariadb-dump` is a separate process that has to be told
+    /// where to connect.
+    pub database_url: Option<cellar_core::Secret>,
+    pub mariadb_config: cellar_core::config::MariaDbConfig,
+    pub backup_config: cellar_core::config::BackupConfig,
     /// Argon2 hash of the web UI password, when the web UI is exposed.
     pub web_password_hash: Option<cellar_core::Secret>,
     /// Explicit web authentication policy.
@@ -249,6 +255,9 @@ impl AppState {
             pool: None,
             database_schema_owner: "gamemode".to_owned(),
             mariadb: None,
+            database_url: None,
+            mariadb_config: Default::default(),
+            backup_config: Default::default(),
             web_password_hash: None,
             web_auth: Default::default(),
             web_secure_cookies: false,
