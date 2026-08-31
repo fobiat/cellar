@@ -219,6 +219,82 @@ pub async fn doctor(path: &Path) -> Result<()> {
         }
     }
 
+    for (label, bind) in [
+        ("web.bind", config.web.enabled.then_some(&config.web.bind)),
+        (
+            "bridge.bind",
+            config.bridge.enabled.then_some(&config.bridge.bind),
+        ),
+    ] {
+        let Some(bind) = bind else { continue };
+        match address_is_free(bind).await {
+            Free::Yes => check(true, label, format!("{bind} is free")),
+            Free::HeldByCellar => check(
+                false,
+                label,
+                format!(
+                    "another Cellar is already bound to {bind}. Two Cellar processes against one \
+                     profile run two backup loops that prune each other's dumps, two MariaDB \
+                     instances against one data directory, and either may self-update the binary \
+                     the other is executing."
+                ),
+            ),
+            Free::HeldBySomethingElse(why) => check(
+                false,
+                label,
+                format!("{bind} cannot be bound: {why}. Something else holds it."),
+            ),
+        }
+    }
+
+    for (label, port) in [
+        ("server.port", config.server.port),
+        ("server.query_port", config.server.query_port),
+    ] {
+        if let Err(why) = std::net::UdpSocket::bind(("0.0.0.0", port)) {
+            // A note, not a failure. The overwhelmingly common cause is the
+            // server this profile describes already running, and doctor cannot
+            // tell that apart from a genuine conflict.
+            println!(
+                "  note  {label}: udp/{port} is in use ({why}). Expected if the server is already \
+                 running; a conflict if it is not."
+            );
+        } else {
+            check(true, label, format!("udp/{port} is free"));
+        }
+    }
+
+    for (label, path) in [
+        ("disk, install", Some(config.server.executable.as_path())),
+        ("disk, data", config.server.data_dir.as_deref()),
+        ("disk, backups", config.backup.directory.as_deref()),
+    ] {
+        let Some(path) = path else { continue };
+        let Some((free, mount)) = cellar_runtime::metrics::disk_free(path) else {
+            continue;
+        };
+        // The dedicated server install alone is 4.9GB and a game update writes
+        // before it deletes, so a couple of gigabytes is the point at which the
+        // next update fails halfway rather than refusing.
+        const FLOOR: u64 = 2 * 1024 * 1024 * 1024;
+        check(
+            free >= FLOOR,
+            label,
+            format!(
+                "{:.1} GB free on {}{}",
+                free as f64 / 1e9,
+                mount.display(),
+                if free >= FLOOR {
+                    ""
+                } else {
+                    ", which is not enough headroom for a game update"
+                }
+            ),
+        );
+    }
+
+    steam_app_check(&config, &mut check);
+
     let log = cellar_runtime::log_file_for(&config.server);
     println!(
         "  note  log file: {} ({})",
@@ -236,6 +312,97 @@ pub async fn doctor(path: &Path) -> Result<()> {
     } else {
         anyhow::bail!("{problems} problem(s) above")
     }
+}
+
+/// Whether an address Cellar wants can be bound, and if not, by what.
+enum Free {
+    Yes,
+    HeldByCellar,
+    HeldBySomethingElse(String),
+}
+
+async fn address_is_free(bind: &str) -> Free {
+    let Err(why) = std::net::TcpListener::bind(bind) else {
+        return Free::Yes;
+    };
+
+    // Asking rather than assuming. "Address in use" says nothing about who, and
+    // another Cellar is the case with real consequences: two backup loops
+    // pruning each other, two MariaDB instances on one data directory.
+    let probe = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build();
+    if let Ok(client) = probe
+        && let Ok(response) = client.get(format!("http://{bind}/healthz")).send().await
+        && response
+            .text()
+            .await
+            .is_ok_and(|body| body.contains("\"cellar\"") || body.contains("\"state\""))
+    {
+        return Free::HeldByCellar;
+    }
+
+    Free::HeldBySomethingElse(why.to_string())
+}
+
+/// Whether the Steam install is the dedicated server rather than the client.
+///
+/// `read_installed_build` looks for `appmanifest_1892930.acf`, so an install of
+/// 590830 makes version reporting silently impossible, and until now doctor
+/// passed it without comment.
+fn steam_app_check(config: &Config, check: &mut impl FnMut(bool, &str, String)) {
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(dir) = &config.update.steam_dir {
+        roots.push(dir.clone());
+    }
+    if let Some(parent) = config.server.executable.parent() {
+        roots.push(parent.to_path_buf());
+    }
+
+    let mut apps = Vec::new();
+    for root in &roots {
+        apps.extend(cellar_update::version::installed_apps(root));
+    }
+    apps.dedup_by(|a, b| a.app_id == b.app_id);
+
+    if apps.is_empty() {
+        // A container image or a hand-copied tree has no manifest and still
+        // runs, so this is not a failure.
+        println!(
+            "  note  steam app: no appmanifest_*.acf found, so the installed build cannot be \
+             reported"
+        );
+        return;
+    }
+
+    let dedicated = cellar_update::version::SBOX_DEDICATED_APP_ID;
+    if let Some(server) = apps.iter().find(|app| app.app_id == dedicated) {
+        check(
+            true,
+            "steam app",
+            format!("{} is app {dedicated}", server.name),
+        );
+        return;
+    }
+
+    let found = apps
+        .iter()
+        .map(|app| format!("{} ({})", app.app_id, app.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let client = cellar_update::version::SBOX_CLIENT_APP_ID;
+    let detail = if apps.iter().any(|app| app.app_id == client) {
+        format!(
+            "this install is app {client}, the paid client and editor, not app {dedicated}, the \
+             dedicated server. It carries sbox-dev.exe, editor/ and samples/, and no \
+             appmanifest_{dedicated}.acf for version reporting to read. Install the server with: \
+             steamcmd +login anonymous +app_update {dedicated} validate"
+        )
+    } else {
+        format!("found {found}, but not app {dedicated}, the s&box dedicated server")
+    };
+    check(false, "steam app", detail);
 }
 
 /// Show installed and available versions.

@@ -388,6 +388,52 @@ pub fn public_branch_build(vdf: &str) -> Option<String> {
     (!build.is_empty()).then_some(build)
 }
 
+/// Steam app id of the s&box client and editor.
+///
+/// Named here only so an install of the wrong app can be recognised. It is
+/// paid, `+login anonymous +app_update 590830` answers "No subscription", and
+/// it ships `sbox-dev.exe`, `editor/` and `samples/` rather than a dedicated
+/// server.
+pub const SBOX_CLIENT_APP_ID: &str = "590830";
+
+/// A Steam app installed under some root, as its own manifest names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledApp {
+    pub app_id: String,
+    pub name: String,
+}
+
+/// Every app with a manifest under `root/steamapps`.
+///
+/// Enumerated rather than looked up by id, so the answer is what is installed
+/// rather than what was expected. An empty result is not a fault: a container
+/// image or a hand-copied tree has no manifest and still runs.
+pub fn installed_apps(root: &Path) -> Vec<InstalledApp> {
+    let Ok(entries) = std::fs::read_dir(root.join("steamapps")) else {
+        return Vec::new();
+    };
+
+    let mut apps: Vec<InstalledApp> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("appmanifest_") && name.ends_with(".acf"))
+        })
+        .filter_map(|path| {
+            let text = std::fs::read_to_string(&path).ok()?;
+            Some(InstalledApp {
+                app_id: acf_value(&text, "appid")?,
+                name: acf_value(&text, "name").unwrap_or_else(|| "unnamed".to_owned()),
+            })
+        })
+        .collect();
+
+    apps.sort_by(|a, b| a.app_id.cmp(&b.app_id));
+    apps
+}
+
 /// Read a top-level `"key"  "value"` pair out of an ACF manifest.
 pub fn acf_value(acf: &str, key: &str) -> Option<String> {
     let needle = format!("\"{key}\"");
@@ -408,6 +454,40 @@ pub fn acf_value(acf: &str, key: &str) -> Option<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Shaped like the real thing: the fields are in the order Steam writes
+    /// them and the ids are the two that matter.
+    fn manifest(app_id: &str, name: &str) -> String {
+        format!(
+            "\"AppState\"\n{{\n\t\"appid\"\t\t\"{app_id}\"\n\t\"universe\"\t\t\"1\"\n\t\"name\"\t\t\
+             \"{name}\"\n\t\"StateFlags\"\t\t\"4\"\n\t\"buildid\"\t\t\"19551234\"\n}}\n"
+        )
+    }
+
+    #[test]
+    fn the_client_and_the_dedicated_server_are_told_apart_by_their_manifests() {
+        let dir = tempfile::tempdir().unwrap();
+        let steamapps = dir.path().join("steamapps");
+        std::fs::create_dir_all(&steamapps).unwrap();
+        std::fs::write(
+            steamapps.join(format!("appmanifest_{SBOX_CLIENT_APP_ID}.acf")),
+            manifest(SBOX_CLIENT_APP_ID, "s&box"),
+        )
+        .unwrap();
+
+        let apps = installed_apps(dir.path());
+
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].app_id, SBOX_CLIENT_APP_ID);
+        assert_eq!(apps[0].name, "s&box");
+        assert!(!apps.iter().any(|app| app.app_id == SBOX_DEDICATED_APP_ID));
+    }
+
+    #[test]
+    fn a_tree_with_no_steamapps_directory_is_empty_rather_than_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(installed_apps(dir.path()).is_empty());
+    }
 
     #[test]
     fn it_reads_the_generated_build_version() {

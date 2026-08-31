@@ -180,10 +180,33 @@ pub fn format_uptime(seconds: i64) -> String {
     }
 }
 
+/// Bytes free on the filesystem holding `path`, and the mount point it is on.
+///
+/// Matched by the longest mount point that is a prefix of the path, because on
+/// Linux `/` is a prefix of everything and answering with the root filesystem's
+/// free space for a path on a separate `/var` mount would be a confident wrong
+/// answer. Returns `None` when no mount point matches, which happens for a path
+/// that does not exist yet.
+pub fn disk_free(path: &std::path::Path) -> Option<(u64, std::path::PathBuf)> {
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    sysinfo::Disks::new_with_refreshed_list()
+        .iter()
+        .filter(|disk| resolved.starts_with(disk.mount_point()))
+        .max_by_key(|disk| disk.mount_point().as_os_str().len())
+        .map(|disk| (disk.available_space(), disk.mount_point().to_path_buf()))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_filesystem_holding_this_checkout_reports_its_free_space() {
+        let (free, mount) =
+            disk_free(std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).expect("a mount point");
+        assert!(free > 0, "{} reported no free space", mount.display());
+    }
 
     #[test]
     fn sampling_this_process_reports_something_plausible() {
