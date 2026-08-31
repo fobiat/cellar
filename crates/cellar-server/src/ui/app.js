@@ -406,6 +406,7 @@ async function refreshStatus() {
       starting: "wait",
       stopping: "wait",
       backoff: "wait",
+      unhealthy: "warn",
       crash_looping: "down",
       stopped: "down",
     };

@@ -73,8 +73,20 @@ the bridge and quietly keeps writing to local files. `cellar doctor` says so.
 | `restart` | `on_failure` | `never`, `always`, or `on_failure`. |
 | `graceful_timeout_seconds` | `30` | How long a `quit` gets before the process is killed. |
 | `sample_interval_seconds` | `2` | How often to sample CPU and memory. |
+| `start_timeout_seconds` | `600` | How long a server may sit in `starting` before Cellar calls it `unhealthy`. `0` disables the check. |
 
 `on_failure` restarts only when the exit was neither asked for nor clean.
+
+**`start_timeout_seconds` never kills anything.** A server that never becomes
+ready is otherwise indistinguishable from one still starting, and both observed
+causes are permanent: a `server.ready_pattern` the gamemode never emits, and an
+engine that fails to resolve a package and then idles at the console instead of
+exiting. When the deadline passes the state becomes `unhealthy`, which is not
+ready, so a readiness probe still refuses it, and the process is left alone. The
+first cause is a healthy server with a wrong pattern in front of it, and killing
+that would be the wrong answer. The default is generous on purpose: a cold
+`facepunch.sandbox` start measured about 120 seconds, and a first run also
+compiles packages.
 
 **`graceful_timeout_seconds` is not decoration.** The engine installs no SIGTERM
 handler, so anything that kills the process skips all nine shutdown steps,

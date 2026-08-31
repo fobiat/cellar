@@ -360,6 +360,11 @@ impl Supervisor {
         let mut exit_tick = tokio::time::interval(Duration::from_millis(250));
 
         let run_started = Instant::now();
+        let start_deadline = match self.config.supervisor.start_timeout_seconds {
+            0 => None,
+            seconds => Some(Duration::from_secs(seconds)),
+        };
+        let mut said_unhealthy = false;
         let mut requested_stop = false;
         let mut restart_requested = false;
         // The command awaiting its reply, if any.
@@ -403,6 +408,25 @@ impl Supervisor {
                         for line in std::mem::take(&mut console_backlog) {
                             self.ingest(&line, Origin::Console, &ready_pattern, &mut collecting, true);
                         }
+                    }
+
+                    if !said_unhealthy
+                        && let Some(deadline) = start_deadline
+                        && run_started.elapsed() >= deadline
+                        && self.tracker.state() == State::Starting
+                    {
+                        said_unhealthy = true;
+                        self.tracker.set_state(State::Unhealthy);
+                        let why = format!(
+                            "the server has been starting for {}s without matching the ready \
+                             pattern '{}'. Either the gamemode never logs that line, or the engine \
+                             is stuck: it does not exit on a package resolution failure, it idles \
+                             at the console. The process is still running and has not been touched.",
+                            deadline.as_secs(),
+                            ready_pattern,
+                        );
+                        tracing::warn!("{why}");
+                        self.publish(Event::Unparsed { raw: why, origin: Origin::Cellar });
                     }
 
                     // Backstop only: a bracketed reply has already been sent by

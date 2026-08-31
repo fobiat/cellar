@@ -62,6 +62,12 @@ restart = "on_failure"
 graceful_timeout_seconds = 30
 sample_interval_seconds = 2
 
+# How long the server may sit in `starting` before Cellar calls it `unhealthy`.
+# It is never killed or restarted for this: a ready_pattern the gamemode never
+# emits looks identical to a stuck engine, and one of those is a healthy server.
+# 0 disables the check.
+start_timeout_seconds = 600
+
 [supervisor.backoff]
 initial = 2
 maximum = 120

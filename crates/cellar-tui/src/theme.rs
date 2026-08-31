@@ -107,6 +107,10 @@ pub fn state_colour(state: cellar_core::State) -> Color {
     match state {
         State::Running => orchard(),
         State::Starting | State::Stopping | State::Backoff => frost(),
+        // Alive but not serving. Warning rather than error: nothing has failed
+        // yet, and the cause is as likely to be a wrong ready pattern as a
+        // stuck engine.
+        State::Unhealthy => token_colour(cellar_core::theme::LOG_WARNING),
         State::Stopped | State::CrashLooping => russet(),
     }
 }

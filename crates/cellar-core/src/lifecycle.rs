@@ -18,6 +18,14 @@ pub enum State {
     Starting,
     /// Readiness seen. Accepting players.
     Running,
+    /// Process still up, readiness never arrived within the start timeout.
+    ///
+    /// Distinct from `Starting` because the two look identical and only one of
+    /// them is going to resolve. Distinct from `CrashLooping` because nothing
+    /// has crashed: the process is alive, the ports may well be bound, and the
+    /// cause may be nothing worse than a `ready_pattern` this gamemode never
+    /// emits. Not ready, so a readiness probe still refuses it.
+    Unhealthy,
     /// A graceful stop is in flight: `quit` sent, waiting for exit.
     Stopping,
     /// Exited unexpectedly. Waiting out the restart backoff.
@@ -34,7 +42,10 @@ impl State {
 
     /// Whether a process exists right now.
     pub fn has_process(self) -> bool {
-        matches!(self, Self::Starting | Self::Running | Self::Stopping)
+        matches!(
+            self,
+            Self::Starting | Self::Running | Self::Stopping | Self::Unhealthy
+        )
     }
 
     pub fn as_str(self) -> &'static str {
@@ -42,6 +53,7 @@ impl State {
             Self::Stopped => "stopped",
             Self::Starting => "starting",
             Self::Running => "running",
+            Self::Unhealthy => "unhealthy",
             Self::Stopping => "stopping",
             Self::Backoff => "backoff",
             Self::CrashLooping => "crash_looping",
@@ -387,11 +399,20 @@ mod tests {
         for state in [
             State::Stopped,
             State::Starting,
+            State::Unhealthy,
             State::Stopping,
             State::Backoff,
             State::CrashLooping,
         ] {
             assert!(!state.is_ready(), "{state:?} must not report ready");
         }
+    }
+
+    /// The point of the state: it says the process is there and not serving.
+    /// Reading it as "gone" would be as wrong as reading it as "starting".
+    #[test]
+    fn an_unhealthy_server_is_still_a_running_process() {
+        assert!(State::Unhealthy.has_process());
+        assert!(!State::Unhealthy.is_ready());
     }
 }

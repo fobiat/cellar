@@ -288,6 +288,18 @@ pub struct SupervisorConfig {
 
     /// How often to sample process CPU and memory.
     pub sample_interval_seconds: u64,
+
+    /// How long a server may sit in `Starting` before Cellar says it is not
+    /// working. `0` disables the check.
+    ///
+    /// A server that never becomes ready is otherwise indistinguishable from one
+    /// still starting, and both observed causes are permanent: a `ready_pattern`
+    /// the gamemode never emits, and an engine that fails to resolve a package
+    /// and then idles at the console at 165% CPU instead of exiting. The
+    /// deadline expiring never kills or restarts the child, because a wrong
+    /// pattern in front of a healthy server is one of the two cases and killing
+    /// it would be the wrong answer to it.
+    pub start_timeout_seconds: u64,
 }
 
 impl Default for SupervisorConfig {
@@ -297,6 +309,11 @@ impl Default for SupervisorConfig {
             backoff: BackoffPolicy::default(),
             graceful_timeout_seconds: 30,
             sample_interval_seconds: 2,
+            // A cold facepunch.sandbox start measured about 120 seconds on the
+            // Arch box, and a first run also compiles packages. Ten minutes is
+            // far enough above that to be a statement about a permanent
+            // condition rather than a slow disk.
+            start_timeout_seconds: 600,
         }
     }
 }

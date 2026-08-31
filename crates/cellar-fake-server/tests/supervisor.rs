@@ -394,6 +394,42 @@ async fn a_hanging_server_never_reports_ready() {
     let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
 }
 
+/// Never reporting ready is correct and is not enough on its own: `Starting`
+/// forever looks exactly like a slow map load, and both observed causes are
+/// permanent. The state has to say so.
+#[tokio::test]
+async fn a_server_that_never_becomes_ready_stops_claiming_to_be_starting() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = config(dir.path().join("logs/sbox-server.log"), &["--hang"]);
+    config.supervisor.graceful_timeout_seconds = 1;
+    config.supervisor.start_timeout_seconds = 1;
+
+    let (supervisor, handle, control) = Supervisor::new(config);
+    let mut events = handle.subscribe();
+    let task = tokio::spawn(supervisor.run(control));
+
+    let notice = wait_for(
+        &mut events,
+        Duration::from_secs(15),
+        |e| matches!(e, Event::Unparsed { raw, .. } if raw.contains("has been starting for")),
+    )
+    .await;
+    let Event::Unparsed { raw, .. } = notice else {
+        panic!("wrong event")
+    };
+    assert!(raw.contains("ready pattern"), "{raw}");
+    assert!(raw.contains("still running"), "{raw}");
+
+    let snapshot = handle.snapshot().await.unwrap();
+    assert_eq!(snapshot.state, cellar_core::State::Unhealthy);
+    // Alive, untouched. The wrong ready pattern in front of a healthy server is
+    // one of the two causes, and killing it would be the wrong answer to it.
+    assert!(snapshot.pid.is_some());
+
+    handle.stop().await;
+    let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
+}
+
 #[tokio::test]
 async fn resource_samples_arrive_for_the_running_process() {
     let dir = tempfile::tempdir().unwrap();

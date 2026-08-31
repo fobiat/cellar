@@ -124,6 +124,7 @@ a { color: var(--aj-azure); }
 .up    { color: var(--aj-orchard); }
 .down  { color: var(--aj-russet-text); }
 .wait  { color: var(--aj-frost); }
+.warn  { color: var(--aj-log-warning); }
 .live  { color: var(--aj-azure); }
 
 /* ---- tabs --------------------------------------------------------------- */
