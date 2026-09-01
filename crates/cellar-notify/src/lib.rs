@@ -185,6 +185,7 @@ mod tests {
                 network_tx_bytes_per_sec: 0,
             }),
             Event::Log(LogLine {
+                category: cellar_core::profile::Category::Other,
                 at: chrono::Utc::now(),
                 level: cellar_core::event::Level::Info,
                 logger: "Identity".into(),

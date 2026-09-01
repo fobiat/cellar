@@ -118,16 +118,18 @@ async fn files_for(current: &Path) -> Vec<PathBuf> {
 
 fn record(file: &Path, profile: &GamemodeProfile, raw: &str) -> Option<Record> {
     let parsed = cellar_core::grammar::parse_line(Line::log_file(raw))?;
-    let event = cellar_core::grammar::classify(&parsed, Origin::LogFile, "");
+    // An empty ready pattern on purpose: a historical readiness line in a
+    // rotated file is not this process becoming ready, and classifying it as
+    // one would drop the line from the search rather than list it.
+    let event = cellar_core::grammar::classify(&parsed, Origin::LogFile, "", profile);
     let Event::Log(line) = event else {
         return None;
     };
-    let category = profile.category(&line.logger, &line.message);
     Some(Record {
         at: line.at,
         level: line.level,
+        category: line.category,
         tag: line.logger,
-        category,
         message: line.message,
         origin: line.origin,
         raw: raw.to_owned(),

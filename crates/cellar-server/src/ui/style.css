@@ -131,59 +131,71 @@ a { color: var(--aj-azure); }
 
 /* ---- the instance strip -------------------------------------------------- */
 
-/* The same device the tab bar uses, promoted one level: the selected tile gets
- * an azure border and the raised background. Rack channel strip, not a
- * dropdown, because the point is that every server is visible at once. */
+/* A second tab bar, not a panel of cards.
+ *
+ * The first version stacked the id, a state word, the scope and a readiness
+ * note as four lines per tile, which made a selector as tall as the whole stat
+ * strip and left a slab of empty tile-coloured background beside it that read
+ * as a third, broken server. This is one row: a status dot, the id, and a muted
+ * suffix carrying only what is not already obvious. Everything else is in the
+ * tooltip, where it costs nothing until it is wanted.
+ *
+ * The background is the shell, so the unused half of the row is plainly the
+ * page rather than an empty slot. */
 nav.instances {
   display: flex;
-  gap: 1px;
-  padding: 0;
-  background: color-mix(in srgb, var(--aj-frost) 18%, transparent);
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 12px;
+  background: var(--aj-shell);
   border-bottom: 1px solid color-mix(in srgb, var(--aj-frost) 22%, transparent);
   overflow-x: auto;
-  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
 }
 
 nav.instances .instance {
   appearance: none;
   border: 0;
-  border-top: 2px solid transparent;
-  background: var(--aj-shell);
+  border-bottom: 2px solid transparent;
+  background: transparent;
   color: var(--aj-text-muted);
   font: inherit;
-  text-align: left;
-  padding: 8px 16px;
-  min-width: 160px;
+  font-size: 12px;
+  padding: 8px 14px;
   cursor: pointer;
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-  scroll-snap-align: start;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
 }
 
 nav.instances .instance:hover { color: var(--aj-text); }
 
 nav.instances .instance[aria-selected="true"] {
-  border-top-color: var(--aj-azure);
-  background: var(--aj-raised);
   color: var(--aj-text);
+  border-bottom-color: var(--aj-azure);
 }
 
+nav.instances .instance[aria-selected="true"] .instance-id { color: var(--aj-azure); }
+
+nav.instances .instance:focus-visible {
+  outline: 2px solid var(--aj-azure);
+  outline-offset: -2px;
+}
+
+/* The lamp glyph on its own. `lamp` supplies the bullet and the colour; the
+   state word would be on every tile forever and says nothing when it reads
+   "running", which is every tile most of the time. */
+.instance-dot::before { margin-right: 0; }
+
 .instance-id {
-  font-size: 12px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
-.instance-state { font-size: 12px; }
-
-/* A profile and, when it cannot be switched to, why not. */
-.config-row {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 6px;
+.instance-meta {
+  color: var(--aj-text-muted);
+  font-size: 11px;
 }
 
 /* ---- the command palette ------------------------------------------------- */

@@ -432,25 +432,114 @@ mod tests {
     /// web UI at all.
     #[test]
     fn the_script_handles_every_event_kind_the_server_can_send() {
-        // The serde tag is the variant name in snake_case, so this is the same
-        // list the websocket actually puts on the wire.
-        for kind in [
-            "process_started",
-            "server_ready",
-            "process_exited",
-            "player_joined",
-            "player_left",
-            "log",
-            "unparsed",
-            // Not Event variants: ws.rs synthesises these two.
-            "notice",
-            "lagged",
-        ] {
+        // Read from `Event::kind` rather than listed here. A hand-written list
+        // can only catch a variant somebody remembered to add to it, which is
+        // exactly how `command_dispatched` and `command_replied` were broadcast
+        // and dropped by the browser for months while this test passed.
+        const EVENT_SOURCE: &str = include_str!("../../cellar-core/src/event.rs");
+
+        let kinds: Vec<&str> = EVENT_SOURCE
+            .lines()
+            .skip_while(|line| !line.contains("pub fn kind(&self)"))
+            .take_while(|line| !line.trim_start().starts_with("/// Whether this is worth"))
+            .filter_map(|line| line.split_once("=> \"")?.1.split('"').next())
+            .collect();
+        assert!(kinds.len() >= 12, "only found {kinds:?}");
+
+        for kind in kinds {
+            // The two high-frequency samples. A console that printed a resource
+            // sample twice a second would be a console nobody could read.
+            if matches!(kind, "status" | "resources") {
+                continue;
+            }
             assert!(
                 JS.contains(&format!("case \"{kind}\":")),
                 "app.js drops the '{kind}' event"
             );
         }
+
+        // Synthesised by ws.rs rather than being `Event` variants, so they are
+        // not in the enum and still have to be handled.
+        for kind in ["notice", "lagged"] {
+            assert!(
+                JS.contains(&format!("case \"{kind}\":")),
+                "app.js drops the '{kind}' notice"
+            );
+        }
+    }
+
+    /// One arriving line must cost one DOM node, not a full teardown.
+    ///
+    /// `appendLine` used to call `renderConsole`, which called
+    /// `replaceChildren` and rebuilt up to 1500 elements per line. That is
+    /// O(n) work per line, and it is what "slow mode" existed to hide.
+    #[test]
+    fn an_arriving_console_line_does_not_redraw_the_whole_console() {
+        // Bounded at the function's own closing brace, which in this file is
+        // the first `}` in column zero. Splitting on the next `function`
+        // keyword ran past the end into `renderConsole`, which legitimately
+        // does redraw everything.
+        let append = JS
+            .split_once("function appendLine(")
+            .and_then(|(_, rest)| rest.split_once("\n}\n"))
+            .map(|(body, _)| body)
+            .expect("appendLine is defined");
+
+        assert!(
+            !append.contains("renderConsole("),
+            "appendLine redraws the whole console for every line"
+        );
+        assert!(
+            !append.contains("replaceChildren"),
+            "appendLine tears the console down for every line"
+        );
+        assert!(
+            append.contains("console_.append("),
+            "appendLine should append one node"
+        );
+
+        // The control that existed to work around the cost, and its state.
+        assert!(!JS.contains("consoleSlow"), "slow mode should be gone");
+        assert!(
+            !HTML.contains("console-slow"),
+            "the slow mode button should be gone"
+        );
+    }
+
+    /// The categorisation rule lives in the gamemode profile, in Rust. A second
+    /// copy in JavaScript had already drifted: it still tested for `applejack`
+    /// after the Rust side started asking the profile.
+    #[test]
+    fn the_browser_does_not_reimplement_log_categorisation() {
+        assert!(
+            !JS.contains("function logCategory("),
+            "the category rule belongs to the profile, not to app.js"
+        );
+    }
+
+    /// A command must appear once, not twice.
+    ///
+    /// `command_dispatched` and `command_replied` are broadcast to every
+    /// browser. Rendering the HTTP reply locally as well showed the same reply
+    /// twice, which is what handling those two events for the first time
+    /// exposed. Rendering only locally would hide every command the CLI, MCP or
+    /// another operator ran, which is the reason to handle them at all.
+    #[test]
+    fn a_command_reply_is_rendered_once() {
+        let run = JS
+            .split_once("async function runCommand(")
+            .and_then(|(_, rest)| rest.split_once("\n}\n"))
+            .map(|(body, _)| body)
+            .expect("runCommand is defined");
+
+        assert!(
+            run.contains("echoLocally"),
+            "runCommand renders unconditionally, so a broadcast reply lands twice"
+        );
+        assert!(
+            JS.contains("function commandsArriveOnTheStream("),
+            "nothing decides which of the two sources renders"
+        );
     }
 
     /// A gap in the console must be a gap, not a line that reads like engine

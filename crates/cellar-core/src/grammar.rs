@@ -224,7 +224,17 @@ pub fn infer_level(parsed: &Parsed) -> Level {
 }
 
 /// Classify a parsed line into an event.
-pub fn classify(parsed: &Parsed, origin: Origin, ready_pattern: &str) -> Event {
+///
+/// Takes the gamemode profile because two of the decisions here are its: which
+/// line means "serving", and which category a log line falls into. Both used to
+/// be hardcoded to AppleJackRP, and the category rule additionally existed a
+/// second time in `app.js`.
+pub fn classify(
+    parsed: &Parsed,
+    origin: Origin,
+    ready_pattern: &str,
+    profile: &crate::profile::GamemodeProfile,
+) -> Event {
     let message = parsed.message.as_str();
 
     if let Some((steam_id, name)) = parse_join(message) {
@@ -258,6 +268,7 @@ pub fn classify(parsed: &Parsed, origin: Origin, ready_pattern: &str) -> Event {
         (Some(logger), _) => Event::Log(LogLine {
             at: parsed.at.unwrap_or_else(Utc::now),
             level: infer_level(parsed),
+            category: profile.category(logger, &parsed.message),
             logger: logger.clone(),
             message: parsed.message.clone(),
             origin,
@@ -440,7 +451,12 @@ mod tests {
             continuation: false,
         };
         assert!(matches!(
-            classify(&parsed, Origin::Console, DEFAULT_READY_PATTERN),
+            classify(
+                &parsed,
+                Origin::Console,
+                DEFAULT_READY_PATTERN,
+                &crate::profile::GamemodeProfile::default(),
+            ),
             Event::ServerReady { .. }
         ));
     }
@@ -449,7 +465,12 @@ mod tests {
     fn an_unrecognised_line_is_counted_not_dropped() {
         let parsed = parse_line(Line::console("some bare engine chatter")).unwrap();
         assert!(matches!(
-            classify(&parsed, Origin::Console, DEFAULT_READY_PATTERN),
+            classify(
+                &parsed,
+                Origin::Console,
+                DEFAULT_READY_PATTERN,
+                &crate::profile::GamemodeProfile::default(),
+            ),
             Event::Unparsed { .. }
         ));
     }

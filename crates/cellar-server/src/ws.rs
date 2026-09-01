@@ -13,6 +13,7 @@ use axum::response::Response;
 use axum::routing::get;
 use tokio::sync::broadcast;
 
+use crate::registry::Target;
 use crate::session::Operator;
 use crate::state::AppState;
 
@@ -24,19 +25,35 @@ pub fn routes() -> Router<Arc<AppState>> {
 /// the upgrade, so an unauthenticated caller never reaches the stream.
 async fn upgrade(
     upgrade: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-    _: Operator,
+    _: State<Arc<AppState>>,
+    _operator: Operator,
+    target: Target,
 ) -> Response {
-    upgrade.on_upgrade(move |socket| pump(socket, state))
+    upgrade.on_upgrade(move |socket| pump(socket, target))
 }
 
-async fn pump(mut socket: WebSocket, state: Arc<AppState>) {
-    let Some(supervisor) = &state.supervisor else {
+/// One instance's stream, not the primary's.
+///
+/// The dashboard's instance strip switches every other panel; a console still
+/// streaming the previous server under a header naming the new one is how a
+/// command reaches the wrong thing.
+async fn pump(mut socket: WebSocket, target: Target) {
+    let Some(supervisor) = &target.handle else {
         let _ = socket
             .send(Message::Text(
-                serde_json::json!({ "kind": "notice", "raw": "no server is being supervised" })
-                    .to_string()
-                    .into(),
+                serde_json::json!({
+                    "kind": "notice",
+                    "raw": format!(
+                        "instance '{}' is not running: {}",
+                        target.id,
+                        target
+                            .unavailable
+                            .as_deref()
+                            .unwrap_or("no server is being supervised")
+                    ),
+                })
+                .to_string()
+                .into(),
             ))
             .await;
         return;

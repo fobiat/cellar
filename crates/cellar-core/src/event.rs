@@ -55,6 +55,19 @@ pub struct LogLine {
     pub logger: String,
     pub message: String,
     pub origin: Origin,
+
+    /// Which bucket of the console's category filter this falls into.
+    ///
+    /// Decided once, here, by the gamemode's profile. The browser used to
+    /// reimplement the rule in JavaScript and the two copies had already
+    /// diverged on the gamemode arm. `default` so a line deserialised from an
+    /// older recording still parses.
+    #[serde(default = "other_category")]
+    pub category: crate::profile::Category,
+}
+
+fn other_category() -> crate::profile::Category {
+    crate::profile::Category::Other
 }
 
 /// Why a player left, as far as the log can tell.

@@ -876,7 +876,7 @@ impl Supervisor {
             return;
         }
 
-        let event = grammar::classify(&parsed, origin, ready_pattern);
+        let event = grammar::classify(&parsed, origin, ready_pattern, &self.instance.profile);
         if let Event::ServerReady { hostname, .. } = &event {
             tracing::info!(
                 "the server is ready and accepting players as '{}'",

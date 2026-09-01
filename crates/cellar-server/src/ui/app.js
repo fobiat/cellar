@@ -24,8 +24,6 @@ let cpuHistory = [];
 let resourceHistory = [];
 let consoleRecords = [];
 let consolePaused = false;
-let consoleSlow = false;
-let consoleRenderTimer = null;
 let buildDriftState = "";
 let activeTab = "dispatch";
 let serviceWorker = null;
@@ -144,16 +142,29 @@ async function loadInstances() {
     tile.setAttribute("aria-selected", String(entry.id === selectedInstance));
     tile.dataset.instance = entry.id;
 
-    const state = entry.unavailable ? "off" : entry.running ? "on" : "off";
+    const state = entry.unavailable ? "unavailable" : entry.running ? "running" : "stopped";
+    tile.append(el("span", `instance-dot lamp ${state === "running" ? "ok" : "down"}`));
     tile.append(el("span", "instance-id", entry.id));
-    tile.append(el("span", `instance-state lamp ${state === "on" ? "ok" : "wait"}`,
-      entry.unavailable ? "unavailable" : entry.running ? "running" : "stopped"));
-    /* The scope, not the id. Two instances can share one, and an operator
-     * about to delete a document needs to know which of those they are in. */
-    tile.append(el("span", "instance-scope muted small", `scope ${entry.scope}`));
-    if (!entry.required) tile.append(el("span", "instance-note muted small", "not in /readyz"));
 
-    tile.title = index < 9 ? `${entry.id} (Ctrl+${index + 1})` : entry.id;
+    /* One muted suffix, and only what is not already obvious.
+     *
+     * The scope is shown when it differs from the id, because that is the case
+     * where deleting a document in the wrong place is possible. A running
+     * server says nothing: running is the expectation, and a word for it is a
+     * word on every tile forever. Everything else lives in the tooltip. */
+    const notes = [];
+    if (entry.scope !== entry.id) notes.push(entry.scope);
+    if (state !== "running") notes.push(state);
+    if (!entry.required) notes.push("optional");
+    if (notes.length) tile.append(el("span", "instance-meta", notes.join(" · ")));
+
+    tile.title = [
+      `${entry.id}: ${state}`,
+      `scope ${entry.scope}`,
+      entry.required ? "counted by /readyz" : "not counted by /readyz",
+      index < 9 ? `Ctrl+${index + 1}` : null,
+    ].filter(Boolean).join("\n");
+
     tile.onclick = () => selectInstance(entry.id);
     strip.append(tile);
   });
@@ -954,59 +965,82 @@ function renderRoster(players) {
 
 /* ---- console ------------------------------------------------------------ */
 
-function appendLine(kind, at, who, message, live = false, level = "info", category = null) {
-  consoleRecords.push({ kind, at, who, message, live, level, category: category || logCategory(who, message) });
+/* Lines Cellar itself writes have no gamemode category, because they are not
+ * the gamemode talking. `cellar` is the honest bucket for them, and it is one
+ * the filter already offers. */
+function appendLine(kind, at, who, message, live = false, level = "info", category = "cellar") {
+  const record = { kind, at, who, message, live, level, category };
+  consoleRecords.push(record);
   if (consoleRecords.length > 5000) consoleRecords.shift();
-  if (consoleSlow && live) {
-    if (!consoleRenderTimer) consoleRenderTimer = setTimeout(() => {
-      consoleRenderTimer = null;
-      renderConsole();
-    }, 1000);
-    return;
-  }
-  renderConsole();
-}
 
-function renderConsole() {
+  /* Append one node, rather than tearing the whole console down and rebuilding
+   * it. The old version cleared the whole node and re-created up to 1500
+   * elements for every single arriving line, which is O(n) DOM work per line
+   * and locks the tab under a server that is talking fast. That is also what
+   * "slow mode" existed to paper over, so slow mode is gone: the fix is to make
+   * rendering cheap, not to render less often and call it a feature.
+   *
+   * Paused still collects. A pause that dropped lines would be a pause that
+   * loses the ones you paused to read around. */
+  if (consolePaused) return;
+  const node = lineNode(record);
+  if (!node) return;
+
   const console_ = $("#console");
   const pinned = console_.scrollTop + console_.clientHeight >= console_.scrollHeight - 40;
-  if (consolePaused) return;
+  console_.append(node);
+  while (console_.children.length > 1500) console_.firstChild.remove();
+  if (pinned) console_.scrollTop = console_.scrollHeight;
+}
+
+const LEVEL_RANK = { trace: 0, debug: 1, info: 2, warning: 3, error: 4 };
+const LEVELS = ["trace", "debug", "info", "warning", "error"];
+const CATEGORIES = ["cellar", "engine", "gameplay", "network", "players", "storage", "other"];
+
+/* Whether the current filters admit this record. One predicate, used by both
+ * the incremental append and the full redraw, so a filter cannot apply to only
+ * one of them. */
+function consoleAdmits(record) {
   const query = text($("#console-filter")?.value).trim().toLowerCase();
   const minimum = $("#console-level")?.value || "";
   const category = $("#console-category")?.value || "";
   const view = $("#console-view")?.value || "all";
-  const rank = { trace: 0, debug: 1, info: 2, warning: 3, error: 4 };
-  const minimumRank = minimum ? rank[minimum] : -1;
-  console_.replaceChildren();
-  for (const record of consoleRecords) {
-    const searchable = `${record.who} ${record.message}`.toLowerCase();
-    if (query && !searchable.includes(query)) continue;
-    if (minimumRank >= 0 && (rank[record.level] ?? 2) < minimumRank) continue;
-    if (category && record.category !== category) continue;
-    if (view === "command" && !["echo", "reply"].includes(record.kind)) continue;
-    if (view === "background" && !["log", "join", "leave"].includes(record.kind)) continue;
-    if (view === "errors" && record.level !== "error" && record.kind !== "error") continue;
-    const levels = ["trace", "debug", "info", "warning", "error"];
-    const categories = ["cellar", "engine", "gameplay", "network", "players", "storage", "other"];
-    const level = levels.includes(record.level) ? record.level : "info";
-    const logCategoryName = categories.includes(record.category) ? record.category : "other";
-    const line = el("div", `line ${record.kind} level-${level} category-${logCategoryName}`);
-    line.append(el("span", "at", record.at), el("span", "who", record.who), el("span", "msg", record.message));
-    console_.append(line);
-    while (console_.children.length > 1500) console_.firstChild.remove();
-  }
-  if (pinned) console_.scrollTop = console_.scrollHeight;
+
+  if (query && !`${record.who} ${record.message}`.toLowerCase().includes(query)) return false;
+  if (minimum && (LEVEL_RANK[record.level] ?? 2) < LEVEL_RANK[minimum]) return false;
+  if (category && record.category !== category) return false;
+  if (view === "command" && !["echo", "reply"].includes(record.kind)) return false;
+  if (view === "background" && !["log", "join", "leave"].includes(record.kind)) return false;
+  if (view === "errors" && record.level !== "error" && record.kind !== "error") return false;
+  return true;
 }
 
-function logCategory(who, message) {
-  const value = `${who} ${message}`.toLowerCase();
-  if (/storage|database|document/.test(value)) return "storage";
-  if (/network|connect|lobby/.test(value)) return "network";
-  if (/player|identity|chat/.test(value)) return "players";
-  if (/physics|render|map/.test(value)) return "engine";
-  if (/applejack|game/.test(value)) return "gameplay";
-  if (/cellar/.test(value)) return "cellar";
-  return "other";
+function lineNode(record) {
+  if (!consoleAdmits(record)) return null;
+  const level = LEVELS.includes(record.level) ? record.level : "info";
+  const category = CATEGORIES.includes(record.category) ? record.category : "other";
+  const line = el("div", `line ${record.kind} level-${level} category-${category}`);
+  line.append(
+    el("span", "at", record.at),
+    el("span", "who", record.who),
+    el("span", "msg", record.message),
+  );
+  return line;
+}
+
+/* The full redraw, for when the filters change rather than when a line
+ * arrives. Still one pass, but now it happens on a click instead of on every
+ * line the engine prints. */
+function renderConsole() {
+  const console_ = $("#console");
+  if (consolePaused) return;
+  const nodes = [];
+  for (const record of consoleRecords) {
+    const node = lineNode(record);
+    if (node) nodes.push(node);
+  }
+  console_.replaceChildren(...nodes.slice(-1500));
+  console_.scrollTop = console_.scrollHeight;
 }
 
 function renderAddresses(addresses) {
@@ -1023,9 +1057,21 @@ function renderAddresses(addresses) {
   }
 }
 
+/* Whether the event stream will render this command for us.
+ *
+ * `command_dispatched` and `command_replied` are broadcast to every connected
+ * browser, so rendering the reply locally as well shows it twice. Rendering it
+ * only locally would instead hide every command another operator, the CLI or
+ * MCP ran. The stream is the source when there is one; the local copy is the
+ * fallback for a dropped socket, where showing nothing would be worse. */
+function commandsArriveOnTheStream() {
+  return socket && socket.readyState === WebSocket.OPEN;
+}
+
 async function runCommand(command) {
   if (!command.trim()) return;
-  appendLine("echo", now(), "you", `> ${command}`);
+  const echoLocally = !commandsArriveOnTheStream();
+  if (echoLocally) appendLine("echo", now(), "you", `> ${command}`);
 
   try {
     const response = await fetch(forInstance("/api/exec"), {
@@ -1036,11 +1082,15 @@ async function runCommand(command) {
     const data = await response.json();
 
     if (!response.ok) {
+      // Always shown: a refusal never reaches the event stream, because
+      // nothing was dispatched.
       appendLine("error", now(), "cellar", text(data.error));
       return;
     }
-    for (const line of data.reply) appendLine("reply", now(), "reply", text(line));
-    if (!data.reply.length) appendLine("reply", now(), "reply", "(no output)");
+    if (echoLocally) {
+      for (const line of data.reply) appendLine("reply", now(), "reply", text(line));
+      if (!data.reply.length) appendLine("reply", now(), "reply", "(no output)");
+    }
   } catch (error) {
     appendLine("error", now(), "cellar", String(error));
   }
@@ -1050,7 +1100,7 @@ async function runCommand(command) {
 
 function connect() {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
-  socket = new WebSocket(`${protocol}://${location.host}/api/events`);
+  socket = new WebSocket(`${protocol}://${location.host}${forInstance("/api/events")}`);
 
   socket.onopen = () => setLamp($("#connection-state"), "up", "live");
   socket.onerror = () => setLamp($("#connection-state"), "down", "error");
@@ -1059,7 +1109,11 @@ function connect() {
     const event = JSON.parse(message.data);
     switch (event.kind) {
       case "log":
-        appendLine(event.level === "error" ? "error" : "", clock(event.at), text(event.logger), text(event.message), true, event.level);
+        /* The category comes from the server. It used to be recomputed here
+         * from a hand-copied regex chain, and the two copies had already
+         * diverged: the JavaScript one still tested for `applejack` after the
+         * Rust one started asking the gamemode profile. */
+        appendLine(event.level === "error" ? "error" : "", clock(event.at), text(event.logger), text(event.message), true, event.level, text(event.category) || "other");
         break;
       case "player_joined":
         appendLine("join", now(), "join", `${text(event.name)} [${event.steam_id}]`);
@@ -1083,6 +1137,28 @@ function connect() {
           notifyOperator("Cellar server alert", `The server exited unexpectedly: ${describeExit(event)}.`);
         }
         refreshStatus();
+        break;
+      /* A command and its reply, as one block.
+       *
+       * Both of these were broadcast and both fell through to `default`, so a
+       * command run from `cellar exec`, from MCP, or by another operator's
+       * browser was invisible to anyone watching this one. The console is a
+       * shared surface; a second operator typing `quit` into it should not be
+       * something you find out about from the exit line. */
+      case "command_dispatched":
+        appendLine("echo", now(), text(event.actor), `> ${text(event.command)}`);
+        break;
+      case "command_replied":
+        for (const line of event.reply || []) {
+          appendLine(event.ok ? "reply" : "error", now(), "reply", text(line));
+        }
+        if (!(event.reply || []).length) {
+          appendLine(event.ok ? "reply" : "error", now(), "reply",
+            event.ok ? "(no output)" : "refused");
+        }
+        break;
+      case "bridge_health":
+        appendLine(event.healthy ? "echo" : "error", now(), "bridge", text(event.detail));
         break;
       /* Everything the grammar did not recognise, and everything Cellar says
        * about itself: the start timeout, a kill escalation, and the whole
@@ -1657,11 +1733,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     consolePaused = !consolePaused;
     $("#console-pause").textContent = consolePaused ? "resume" : "pause";
     $("#console-state").textContent = consolePaused ? "Paused view. Incoming lines are still retained." : "Live output.";
-    renderConsole();
-  };
-  $("#console-slow").onclick = () => {
-    consoleSlow = !consoleSlow;
-    $("#console-slow").textContent = consoleSlow ? "normal mode" : "slow mode";
     renderConsole();
   };
   $("#console-scan").onclick = scanLogs;

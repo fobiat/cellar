@@ -411,6 +411,7 @@ mod tests {
         for _ in 0..(LOG_HISTORY + 50) {
             t.apply(
                 &Event::Log(LogLine {
+                    category: crate::profile::Category::Other,
                     at: now(),
                     level: crate::event::Level::Info,
                     logger: "Identity".into(),
