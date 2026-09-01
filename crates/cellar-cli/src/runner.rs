@@ -535,12 +535,25 @@ async fn record_events(
             tracing::warn!("could not record {}: {why}", event.kind());
         }
 
-        if event.is_notable()
-            && let Err(why) =
-                cellar_store::ops::record_event(&pool, session, event.kind(), None, None, None)
-                    .await
-        {
-            tracing::warn!("could not record an event: {why}");
+        if event.is_notable() {
+            // The logger, the account and a readable detail, not just the kind.
+            // Every row used to be a kind and a timestamp because all three were
+            // passed as `None`, which nothing noticed while nothing read the
+            // table back.
+            let record = event.record();
+            let detail = record.detail.map(serde_json::Value::String);
+            if let Err(why) = cellar_store::ops::record_event(
+                &pool,
+                session,
+                event.kind(),
+                record.logger,
+                record.steam_id,
+                detail.as_ref(),
+            )
+            .await
+            {
+                tracing::warn!("could not record an event: {why}");
+            }
         }
     }
 }

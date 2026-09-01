@@ -31,6 +31,33 @@ backups.
 
 ---
 
+## What happened: the activity record
+
+`GET /api/activity` and the dashboard's Activity tab read back two tables that
+Cellar has always written and never shown:
+
+- `srv_command`, the console audit. Every command the web UI, the CLI or MCP
+  sent, who sent it, what came back and whether it worked. The console runs at
+  full engine privilege, so this is the only account of who used it.
+- `srv_event`, the server's own record: process start and exit with the reason,
+  readiness, players joining and leaving by name and SteamID.
+
+```text
+GET /api/activity?days=30&source=operator&q=quit&limit=200
+GET /api/activity?instance=published
+```
+
+`source` is `operator`, `server`, or both when omitted. `instance` filters to
+that instance's scope, and is resolved through the registry rather than taken as
+a scope directly, so a caller cannot read another deployment's rows out of a
+shared database. Retention is `database.event_retention_days`.
+
+**Event rows written before 2026-09-01 carry only a kind and a timestamp.** The
+recorder passed no logger, account or detail, and nothing read the table back,
+so nothing caught it. Older rows still list; they just have nothing to say.
+
+---
+
 ## Health endpoints
 
 Served on **both** `bridge.bind` and `web.bind`, so a probe can use whichever

@@ -395,3 +395,214 @@ async fn the_admin_browser_sees_the_schema_and_refuses_to_write_to_it() {
             .is_err()
     );
 }
+
+/// The activity timeline, which is the whole of Phase 3's audit screen.
+///
+/// Worth a real database rather than a unit test: the merge is two queries with
+/// `LEFT JOIN`s and a scope filter, and every way it can be wrong is a way SQL
+/// is wrong rather than a way Rust is.
+#[tokio::test]
+async fn activity_merges_the_audit_and_the_observations_newest_first() {
+    let Some((pool, _guard)) = database().await else {
+        return;
+    };
+
+    let dev = ops::begin_session(&pool, "aj-dev", Some("host"), "sbox-server.exe")
+        .await
+        .unwrap();
+    let published = ops::begin_session(&pool, "aj-pub", Some("host"), "sbox-server.exe")
+        .await
+        .unwrap();
+
+    ops::record_event(
+        &pool,
+        Some(dev),
+        "server_ready",
+        Some("Bootstrap"),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    ops::record_command(
+        &pool,
+        Some(dev),
+        "kyle",
+        "status",
+        &["PLAYERS".to_owned()],
+        true,
+    )
+    .await
+    .unwrap();
+    ops::record_command(&pool, Some(published), "api", "quit", &[], false)
+        .await
+        .unwrap();
+    // A command run while nothing was supervised. The join must keep it: that
+    // is exactly when an operator is most likely to be looking.
+    ops::record_command(&pool, None, "kyle", "cellar doctor", &[], true)
+        .await
+        .unwrap();
+
+    let all = ops::activity(
+        &pool,
+        &ops::ActivityQuery {
+            limit: 100,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(all.len(), 4, "one event and three commands");
+    assert!(
+        all.windows(2).all(|pair| pair[0].at >= pair[1].at),
+        "newest first"
+    );
+    assert!(
+        all.iter().any(|entry| entry.detail == "cellar doctor"),
+        "a session-less command must survive the join"
+    );
+
+    let scoped = ops::activity(
+        &pool,
+        &ops::ActivityQuery {
+            scope: Some("aj-dev".to_owned()),
+            limit: 100,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(scoped.len(), 2, "one event and one command in that scope");
+    assert!(
+        scoped
+            .iter()
+            .all(|entry| entry.scope.as_deref() == Some("aj-dev"))
+    );
+
+    let operator_only = ops::activity(
+        &pool,
+        &ops::ActivityQuery {
+            source: Some("operator".to_owned()),
+            limit: 100,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(operator_only.len(), 3);
+    assert!(operator_only.iter().all(|entry| entry.source == "operator"));
+
+    // The outcome is the point of an audit: a refused command has to be
+    // distinguishable from one that worked.
+    let failed = operator_only
+        .iter()
+        .find(|entry| entry.detail == "quit")
+        .unwrap();
+    assert_eq!(failed.ok, Some(false));
+    assert_eq!(failed.actor.as_deref(), Some("api"));
+
+    // Text search covers the reply, not only the command: "which command
+    // printed that?" is the question an operator actually has.
+    let by_reply = ops::activity(
+        &pool,
+        &ops::ActivityQuery {
+            text: Some("players".to_owned()),
+            limit: 100,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(by_reply.len(), 1);
+    assert_eq!(by_reply[0].detail, "status");
+}
+
+/// An event row has to say what happened, not only that something of a kind
+/// did.
+///
+/// Every notable event was stored as a bare kind and a timestamp until
+/// 2026-09-01, because the recorder passed `None` for the logger, the account
+/// and the payload. Nothing read the table back, so nothing caught it.
+#[tokio::test]
+async fn an_event_row_carries_who_and_what_not_only_its_kind() {
+    use cellar_core::event::{Event, LeaveReason};
+
+    let Some((pool, _guard)) = database().await else {
+        return;
+    };
+
+    let session = ops::begin_session(&pool, "aj-dev", None, "sbox-server.exe")
+        .await
+        .unwrap();
+
+    for event in [
+        Event::ProcessStarted {
+            pid: 4242,
+            command: "wine sbox-server.exe".to_owned(),
+        },
+        Event::PlayerJoined {
+            steam_id: 76561198000000123,
+            name: "Kyle".to_owned(),
+        },
+        Event::PlayerLeft {
+            steam_id: 76561198000000123,
+            name: "Kyle".to_owned(),
+            reason: LeaveReason::Kicked {
+                reason: "afk".to_owned(),
+            },
+        },
+        Event::ProcessExited {
+            code: Some(137),
+            graceful: false,
+        },
+    ] {
+        let record = event.record();
+        let detail = record.detail.map(serde_json::Value::String);
+        ops::record_event(
+            &pool,
+            Some(session),
+            event.kind(),
+            record.logger,
+            record.steam_id,
+            detail.as_ref(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let entries = ops::activity(
+        &pool,
+        &ops::ActivityQuery {
+            scope: Some("aj-dev".to_owned()),
+            limit: 100,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let find = |kind: &str| {
+        entries
+            .iter()
+            .find(|entry| entry.kind == kind)
+            .unwrap_or_else(|| panic!("no {kind} row"))
+    };
+
+    // The detail is stored in a JSON column as a JSON string, so this also
+    // asserts the quotes do not survive the round trip.
+    assert_eq!(
+        find("process_started").detail,
+        "pid 4242: wine sbox-server.exe"
+    );
+    assert_eq!(
+        find("process_exited").detail,
+        "exited with code 137 without being asked to"
+    );
+    assert_eq!(find("player_joined").detail, "Kyle joined");
+    assert_eq!(find("player_left").detail, "Kyle was kicked: afk");
+
+    // The account, so "what did this SteamID do" is answerable at all.
+    assert_eq!(find("player_joined").steam_id, Some(76561198000000123));
+    assert_eq!(find("player_joined").actor.as_deref(), Some("players"));
+    assert_eq!(find("process_started").actor.as_deref(), Some("supervisor"));
+}

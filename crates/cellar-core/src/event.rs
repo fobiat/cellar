@@ -217,6 +217,109 @@ impl Event {
             Self::Log(_) | Self::Status(_) | Self::Resources(_) | Self::Unparsed { .. }
         )
     }
+
+    /// What this event is worth writing into the operations record, beyond its
+    /// kind: a logger, an account, and a sentence a person can read.
+    ///
+    /// Every notable event used to be stored as a bare kind and a timestamp,
+    /// because the recorder passed `None` for all three. Nothing read the table
+    /// back, so nothing noticed that "a player joined" recorded neither who nor
+    /// when they left. The activity screen is what made it visible.
+    ///
+    /// The payload is a sentence rather than the serialised event. An audit row
+    /// is read by a person asking what happened at 21:04, and a JSON blob of the
+    /// variant's fields answers that worse than one line does. The full event
+    /// is still on the websocket for anything that wants structure.
+    pub fn record(&self) -> EventRecord<'_> {
+        match self {
+            Self::ProcessStarted { pid, command } => EventRecord {
+                logger: Some("supervisor"),
+                steam_id: None,
+                detail: Some(format!("pid {pid}: {command}")),
+            },
+            Self::ServerReady { hostname, map } => EventRecord {
+                logger: Some("supervisor"),
+                steam_id: None,
+                detail: Some(match (hostname.as_deref(), map.as_deref()) {
+                    (Some(host), Some(map)) => format!("{host} on {map}"),
+                    (Some(host), None) => host.to_owned(),
+                    (None, Some(map)) => format!("on {map}"),
+                    (None, None) => "serving".to_owned(),
+                }),
+            },
+            Self::ProcessExited { code, graceful } => EventRecord {
+                logger: Some("supervisor"),
+                steam_id: None,
+                detail: Some(match (code, graceful) {
+                    (Some(code), true) => format!("stopped as asked, exit {code}"),
+                    (Some(code), false) => {
+                        format!("exited with code {code} without being asked to")
+                    }
+                    (None, true) => "stopped as asked, killed after the grace period".to_owned(),
+                    (None, false) => "killed by a signal".to_owned(),
+                }),
+            },
+            Self::PlayerJoined { steam_id, name } => EventRecord {
+                logger: Some("players"),
+                steam_id: Some(*steam_id),
+                detail: Some(format!("{name} joined")),
+            },
+            Self::PlayerLeft {
+                steam_id,
+                name,
+                reason,
+            } => EventRecord {
+                logger: Some("players"),
+                steam_id: Some(*steam_id),
+                // Not `leave_reason_label`, which is deliberately short for its
+                // `VARCHAR(32)` column and drops the kick reason. Why somebody
+                // was kicked is most of what an audit row about a kick is for.
+                detail: Some(match reason {
+                    LeaveReason::Disconnected => format!("{name} disconnected"),
+                    LeaveReason::Kicked { reason } => format!("{name} was kicked: {reason}"),
+                }),
+            },
+            Self::CommandDispatched { command, actor } => EventRecord {
+                logger: Some("console"),
+                steam_id: None,
+                detail: Some(format!("{actor} ran {command}")),
+            },
+            Self::CommandReplied { command, ok, .. } => EventRecord {
+                logger: Some("console"),
+                steam_id: None,
+                detail: Some(format!(
+                    "{command} {}",
+                    if *ok { "replied" } else { "was refused" }
+                )),
+            },
+            Self::BridgeHealth { healthy, detail } => EventRecord {
+                logger: Some("bridge"),
+                steam_id: None,
+                detail: Some(format!(
+                    "{}: {detail}",
+                    if *healthy { "healthy" } else { "unhealthy" }
+                )),
+            },
+            // The three that are never notable, plus `Log`. Reached only if
+            // somebody records one deliberately.
+            Self::Log(_) | Self::Status(_) | Self::Resources(_) | Self::Unparsed { .. } => {
+                EventRecord {
+                    logger: None,
+                    steam_id: None,
+                    detail: None,
+                }
+            }
+        }
+    }
+}
+
+/// The parts of an [`Event`] the operations record keeps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventRecord<'a> {
+    pub logger: Option<&'a str>,
+    pub steam_id: Option<u64>,
+    /// One readable sentence, not the serialised variant.
+    pub detail: Option<String>,
 }
 
 #[cfg(test)]

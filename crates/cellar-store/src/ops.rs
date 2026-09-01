@@ -209,6 +209,184 @@ pub async fn record_command(
     Ok(())
 }
 
+/// One thing that happened, from either the audit or the observation table.
+///
+/// A single row type for both because an operator asking "what happened at
+/// 21:04" does not care which table it landed in, and the two are only
+/// meaningful next to each other: a crash three seconds after a command is the
+/// pair that explains itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivityEntry {
+    pub at: DateTime<Utc>,
+    /// `command` for the audit table, otherwise the event's own kind.
+    pub kind: String,
+    /// Who caused it. `operator` for a console command, `server` otherwise.
+    pub source: &'static str,
+    /// The operator's name for a command, the logger for an event.
+    pub actor: Option<String>,
+    pub detail: String,
+    /// A command's reply, truncated. Absent for events.
+    pub reply: Option<String>,
+    /// Whether a command succeeded. Absent for events, which have no verdict.
+    pub ok: Option<bool>,
+    pub steam_id: Option<u64>,
+    pub session_id: Option<u64>,
+    /// Which supervised server. Absent for a row whose session predates scopes
+    /// or was written without one.
+    pub scope: Option<String>,
+}
+
+/// What to include in an activity listing.
+#[derive(Debug, Clone, Default)]
+pub struct ActivityQuery {
+    /// Only this instance's scope. `None` is every scope in the database.
+    pub scope: Option<String>,
+    /// `operator`, `server`, or both when `None`.
+    pub source: Option<String>,
+    /// Case-insensitive substring of the detail, the actor or the reply.
+    pub text: Option<String>,
+    /// How far back. Zero or `None` is everything retained.
+    pub days: Option<u32>,
+    pub limit: u32,
+}
+
+/// The merged audit and observation timeline, newest first.
+///
+/// Two queries merged in Rust rather than a SQL `UNION`: the two tables share
+/// almost no columns, so a union needs six `NULL AS` casts per side, and the
+/// version that reads clearly is the one that will still be correct after
+/// somebody adds a column. Each side is limited before the merge and the merge
+/// is truncated, which is exact because both sides arrive newest-first.
+pub async fn activity(
+    pool: &MySqlPool,
+    query: &ActivityQuery,
+) -> Result<Vec<ActivityEntry>, StoreError> {
+    let limit = query.limit.clamp(1, 2000);
+    let mut entries = Vec::new();
+
+    let wants = |source: &str| {
+        query
+            .source
+            .as_deref()
+            .is_none_or(|wanted| wanted.eq_ignore_ascii_case(source))
+    };
+
+    if wants("operator") {
+        // A LEFT JOIN, not an inner one. `session_id` is nullable on both
+        // tables, and an inner join would silently drop every command run
+        // while no server was up, which is exactly when an operator is most
+        // likely to be looking.
+        let rows = sqlx::query(
+            "SELECT c.at, c.actor, c.command, c.reply, c.ok, c.session_id, s.scope
+             FROM srv_command c
+             LEFT JOIN srv_session s ON s.id = c.session_id
+             WHERE (? IS NULL OR s.scope = ?)
+               AND (? = 0 OR c.at >= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ? DAY))
+             ORDER BY c.at DESC, c.id DESC
+             LIMIT ?",
+        )
+        .bind(query.scope.as_deref())
+        .bind(query.scope.as_deref())
+        .bind(query.days.unwrap_or(0))
+        .bind(query.days.unwrap_or(0))
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+
+        for row in rows {
+            entries.push(ActivityEntry {
+                at: row.try_get("at")?,
+                kind: "command".to_owned(),
+                source: "operator",
+                actor: row.try_get("actor")?,
+                detail: row.try_get("command")?,
+                reply: row.try_get("reply")?,
+                ok: row.try_get("ok")?,
+                steam_id: None,
+                session_id: row.try_get("session_id")?,
+                scope: row.try_get("scope")?,
+            });
+        }
+    }
+
+    if wants("server") {
+        let rows = sqlx::query(
+            "SELECT e.at, e.kind, e.logger, e.steam_id, e.payload, e.session_id, s.scope
+             FROM srv_event e
+             LEFT JOIN srv_session s ON s.id = e.session_id
+             WHERE (? IS NULL OR s.scope = ?)
+               AND (? = 0 OR e.at >= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ? DAY))
+             ORDER BY e.at DESC, e.id DESC
+             LIMIT ?",
+        )
+        .bind(query.scope.as_deref())
+        .bind(query.scope.as_deref())
+        .bind(query.days.unwrap_or(0))
+        .bind(query.days.unwrap_or(0))
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+
+        for row in rows {
+            // Read as bytes, not as `String`. MariaDB reports a JSON column as
+            // BLOB over the wire, so decoding it straight to `Option<String>`
+            // is a hard `ColumnDecode` error rather than a wrong value. It went
+            // unnoticed at first because every payload written before today was
+            // NULL, which decodes fine either way.
+            let payload: Option<Vec<u8>> = row.try_get("payload")?;
+            // The recorder writes a plain string into that JSON column, so the
+            // stored bytes are `"pid 4 ..."` with the quotes. Unwrap a JSON
+            // string back to its text and leave anything else as written, so
+            // older rows and any future structured payload still read.
+            let detail = payload
+                .map(|raw| {
+                    let raw = String::from_utf8_lossy(&raw).into_owned();
+                    match serde_json::from_str::<serde_json::Value>(&raw) {
+                        Ok(serde_json::Value::String(text)) => text,
+                        _ => raw,
+                    }
+                })
+                .unwrap_or_default();
+
+            entries.push(ActivityEntry {
+                at: row.try_get("at")?,
+                kind: row.try_get("kind")?,
+                source: "server",
+                actor: row.try_get("logger")?,
+                detail,
+                reply: None,
+                ok: None,
+                steam_id: row.try_get("steam_id")?,
+                session_id: row.try_get("session_id")?,
+                scope: row.try_get("scope")?,
+            });
+        }
+    }
+
+    // Filtered here rather than in SQL because the two tables put the operator's
+    // words in different columns, and one `LIKE` per column per table is four
+    // clauses that have to stay in step with the row type.
+    if let Some(needle) = query.text.as_deref().filter(|text| !text.trim().is_empty()) {
+        let needle = needle.trim().to_lowercase();
+        entries.retain(|entry| {
+            entry.detail.to_lowercase().contains(&needle)
+                || entry.kind.to_lowercase().contains(&needle)
+                || entry
+                    .actor
+                    .as_deref()
+                    .is_some_and(|actor| actor.to_lowercase().contains(&needle))
+                || entry
+                    .reply
+                    .as_deref()
+                    .is_some_and(|reply| reply.to_lowercase().contains(&needle))
+        });
+    }
+
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.at));
+    entries.truncate(limit as usize);
+    Ok(entries)
+}
+
 /// A player as the roster and the web UI show them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerRecord {

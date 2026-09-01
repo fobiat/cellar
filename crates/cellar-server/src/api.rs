@@ -40,6 +40,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/db/table/{table}", get(db_browse))
         .route("/api/db/query", post(db_query))
         .route("/api/instances", get(instances))
+        .route("/api/activity", get(activity))
         .route("/api/db/backups", get(db_backups))
         .route("/api/db/backup", post(db_backup))
         .route("/api/db/restore", post(db_restore))
@@ -1750,6 +1751,82 @@ fn unavailable(target: &Target) -> String {
 }
 
 /// Every instance this process knows about, running or not.
+#[derive(Deserialize)]
+struct ActivityQuery {
+    #[serde(default)]
+    q: Option<String>,
+    /// `operator`, `server`, or both when absent.
+    #[serde(default)]
+    source: Option<String>,
+    /// How far back. Absent or 0 is everything the retention policy kept.
+    #[serde(default)]
+    days: Option<u32>,
+    #[serde(default)]
+    limit: Option<u32>,
+    /// Absent lists every instance's activity, which is the useful default on
+    /// a screen whose question is usually "what happened", not "what happened
+    /// to this one".
+    #[serde(default)]
+    instance: Option<String>,
+}
+
+/// What has happened: the console audit and the server's own observations, in
+/// one timeline.
+///
+/// No new writes. `record_command` has audited every console command since the
+/// console existed and `record_event` has recorded every lifecycle event, and
+/// until now nothing read either of them back. The console runs at full engine
+/// privilege, so `srv_command` is the only record of who used it, and it was
+/// write-only.
+async fn activity(
+    State(state): State<Arc<AppState>>,
+    _: Operator,
+    Query(query): Query<ActivityQuery>,
+) -> Response {
+    let Some(pool) = &state.pool else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no database is configured, so nothing has been recorded to show",
+        );
+    };
+
+    // Resolved from the registry rather than taken as a scope directly: a
+    // caller may not name an arbitrary scope, only an instance this process
+    // declares, so the filter cannot be used to read another deployment's rows
+    // out of a shared database.
+    let scope = match &query.instance {
+        Some(id) => match state.instances.get(id) {
+            Some(entry) => Some(entry.scope.clone()),
+            None => {
+                return error(
+                    StatusCode::NOT_FOUND,
+                    format!(
+                        "no instance '{id}'. This config declares: {}",
+                        state.instances.ids().join(", ")
+                    ),
+                );
+            }
+        },
+        None => None,
+    };
+
+    let request = cellar_store::ops::ActivityQuery {
+        scope,
+        source: query
+            .source
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim().to_owned()),
+        text: query.q.filter(|value| !value.trim().is_empty()),
+        days: query.days,
+        limit: query.limit.unwrap_or(200).clamp(1, 2000),
+    };
+
+    match cellar_store::ops::activity(pool, &request).await {
+        Ok(entries) => Json(serde_json::json!({ "entries": entries })).into_response(),
+        Err(why) => error(StatusCode::BAD_GATEWAY, why.to_string()),
+    }
+}
+
 async fn instances(State(state): State<Arc<AppState>>, _: Operator) -> Response {
     let primary = state.instances.primary().map(|entry| entry.id.to_string());
     Json(serde_json::json!({

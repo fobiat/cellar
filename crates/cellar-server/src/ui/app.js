@@ -298,7 +298,64 @@ const TAB_LOADERS = {
   monitoring: { what: "status", into: null, run: () => refreshStatus() },
   configs: { what: "profiles", into: "#config-list", run: () => loadConfigs() },
   precinct: { what: "the gamemode palette", into: "#precinct-palette", run: () => loadPalette() },
+  activity: { what: "activity", into: "#activity", run: () => loadActivity() },
 };
+
+/* ---- activity ------------------------------------------------------------ */
+
+/* The audit and the observation record, read back at last.
+ *
+ * `record_command` has written every console command since the console existed
+ * and `record_event` every lifecycle event; neither was ever rendered. No new
+ * backend writes were needed for this screen, only a query. */
+async function loadActivity() {
+  const params = new URLSearchParams();
+  const search = $("#activity-search").value.trim();
+  const source = $("#activity-source").value;
+  const days = $("#activity-days").value;
+  if (search) params.set("q", search);
+  if (source) params.set("source", source);
+  if (days) params.set("days", days);
+  params.set("limit", "300");
+
+  const data = await api(forInstance(`/api/activity?${params}`));
+  const body = $("#activity");
+  body.replaceChildren();
+
+  const entries = data.entries || [];
+  $("#activity-state").textContent = entries.length
+    ? `${entries.length} entr${entries.length === 1 ? "y" : "ies"}, newest first.`
+    : "Nothing recorded for that filter.";
+
+  for (const entry of entries) {
+    const row = el("tr");
+    row.append(el("td", null, new Date(entry.at).toLocaleString()));
+    row.append(el("td", null, entry.source === "operator" ? "operator" : entry.kind));
+    row.append(el("td", null, entry.actor || "—"));
+
+    /* The command and its reply in one cell, because a command without what it
+     * returned is half an audit entry: "who ran quit" matters less than
+     * whether the server took it. */
+    const what = el("td");
+    what.append(el("div", null, entry.detail || "—"));
+    if (entry.reply) what.append(el("div", "muted small", entry.reply.slice(0, 400)));
+    /* Which server, when a config has more than one. An audit row that does not
+     * say which server it is about is an audit row you cannot act on. */
+    if (entry.scope && knownInstances.length > 1) {
+      what.append(el("div", "muted small", `scope ${entry.scope}`));
+    }
+    row.append(what);
+
+    /* An event has no outcome. Putting the scope here because the cell was
+     * otherwise empty made the column mean two things, which is worse than a
+     * dash. */
+    const outcome = entry.ok === null || entry.ok === undefined
+      ? "—"
+      : entry.ok ? "ok" : "refused";
+    row.append(el("td", entry.ok === false ? "down" : "muted", outcome));
+    body.append(row);
+  }
+}
 
 /* ---- the gamemode command palette --------------------------------------- */
 
@@ -1564,6 +1621,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   $("#doc-search").onclick = loadDocuments;
+  $("#activity-refresh").onclick = () => load("activity", $("#activity"), () => loadActivity());
+  $("#activity-search").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") load("activity", $("#activity"), () => loadActivity());
+  });
+  for (const control of ["#activity-source", "#activity-days"]) {
+    $(control).addEventListener("change", () => load("activity", $("#activity"), () => loadActivity()));
+  }
   $("#run-query").onclick = runQuery;
   $("#release-build").onclick = () => runRelease("build");
   $("#release-publish").onclick = () => runRelease("publish");

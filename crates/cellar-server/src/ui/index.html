@@ -77,6 +77,7 @@
     <button data-tab="records">Records</button>
     <button data-tab="players">Registry</button>
     <button data-tab="database">Database</button>
+    <button data-tab="activity">Activity</button>
     <button data-tab="releases">Releases</button>
   </nav>
 
@@ -259,6 +260,43 @@
             These come from the active instance's <code>[profile]</code>, not from Cellar. Output
             lands in the Dispatch console. A gamemode with no profile shows nothing here, which is
             correct: Cellar does not know what its commands are.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Activity: the console audit and the server's own record, together. -->
+    <section id="tab-activity" hidden>
+      <div class="panel">
+        <h2>What happened</h2>
+        <div class="body">
+          <div class="console-tools">
+            <input type="search" id="activity-search" placeholder="find a command, an actor or a reply…" autocomplete="off">
+            <select id="activity-source" aria-label="activity source">
+              <option value="">everything</option>
+              <option value="operator">operator commands</option>
+              <option value="server">server events</option>
+            </select>
+            <select id="activity-days" aria-label="how far back">
+              <option value="1">last day</option>
+              <option value="7">last week</option>
+              <option value="30" selected>last 30 days</option>
+              <option value="0">everything kept</option>
+            </select>
+            <button class="chip" id="activity-refresh" type="button">refresh</button>
+          </div>
+          <p class="muted small" id="activity-state">Loading.</p>
+          <table>
+            <thead>
+              <tr><th>When</th><th>Source</th><th>Who</th><th>What</th><th>Outcome</th></tr>
+            </thead>
+            <tbody id="activity"></tbody>
+          </table>
+          <p class="muted small" style="margin-top:12px">
+            Every console command Cellar has ever run is here, with who ran it and what
+            came back, alongside the server's own lifecycle record. The console runs at full
+            engine privilege, so this is the only account of who used it. Retention is
+            <code>database.event_retention_days</code>.
           </p>
         </div>
       </div>
