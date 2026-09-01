@@ -182,7 +182,7 @@ reason = "players spawn inside geometry without it"
 | `name` | unset | Shown in the UI. Nothing routes on it. |
 | `ready_pattern` | AppleJackRP's line | The log line that means "serving". A substring match, not a regex. |
 | `convar_prefix` | unset | The prefix this gamemode's convars share. Drives the log category filter. |
-| `command` | `[]` | Array of tables: `label`, `command`, optional `group`, optional `confirm`. Becomes the Precinct palette. |
+| `command` | `[]` | Array of tables: `label`, `command`, optional `group`, optional `confirm`. Becomes the command palette beside the console, and Ctrl-K entries. |
 | `check` | `[]` | Array of tables: `name`, `file`, `contains`, `reason`. Becomes `cellar doctor` checks named `gamemode: <name>`. |
 | `map` | `[]` | Map package idents this gamemode has. Checked against `server.map`. |
 

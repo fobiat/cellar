@@ -81,7 +81,6 @@
     <button role="tab" id="tabfor-configs" data-tab="configs" aria-controls="tab-configs" aria-selected="false" tabindex="-1">Configs</button>
     <button role="tab" id="tabfor-roster" data-tab="roster" aria-controls="tab-roster" aria-selected="false" tabindex="-1">Roster</button>
     <button role="tab" id="tabfor-access" data-tab="access" aria-controls="tab-access" aria-selected="false" tabindex="-1">Access</button>
-    <button role="tab" id="tabfor-precinct" data-tab="precinct" aria-controls="tab-precinct" aria-selected="false" tabindex="-1">Precinct</button>
     <button role="tab" id="tabfor-settings" data-tab="settings" aria-controls="tab-settings" aria-selected="false" tabindex="-1">Settings</button>
     <button role="tab" id="tabfor-records" data-tab="records" aria-controls="tab-records" aria-selected="false" tabindex="-1">Records</button>
     <button role="tab" id="tabfor-players" data-tab="players" aria-controls="tab-players" aria-selected="false" tabindex="-1">Registry</button>
@@ -149,6 +148,21 @@
             <label class="sr-only" for="command">Console command</label><input type="text" id="command" placeholder="type a command, for example status"
                    autocomplete="off" spellcheck="false">
           </div>
+        </div>
+      </div>
+
+      <!-- Whatever the gamemode's profile says it can do. This was its own
+           tab, which existed only because there was nowhere to put buttons. -->
+      <div class="panel">
+        <h2 id="precinct-title">Gamemode commands</h2>
+        <div class="body">
+          <div id="precinct-palette"></div>
+          <p class="muted small" style="margin-top:12px">
+            These come from the active instance's <code>[profile]</code>, not from Cellar. Output
+            lands in the console above, which is why they are on this tab and not their own: a
+            command whose reply appears on a different screen is a command you have to go and look
+            for. A gamemode with no profile shows nothing here, which is correct.
+          </p>
         </div>
       </div>
 
@@ -274,21 +288,6 @@
       <div class="panel">
         <h2>Allowed accounts</h2>
         <div class="body scroll"><div class="table-tools"><label class="sr-only" for="access-search">Search the allowlist</label><input type="search" id="access-search" placeholder="search Steam ID…"></div><table><thead><tr><th>Steam ID</th><th></th></tr></thead><tbody id="access-list"></tbody></table></div>
-      </div>
-    </section>
-
-    <!-- Precinct: whatever the gamemode's profile says it can do. -->
-    <section id="tab-precinct" role="tabpanel" aria-labelledby="tabfor-precinct" tabindex="-1" hidden>
-      <div class="panel">
-        <h2 id="precinct-title">Gamemode commands</h2>
-        <div class="body">
-          <div id="precinct-palette"></div>
-          <p class="muted small" style="margin-top:12px">
-            These come from the active instance's <code>[profile]</code>, not from Cellar. Output
-            lands in the Dispatch console. A gamemode with no profile shows nothing here, which is
-            correct: Cellar does not know what its commands are.
-          </p>
-        </div>
       </div>
     </section>
 

@@ -452,9 +452,9 @@ Cellar does not schedule it for you.
 | Anti-cheat | web UI, `/api/status` | Shows detected VAC, Easy Anti-Cheat, or BattlEye evidence. `unknown` means the engine log made no claim. An unauthenticated Steam fallback is shown as VAC disabled. |
 | AppleJack build drift | web UI, Releases tab | Compares the running `BuildVersion.g.cs` commit with the current `origin/main` tip. `out of sync` is a real alert, not a package-version guess. |
 
-The Dispatch console has a view selector for command results, background events,
-and errors. This keeps output from Precinct shortcuts visible without mixing it
-with the persistent engine stream. Console view and filters are saved per
+The console has a view selector for command results, background events, and
+errors, which keeps the output of a palette command visible without mixing it
+into the persistent engine stream. Console view and filters are saved per
 browser.
 
 Settings snapshots can be imported from the Settings tab. Select a TOML or YAML

@@ -393,15 +393,24 @@ function notifyOperator(title, body) {
  *
  * `#/i/<id>/<tab>` names both; `#/<tab>` is the primary's. `?tab=` still works
  * and redirects, because it is in the wild in bookmarks and in the manifest. */
+/* Tabs that no longer exist, and where they went.
+ *
+ * A bookmark, a PWA shortcut or a link in a runbook outlives a restructure, and
+ * dropping it on the default tab teaches nothing. Precinct dissolved into the
+ * console: its commands came from a gamemode profile rather than from Cellar
+ * once profiles existed, and their output has always landed in the console. */
+const MOVED_TABS = { precinct: "dispatch" };
+
 function readRoute() {
   const legacy = new URLSearchParams(location.search).get("tab");
   if (legacy && !location.hash) return { instance: null, tab: legacy };
 
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  const moved = (tab) => MOVED_TABS[tab] || tab;
   if (parts[0] === "i" && parts.length >= 2) {
-    return { instance: parts[1], tab: parts[2] || "dispatch" };
+    return { instance: parts[1], tab: moved(parts[2] || "dispatch") };
   }
-  return { instance: null, tab: parts[0] || "dispatch" };
+  return { instance: null, tab: moved(parts[0] || "dispatch") };
 }
 
 function writeRoute() {
@@ -485,12 +494,16 @@ const TAB_LOADERS = {
   releases: { what: "releases", into: "#versions", run: () => loadReleases() },
   settings: { what: "settings", into: "#settings", run: () => loadSettings() },
   monitoring: { what: "status", into: null, run: () => refreshStatus() },
+  dispatch: {
+    what: "the gamemode palette",
+    into: "#precinct-palette",
+    run: () => loadPalette(),
+  },
   configs: {
     what: "profiles",
     into: "#config-list",
     run: async () => { await loadConfigs(); await loadGamemode(); },
   },
-  precinct: { what: "the gamemode palette", into: "#precinct-palette", run: () => loadPalette() },
   activity: { what: "activity", into: "#activity", run: () => loadActivity() },
   diagnostics: { what: "diagnostics", into: "#diagnostics-checks", run: () => loadDiagnostics() },
 };
@@ -720,7 +733,7 @@ async function loadPalette() {
   if (!commands.length) {
     target.append(el("p", "muted",
       "This gamemode's profile declares no commands. Add [[command]] entries to it, or type "
-      + "into the Dispatch console."));
+      + "into the console above."));
     return;
   }
 

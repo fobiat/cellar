@@ -132,10 +132,10 @@ SIGTERM handler at all, so anything that kills the process skips all of them.
 
 With `cellar run` still going, visit <http://127.0.0.1:8081>.
 
-You get the live console, the player roster, the feature and setting editors, a
-read-only database browser, and version information. Tabs are themed as a city
-RP dispatch board: Dispatch, Roster, Precinct, Ordinance, Records, Registry,
-Database, Releases.
+You get the live console with the gamemode's own command palette beside it, the
+player roster, the feature and setting editors, a read-only database browser,
+what has happened, what runs on a timer, the same checks `cellar doctor` runs,
+and version information. **Ctrl-K** jumps to any of it.
 
 > **The web UI runs commands at full engine privilege.** On loopback that is
 > fine. Binding it anywhere else **requires** a password, and Cellar refuses to

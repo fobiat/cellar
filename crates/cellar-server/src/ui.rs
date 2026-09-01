@@ -483,6 +483,27 @@ mod tests {
         }
     }
 
+    /// A route that used to exist has to land where its screen went.
+    ///
+    /// A bookmark, a PWA shortcut and a link in a runbook all outlive a
+    /// restructure, and dropping one on the default tab teaches nothing.
+    #[test]
+    fn a_tab_that_moved_still_resolves() {
+        assert!(JS.contains("MOVED_TABS"));
+        // Precinct's commands came from the gamemode profile once profiles
+        // existed, and their output has always landed in the console, so the
+        // tab had nothing left that was its own.
+        assert!(JS.contains(r#"precinct: "dispatch""#));
+        assert!(
+            !HTML.contains(r#"data-tab="precinct""#),
+            "the dissolved tab is still in the nav"
+        );
+        assert!(
+            HTML.contains(r#"id="precinct-palette""#),
+            "the command palette went with the tab instead of moving"
+        );
+    }
+
     /// The UI half of the AppleJackRP coupling, pinned.
     ///
     /// The Precinct tab was thirteen `data-command="applejack_*"` buttons in
