@@ -6,6 +6,136 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **More than one server in one process.** `[instances.<id>]` alongside
+  `[server]`, never both. Each gets its own log, data directory, scope, ports,
+  Wine prefix and Discord attribution; a crash loop in one leaves the other
+  running and `/readyz` green, because it speaks only for instances marked
+  `required`. The dashboard grows an instance strip and hash routing
+  (`#/i/<id>/<tab>`), the CLI a `--instance` flag, and MCP an `instance`
+  argument plus a `cellar_instances` tool. A single-`[server]` config is
+  untouched: no strip, no query parameter, and its documents do not move.
+
+  It is **one install tree per instance**. `FACEPUNCH_ENGINE` relocates neither
+  `logs/` nor `data/`, from the process environment or from the Wine registry;
+  both follow the executable's own directory, and `server.working_dir` moves
+  neither. Measured against a real `sbox-server.exe`; the table is in
+  `docs/ARCHITECTURE.md`.
+
+- **Gamemode profiles.** `[profile]`, or `profile_file` pointing at a sibling,
+  carrying `ready_pattern`, `convar_prefix`, `map`, `[[command]]` and
+  `[[check]]`. Five things were hardcoded to AppleJackRP: the readiness line,
+  the log category heuristic, a doctor check that grepped one C# file by path,
+  thirteen command buttons in the web UI, and `/api/settings` sending
+  `applejack_features` to whatever was running. A gamemode Cellar has never
+  heard of now gets all five by writing twenty lines of TOML.
+
+- **`cellar install`**, which fetches the s&box dedicated server itself. App
+  1892930 is free and anonymous login works, so this needs no Steam account.
+
+- **`cellar db restore`**, `cellar db backups`, and their endpoints. A backup
+  feature without a restore is decorative. Restore refuses while a Cellar is
+  answering, because a write landing mid-restore lands in a table that is about
+  to be dropped.
+
+- **An activity screen** over `srv_command` and `srv_event`, which Cellar has
+  always written and never shown. The console runs at full engine privilege, so
+  the command audit is the only account of who used it.
+
+- **A diagnostics screen** running the same checks as `cellar doctor`, from the
+  same crate, plus the live half: supervisor state, restart counts, last exit,
+  each instance's resolved readiness line, and the unparsed-line count with the
+  last twenty lines verbatim.
+
+- **A job register.** Backups, the update check, the program update check and
+  event retention now report when they last ran, whether it worked and when the
+  next one is due, with a "run now" per job, over `GET /api/jobs` and a panel on
+  the Diagnostics tab.
+
+- **`backup.verify`**, on by default, reads each dump back before counting it
+  and before retention may delete an older one. Plus `backup.copy_to` for a
+  second copy on another disk, and `backup.before_update` for a snapshot taken
+  immediately before a game update is applied.
+
+- **A start timeout**, `supervisor.start_timeout_seconds`, and a `unhealthy`
+  state for a server whose process is alive and whose readiness never arrived.
+  It never kills and never restarts; it stops the two being the same word.
+
+- Doctor checks for a port already in use, disk headroom, another Cellar
+  already bound to this address, and the **Steam app identity**: an install of
+  590830 is the paid client and editor, not the dedicated server, and version
+  reporting cannot work against it.
+
+- A theme control offering Dark, Light and System, with the choice remembered.
+
+### Fixed
+
+- **The light theme, which never worked.** The `ink` token carried the dark
+  value in both themes, so light mode painted `#201F1D` body text on a
+  `#0E0F11` ground at 1.15:1. The palette's contrast tests now hold both halves
+  of every token to WCAG AA on every ground; they only ever checked the dark
+  half, which is how it stayed broken while its tests passed.
+
+- **`/healthz` did not identify itself as Cellar.** It answers `ok`, and the
+  probe that decides whether an address is held by another Cellar sniffed that
+  body for `"cellar"` or `"state"`, so it never matched. Two things depended on
+  it and both were inert: doctor's "another Cellar is already bound" warning,
+  and the refusal that stops `cellar db restore` running while a supervised
+  server writes to the database it is about to replace. There is an `x-cellar`
+  header now.
+
+- **Event retention never ran.** `database.event_retention_days` defaults to 90
+  and had no loop at all; only the manual `cellar db prune` ever acted on it, so
+  a long-running deployment's recorded events grew without bound.
+
+- **Notifications followed the primary instance only**, so on a two-instance
+  deployment a crash on the second server notified nobody.
+
+- **`deploy/cellar.toml` and the Kubernetes manifest could never have passed
+  readiness.** Both ran `facepunch.sandbox` with AppleJackRP's readiness line,
+  which that gamemode never logs.
+
+- **The dashboard was mouse-only.** No labels, no tab roles, no `tabindex`
+  anywhere. Every input relied on a placeholder, which disappears on focus.
+  Every status was a coloured dot with no distinguishing shape, so the screen
+  read identically in greyscale and to a red-green colour deficiency.
+
+- `/api/status` reports a stopped state with the exit that produced it, rather
+  than `"server": null`. After a kill the dashboard showed an absence instead of
+  "killed, exit 137".
+
+- The console renders one node per arriving line instead of rebuilding up to
+  1500 elements per line, marks a gap when the socket drops and backfills it
+  from the log file on reconnect with an integrity readout, and shows commands
+  run from `cellar exec` or MCP, which it used to drop.
+
+- `command_dispatched` and `command_replied` were broadcast and dropped by the
+  browser, so a command run from anywhere but the web console was invisible.
+
+- The player ceiling comes from the project's `Metadata.MaxPlayers`, the only
+  place it exists. `+maxplayers` is not a convar and not a launch switch.
+
+- `record_events` is keyed by instance. It held one session id, so on a merged
+  stream one instance's exit closed the other's session row, with both writes
+  succeeding and nothing reporting it.
+
+- A missing server executable is reported as a missing path rather than backed
+  off into five times and reported as a crash loop.
+
+- `setLamp` assigned `className` outright and dropped `.connection` from the
+  header lamp, so a phone showed a large "live" label designed to be invisible.
+
+- The table search and sort ran on the two-second status refresh, re-appending
+  every row of six tables, which blurred anything focused inside one. Typing a
+  convar value into the Settings table lost focus twice a second.
+
+- `game_data_dir` prefers `server.data_dir`, so the Access panel is no longer
+  silently blind in development mode.
+
+- `level_min` on `/api/logs`, so the live view's threshold filter and the
+  full-log search agree.
+
 ### Changed
 
 - Report sizes in decimal KB/MB/GB rather than KiB/MiB/GiB, in the web UI and
