@@ -198,7 +198,13 @@ impl Supervisor {
         let (events, _) = broadcast::channel(1024);
         let (control_tx, control_rx) = mpsc::channel(64);
 
-        let tracker = Tracker::new(instance.server.hostname.clone(), 0);
+        // Zero when nobody has read the project's `Metadata.MaxPlayers`, which
+        // is the only place the real ceiling exists. Zero means unknown, and
+        // the dashboard says so rather than showing "0/0".
+        let tracker = Tracker::new(
+            instance.server.hostname.clone(),
+            instance.player_ceiling.unwrap_or(0),
+        );
 
         let handle = Handle {
             control: control_tx,
@@ -949,6 +955,7 @@ mod tests {
             scope: "test".to_owned(),
             enabled: true,
             required: true,
+            player_ceiling: None,
             profile: Default::default(),
             server: ServerConfig {
                 executable: PathBuf::from("/bin/true"),
@@ -962,6 +969,26 @@ mod tests {
             supervisor: Default::default(),
             bridge: Default::default(),
         }
+    }
+
+    /// The ceiling is known before a player connects, or it is honestly zero.
+    ///
+    /// `+maxplayers` is not a convar and not a launch switch; the number lives
+    /// in the project's `Metadata.MaxPlayers`, and until it was read the
+    /// dashboard showed a ceiling of zero until the engine's status bar
+    /// happened to mention one. The status bar still wins once it arrives:
+    /// that is what the engine is actually enforcing.
+    #[test]
+    fn the_player_ceiling_is_seeded_from_the_project_and_then_the_engine_wins() {
+        let mut declared = instance(None);
+        declared.player_ceiling = Some(48);
+        let (supervisor, _, _) = Supervisor::new(declared);
+        assert_eq!(supervisor.tracker.snapshot().max_players, 48);
+
+        // Nobody has read a project. Zero means unknown, and the dashboard
+        // says so rather than showing "0/0" as if it were a limit.
+        let (blind, _, _) = Supervisor::new(instance(None));
+        assert_eq!(blind.tracker.snapshot().max_players, 0);
     }
 
     #[test]

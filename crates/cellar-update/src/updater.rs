@@ -203,44 +203,79 @@ async fn pull(dir: &std::path::Path) -> Step {
 }
 
 async fn steam_update(config: &UpdateConfig) -> Step {
-    let name = format!("steamcmd app_update {SBOX_DEDICATED_APP_ID}");
-
     let (Some(steamcmd), Some(steam_dir)) = (&config.steamcmd, &config.steam_dir) else {
         return Step {
-            name,
+            name: format!("steamcmd app_update {SBOX_DEDICATED_APP_ID}"),
             ok: false,
             detail: "update.steamcmd and update.steam_dir are both needed to update the engine"
                 .to_owned(),
         };
     };
+    install_engine(steamcmd, steam_dir, true, false).await
+}
 
-    let output = tokio::process::Command::new(steamcmd)
+/// Download or update the dedicated server with steamcmd.
+///
+/// Shared by the update job and by `cellar install`, which is the whole
+/// first-run path: **the dedicated server is app 1892930, it is free, and
+/// anonymous login works**, so getting from nothing to an installed server
+/// needs no Steam credential. App 590830 is the paid client and editor, and
+/// anonymous fails on it with "No subscription".
+///
+/// `stream` prints steamcmd's own progress rather than swallowing it, because
+/// this is a multi-gigabyte download and a command that prints nothing for
+/// twenty minutes reads as a hang.
+pub async fn install_engine(
+    steamcmd: &std::path::Path,
+    into: &std::path::Path,
+    validate: bool,
+    stream: bool,
+) -> Step {
+    let name = format!("steamcmd app_update {SBOX_DEDICATED_APP_ID}");
+
+    let mut command = tokio::process::Command::new(steamcmd);
+    command
         .args([
             "+@ShutdownOnFailedCommand",
             "1",
             "+@NoPromptForPassword",
             "1",
             // The dedicated server is a Windows binary. On Linux a plain
-            // app_update pulls a native depot that is not usable, so the
-            // platform has to be forced, the same as the image build does.
+            // app_update takes the platform-neutral depots and silently skips
+            // the one holding every .exe, which looks like a complete install
+            // with no executable anywhere in it.
             "+@sSteamCmdForcePlatformType",
             "windows",
             "+force_install_dir",
         ])
-        .arg(steam_dir)
-        .args([
-            "+login",
-            "anonymous",
-            "+app_update",
-            SBOX_DEDICATED_APP_ID,
-            "validate",
-            "+quit",
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .await;
+        .arg(into)
+        .args(["+login", "anonymous", "+app_update", SBOX_DEDICATED_APP_ID]);
+    if validate {
+        command.arg("validate");
+    }
+    command.arg("+quit").stdin(Stdio::null());
 
-    match output {
+    if stream {
+        return match command.status().await {
+            Ok(status) if status.success() => Step {
+                name,
+                ok: true,
+                detail: format!("installed into {}", into.display()),
+            },
+            Ok(status) => Step {
+                name,
+                ok: false,
+                detail: format!("steamcmd exited with {status}"),
+            },
+            Err(error) => Step {
+                name,
+                ok: false,
+                detail: error.to_string(),
+            },
+        };
+    }
+
+    match command.output().await {
         Ok(output) if output.status.success() => Step {
             name,
             ok: true,

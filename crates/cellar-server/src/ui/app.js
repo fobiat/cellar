@@ -427,7 +427,11 @@ const TAB_LOADERS = {
   releases: { what: "releases", into: "#versions", run: () => loadReleases() },
   settings: { what: "settings", into: "#settings", run: () => loadSettings() },
   monitoring: { what: "status", into: null, run: () => refreshStatus() },
-  configs: { what: "profiles", into: "#config-list", run: () => loadConfigs() },
+  configs: {
+    what: "profiles",
+    into: "#config-list",
+    run: async () => { await loadConfigs(); await loadGamemode(); },
+  },
   precinct: { what: "the gamemode palette", into: "#precinct-palette", run: () => loadPalette() },
   activity: { what: "activity", into: "#activity", run: () => loadActivity() },
   diagnostics: { what: "diagnostics", into: "#diagnostics-checks", run: () => loadDiagnostics() },
@@ -2035,6 +2039,45 @@ async function loadConfigs() {
     row.append(button);
     if (profile.refusal) row.append(el("span", "muted small", profile.refusal));
     target.append(row);
+  }
+}
+
+/* What the gamemode said about itself. Every row here was hardcoded to
+ * AppleJackRP before `[profile]` existed. */
+async function loadGamemode() {
+  const data = await api("/api/instances");
+  const wanted = instanceId() || data.primary;
+  const current = (data.instances || []).find((entry) => entry.id === wanted)
+    || (data.instances || [])[0];
+  const profile = (current && current.profile) || {};
+  const server = (current && current.server) || {};
+
+  $("#gamemode-title").textContent = profile.name || "Gamemode";
+
+  const body = $("#gamemode");
+  body.replaceChildren();
+
+  const rows = [
+    ["Readiness line", server.ready_pattern || "not set",
+      "The log line that means serving. A line this gamemode never logs is a server that "
+      + "starts, binds its ports and never passes /readyz."],
+    ["Convar prefix", profile.convar_prefix || "not set",
+      "Drives the palette's find, the log categories and the settings tab."],
+    ["Maps", (profile.map || []).join(", ") || "not declared",
+      "A map is a package, passed as the second positional argument to +game. There is no "
+      + "+map switch."],
+    ["Palette commands", String((profile.command || []).length), ""],
+    ["Doctor checks", String((profile.check || []).length), ""],
+  ];
+
+  for (const [label, value, note] of rows) {
+    const row = el("tr");
+    row.append(el("td", null, label));
+    const cell = el("td");
+    cell.append(el("div", value === "not set" || value === "not declared" ? "muted" : null, value));
+    if (note) cell.append(el("div", "muted small", note));
+    row.append(cell);
+    body.append(row);
   }
 }
 

@@ -54,6 +54,23 @@ pub struct GamemodeProfile {
     )]
     pub commands: Vec<ProfileCommand>,
 
+    /// Map package idents this gamemode ships or supports.
+    ///
+    /// A map is a package, `org.name`, passed as the optional second positional
+    /// argument to `+game`. There is no `+map` switch. Declaring them turns a
+    /// typo'd `server.map` from a server that starts and never becomes ready
+    /// into a `cellar doctor` failure naming the maps that do exist.
+    ///
+    /// Empty means "this gamemode did not say", never "this gamemode has no
+    /// maps", so an empty list checks nothing.
+    #[serde(
+        default,
+        rename = "map",
+        skip_serializing_if = "Vec::is_empty",
+        alias = "maps"
+    )]
+    pub maps: Vec<String>,
+
     /// Source-tree assertions `cellar doctor` should make.
     #[serde(
         default,

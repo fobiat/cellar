@@ -266,6 +266,106 @@ fn disks(config: &Config, instances: &[Instance], report: &mut Report) {
     }
 }
 
+/// Whether the configured map is one this gamemode has.
+///
+/// A map is a package ident, `org.name`, and it is the optional second
+/// positional argument to `+game`; there is no `+map` switch. Shape alone was
+/// all this could check, and a well-shaped ident for a map that does not exist
+/// is a server that starts, fails to resolve the package and never becomes
+/// ready, which is indistinguishable from a slow start.
+fn map(instance: &Instance, report: &mut Report) {
+    let id = Some(instance.id.as_str());
+    let Some(map) = instance.server.map.as_deref() else {
+        return;
+    };
+
+    let well_formed = map.split('.').count() == 2
+        && map
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.');
+    if !well_formed {
+        report.check(
+            id,
+            false,
+            "server.map",
+            format!("'{map}' is not a package ident. A map is org.name, lowercase."),
+        );
+        return;
+    }
+
+    // The profile is the narrower statement and wins. Falling back to the
+    // project's own list means a local development instance gets the check for
+    // free, without anybody writing a profile at all.
+    let declared: Vec<String> = if !instance.profile.maps.is_empty() {
+        instance.profile.maps.clone()
+    } else {
+        cellar_update::project::read(&instance.server.project)
+            .ok()
+            .flatten()
+            .map(|project| project.maps)
+            .unwrap_or_default()
+    };
+
+    if declared.is_empty() {
+        // Nothing said which maps exist, so nothing can be concluded. A note
+        // rather than a pass, because "ok" would claim a check that did not
+        // happen.
+        report.note(
+            id,
+            "server.map",
+            format!(
+                "{map} is well-formed. Nothing declares which maps this gamemode has, so it                  cannot be checked; add [profile] maps or a MapList to the project."
+            ),
+        );
+        return;
+    }
+
+    report.check(
+        id,
+        declared.iter().any(|known| known == map),
+        "server.map",
+        if declared.iter().any(|known| known == map) {
+            map.to_owned()
+        } else {
+            format!("'{map}' is not one of: {}", declared.join(", "))
+        },
+    );
+}
+
+/// What the `.sbproj` says, for an instance that has one.
+///
+/// The player ceiling in particular: `+maxplayers` is not a convar and not a
+/// launch switch, the old `entrypoint.sh` passed it for years and it was inert,
+/// and `Metadata.MaxPlayers` is the only place the real number exists.
+fn project(instance: &Instance, report: &mut Report) {
+    let id = Some(instance.id.as_str());
+    let path = &instance.server.project;
+
+    match cellar_update::project::read(path) {
+        Ok(Some(project)) => {
+            let mut said = Vec::new();
+            if let Some(ident) = project.package_ident() {
+                said.push(format!("package {ident}"));
+            }
+            match project.max_players {
+                Some(ceiling) => said.push(format!("{ceiling} players")),
+                None => said.push(
+                    "no MaxPlayers, so the ceiling is the engine's default and Cellar cannot                      report it"
+                        .to_owned(),
+                ),
+            }
+            if !project.packages.is_empty() {
+                said.push(format!("{} package reference(s)", project.packages.len()));
+            }
+            report.note(id, "server.project metadata", said.join(", "));
+        }
+        Ok(None) => {}
+        // Malformed rather than absent. Worth failing: the engine reads this
+        // file too, and it will not start on one it cannot parse.
+        Err(why) => report.check(id, false, "server.project metadata", why),
+    }
+}
+
 /// Assertions the gamemode's own profile asked for.
 ///
 /// This used to be one hardcoded check that grepped AppleJackRP's
@@ -367,18 +467,8 @@ fn check_one_server(instance: &Instance, report: &mut Report) {
         }
     }
 
-    if let Some(map) = server.map.as_deref() {
-        report.check(
-            id,
-            map.split('.').count() == 2
-                && map
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.'),
-            "server.map",
-            map.to_owned(),
-        );
-    }
-
+    map(instance, report);
+    project(instance, report);
     check_profile(instance, report);
 
     if let Some(dir) = &server.data_dir {
@@ -558,6 +648,81 @@ mod tests {
         assert_eq!(report.problems(), 1);
         assert_eq!(report.checks.len(), 3);
         assert_eq!(report.checks[1].instance.as_deref(), Some("dev"));
+    }
+
+    /// A well-shaped ident for a map that does not exist is the failure here.
+    ///
+    /// It starts, fails to resolve the package and never becomes ready, which
+    /// is indistinguishable from a slow start. Shape alone could not catch it.
+    #[tokio::test]
+    async fn a_map_the_gamemode_does_not_have_is_refused_by_name() {
+        let config: Config = toml::from_str(
+            r#"
+            [profile]
+            name = "Facepunch Sandbox"
+            map = ["facepunch.flatgrass"]
+
+            [server]
+            executable = "/nonexistent/sbox-server.exe"
+            game = "facepunch.sandbox"
+            map = "facepunch.flatgrasss"
+
+            [web]
+            enabled = false
+            [bridge]
+            enabled = false
+            [database]
+            enabled = false
+            "#,
+        )
+        .expect("the fixture parses");
+
+        let report = run(&config, &[]).await;
+        let map = report
+            .checks
+            .iter()
+            .find(|check| check.label == "server.map")
+            .expect("the map is checked");
+
+        assert_eq!(map.outcome, Outcome::Fail);
+        // Naming what does exist is the whole value: "invalid map" tells an
+        // operator nothing they can act on.
+        assert!(
+            map.detail.contains("facepunch.flatgrass"),
+            "the refusal must list the maps that exist: {}",
+            map.detail
+        );
+    }
+
+    #[tokio::test]
+    async fn a_gamemode_that_declares_no_maps_checks_nothing() {
+        let config: Config = toml::from_str(
+            r#"
+            [server]
+            executable = "/nonexistent/sbox-server.exe"
+            game = "someone.gamemode"
+            map = "someone.somemap"
+
+            [web]
+            enabled = false
+            [bridge]
+            enabled = false
+            [database]
+            enabled = false
+            "#,
+        )
+        .expect("the fixture parses");
+
+        let report = run(&config, &[]).await;
+        let map = report
+            .checks
+            .iter()
+            .find(|check| check.label == "server.map")
+            .expect("the map is still mentioned");
+
+        // A note, never an ok. "ok" would claim a check that did not happen,
+        // and a gamemode that has not declared its maps is the common case.
+        assert_eq!(map.outcome, Outcome::Note);
     }
 
     #[tokio::test]

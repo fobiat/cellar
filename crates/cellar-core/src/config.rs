@@ -182,6 +182,16 @@ pub struct Instance {
     pub supervisor: SupervisorConfig,
     pub bridge: BridgeConfig,
     pub profile: GamemodeProfile,
+
+    /// The real player ceiling, when something has read it.
+    ///
+    /// `None` here means nobody has looked yet, not that there is no ceiling.
+    /// It is not a config key: `+maxplayers` is not a convar and not a launch
+    /// switch, the number lives in the project's `Metadata.MaxPlayers`, and
+    /// letting an operator type a different one here would put a figure on the
+    /// dashboard that the engine does not enforce. `cellar run` fills it in
+    /// from the `.sbproj` before building the supervisor.
+    pub player_ceiling: Option<u32>,
 }
 
 impl Instance {
@@ -1007,6 +1017,7 @@ impl Config {
                         .bridge
                         .clone()
                         .unwrap_or_else(|| self.bridge.clone()),
+                    player_ceiling: None,
                     profile: declared
                         .profile
                         .clone()
@@ -1030,6 +1041,7 @@ impl Config {
             server: server.clone(),
             supervisor: self.supervisor.clone(),
             bridge: self.bridge.clone(),
+            player_ceiling: None,
             profile: self.profile.clone().unwrap_or_default(),
         }]
     }

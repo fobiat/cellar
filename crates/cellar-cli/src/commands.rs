@@ -128,6 +128,67 @@ pub async fn doctor(path: &Path) -> Result<()> {
     }
 }
 
+/// Download or update the s&box dedicated server itself.
+///
+/// The last missing piece of getting from nothing to a running server. Every
+/// other command in this file assumes an install already exists; `doctor` says
+/// the executable is missing and stops there, without saying that the thing
+/// that would fix it is one anonymous steamcmd call away.
+pub async fn install(path: &Path, into: Option<&Path>, validate: bool) -> Result<()> {
+    let config = Config::load(path).with_context(|| format!("reading {}", path.display()))?;
+
+    let steamcmd = config
+        .update
+        .steamcmd
+        .clone()
+        .or_else(|| which("steamcmd").map(PathBuf::from))
+        .or_else(|| which("steamcmd.sh").map(PathBuf::from))
+        .context(
+            "steamcmd is not on PATH and update.steamcmd is unset. Install it from \
+             https://developer.valvesoftware.com/wiki/SteamCMD, or set update.steamcmd to it.",
+        )?;
+
+    let target = into
+        .map(Path::to_path_buf)
+        .or_else(|| config.update.steam_dir.clone())
+        .context(
+            "nowhere to install to. Pass --into, or set update.steam_dir so `cellar version` and \
+             the update job read the same install.",
+        )?;
+
+    println!(
+        "installing app {} into {} with {}",
+        cellar_update::version::SBOX_DEDICATED_APP_ID,
+        target.display(),
+        steamcmd.display()
+    );
+    // Said before the download rather than after, because the download is
+    // several gigabytes and this is the sentence that stops somebody hunting
+    // for a Steam password while it runs.
+    println!("the dedicated server is free and anonymous login works, so this needs no account\n");
+
+    let step = cellar_update::updater::install_engine(&steamcmd, &target, validate, true).await;
+    if !step.ok {
+        anyhow::bail!("{}: {}", step.name, step.detail);
+    }
+
+    println!("\n{}", step.detail);
+    let executable = target.join("bin").join("win64").join("sbox-server.exe");
+    if executable.exists() {
+        println!("server.executable = \"{}\"", executable.display());
+    } else {
+        // Not a failure of this command, and worth saying plainly: an install
+        // with no executable in it is what a platform-neutral depot download
+        // looks like, and it looks complete.
+        println!(
+            "note: {} is not there. Check the install before pointing a config at it.",
+            executable.display()
+        );
+    }
+    println!("next: cellar doctor");
+    Ok(())
+}
+
 /// Show installed and available versions.
 pub async fn version(path: &Path, json: bool) -> Result<()> {
     let config = Config::load(path)?;

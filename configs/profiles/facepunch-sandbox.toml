@@ -18,6 +18,14 @@ ready_pattern = "Connected to Steam"
 
 convar_prefix = "sbox"
 
+# A map is a package, and it is the optional second positional argument to
+# `+game`. There is no `+map` switch. `+game facepunch.sandbox
+# facepunch.flatgrass` is the official example in Facepunch's own dedicated
+# server documentation, which is the whole reason this list has one entry and
+# not five: an invented map ident would turn a check that catches typos into a
+# check that refuses working configs.
+map = ["facepunch.flatgrass"]
+
 [[command]]
 label = "Find sbox_*"
 command = "find sbox"

@@ -28,6 +28,7 @@ fn config(log_file: PathBuf, extra: &[&str]) -> Instance {
         scope: "test".to_owned(),
         enabled: true,
         required: true,
+        player_ceiling: None,
         profile: Default::default(),
         server: ServerConfig {
             executable: PathBuf::from(FAKE_SERVER),

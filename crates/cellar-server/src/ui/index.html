@@ -210,6 +210,23 @@
           <p class="notice" id="config-notice"></p>
         </div>
       </div>
+
+      <!-- What this gamemode told Cellar about itself. Every one of these was
+           hardcoded to AppleJackRP before the profile existed. -->
+      <div class="panel">
+        <h2 id="gamemode-title">Gamemode</h2>
+        <div class="body">
+          <table>
+            <tbody id="gamemode"></tbody>
+          </table>
+          <p class="muted small" style="margin-top:12px">
+            From <code>[profile]</code> or <code>profile_file</code> in the config, and from the
+            project's own <code>.sbproj</code>. A gamemode Cellar has never heard of gets its
+            readiness line, its command palette, its doctor checks and its map list by writing
+            twenty lines of TOML.
+          </p>
+        </div>
+      </div>
     </section>
 
     <!-- Roster: who is on the server now. -->

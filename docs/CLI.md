@@ -64,6 +64,42 @@ present when `launcher = "wine"`, the log path is writable, the database is
 reachable when enabled, and the bind addresses are free. Run it first, every
 time; it turns a confusing startup failure into a sentence.
 
+It also reads the `.sbproj` when the instance has one and reports the package
+ident, the player ceiling and how many packages the engine will resolve from
+sbox.game at boot. **`Metadata.MaxPlayers` is the only place the ceiling
+exists**: `+maxplayers` is not a convar and not a launch switch, and the old
+`entrypoint.sh` passed it for years with no effect.
+
+---
+
+## `cellar install`
+
+Download or update the s&box dedicated server itself.
+
+```
+cellar install
+cellar install --into /srv/sbox --validate
+```
+
+**The dedicated server is app 1892930, it is free, and anonymous login works**,
+so this needs no Steam account. App 590830 is the paid client and editor, and
+anonymous fails on it with "No subscription"; an install of 590830 is the wrong
+artifact for a server, which is a separate `doctor` check.
+
+Installs into `--into`, or `update.steam_dir` when that is set. Prefer setting
+`update.steam_dir`, so this command, `cellar version` and the update job all read
+the same install. `--validate` re-checks every file against the manifest, which
+is what to reach for when a server will not start after an interrupted update.
+
+steamcmd's own progress is printed rather than swallowed: this is a
+multi-gigabyte download and a command that prints nothing for twenty minutes
+reads as a hang.
+
+The platform is forced to `windows`. On Linux a plain `app_update` takes the
+platform-neutral depots and silently skips the one holding every `.exe`, which
+looks like a complete install with no executable anywhere in it. If
+`bin/win64/sbox-server.exe` is missing afterwards, this command says so.
+
 ---
 
 ## `cellar config`

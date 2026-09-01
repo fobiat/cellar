@@ -184,6 +184,20 @@ reason = "players spawn inside geometry without it"
 | `convar_prefix` | unset | The prefix this gamemode's convars share. Drives the log category filter. |
 | `command` | `[]` | Array of tables: `label`, `command`, optional `group`, optional `confirm`. Becomes the Precinct palette. |
 | `check` | `[]` | Array of tables: `name`, `file`, `contains`, `reason`. Becomes `cellar doctor` checks named `gamemode: <name>`. |
+| `map` | `[]` | Map package idents this gamemode has. Checked against `server.map`. |
+
+**A map is a package, and there is no `+map` switch.** It is the optional second
+positional argument to `+game`; `+game facepunch.sandbox facepunch.flatgrass` is
+the official example. Cellar could only check the shape of `server.map`, and a
+well-shaped ident for a map that does not exist is a server that starts, fails to
+resolve the package and never becomes ready, which is indistinguishable from a
+slow start. Declaring `map` turns that into a `doctor` failure listing the maps
+that do exist.
+
+An empty list means "this gamemode did not say", never "this gamemode has no
+maps", so it checks nothing. When the profile declares none, Cellar falls back to
+the project's own `Metadata.MapList`, so a local development instance gets the
+check without anybody writing a profile at all.
 
 `profile_file` is read relative to the config file's own directory, and a config
 may set it or `[profile]`, not both. Six shipped AppleJackRP configs point at

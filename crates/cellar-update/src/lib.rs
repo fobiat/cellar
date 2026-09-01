@@ -7,11 +7,13 @@
 
 pub mod changelog;
 pub mod pipeline;
+pub mod project;
 pub mod selfupdate;
 pub mod updater;
 pub mod version;
 
 pub use changelog::{Release, Section};
+pub use project::Project;
 pub use updater::{Decision, Policy, UpdateConfig};
 pub use version::{Probe, Versions};
 

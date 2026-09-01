@@ -56,6 +56,21 @@ enum Command {
     /// Check the config and the environment without starting anything.
     Doctor,
 
+    /// Download or update the s&box dedicated server itself.
+    ///
+    /// The dedicated server is app 1892930, it is free, and anonymous login
+    /// works, so this needs no Steam credential. The paid client and editor is
+    /// app 590830 and anonymous fails on it with "No subscription".
+    Install {
+        /// Where to install. Defaults to `update.steam_dir`.
+        #[arg(long)]
+        into: Option<std::path::PathBuf>,
+        /// Re-check every file against the manifest. Slower, and the thing to
+        /// reach for when a server will not start after an interrupted update.
+        #[arg(long)]
+        validate: bool,
+    },
+
     /// Show installed and available versions.
     Version {
         #[arg(long)]
@@ -294,6 +309,9 @@ async fn main() -> std::process::ExitCode {
         Command::Run { tui } => runner::run(&cli.config, tui).await,
         Command::Config => commands::show_config(&cli.config),
         Command::Doctor => commands::doctor(&cli.config).await,
+        Command::Install { into, validate } => {
+            commands::install(&cli.config, into.as_deref(), validate).await
+        }
         Command::Version { json } => commands::version(&cli.config, json).await,
         Command::Changelog { limit, json } => commands::changelog(&cli.config, limit, json),
         Command::Update { check, now, force } => {

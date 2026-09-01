@@ -38,7 +38,31 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     let mut supervisors = Vec::new();
     let mut entries: Vec<cellar_server::registry::Entry> = Vec::new();
 
-    for instance in config.instances() {
+    for mut instance in config.instances() {
+        // The real player ceiling, before a single player connects.
+        // `+maxplayers` is not a convar and not a launch switch; the old
+        // `entrypoint.sh` passed it for years and it was inert. Reading it here
+        // rather than in the supervisor keeps `cellar-runtime` free of a
+        // dependency on the update crate, and it is a config-resolution
+        // question rather than a process one.
+        match cellar_update::project::read(&instance.server.project) {
+            Ok(Some(project)) => {
+                if let Some(ceiling) = project.max_players {
+                    instance.player_ceiling = Some(ceiling);
+                }
+                if !project.packages.is_empty() {
+                    tracing::info!(
+                        "instance '{}' resolves {} package(s) from sbox.game at boot: {}",
+                        instance.id,
+                        project.packages.len(),
+                        project.packages.join(", ")
+                    );
+                }
+            }
+            Ok(None) => {}
+            Err(why) => tracing::warn!("instance '{}': {why}", instance.id),
+        }
+
         let mut entry = cellar_server::registry::Entry::from_instance(&instance);
         if !instance.enabled {
             tracing::info!(

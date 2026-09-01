@@ -8,6 +8,7 @@ Runs on **Linux under Wine** (the container and Kubernetes case) and **Windows
 natively**. Same `cellar.toml` either way.
 
 ```sh
+cellar install    # fetch the dedicated server itself; free, no Steam account
 cellar doctor     # check everything that would otherwise fail at startup
 cellar run        # supervise, in the foreground
 ```
