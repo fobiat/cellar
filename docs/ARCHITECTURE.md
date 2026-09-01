@@ -276,6 +276,48 @@ Four things established from source that change how this is built:
 
 ---
 
+## Where the engine writes: two instances cannot share an install tree
+
+Measured on 2026-09-01, against a real `sbox-server.exe` from app 1892930's
+Windows depot under Wine, because this decides whether concurrent instances can
+share one s&box install and every previous answer to it was inferred.
+
+**Both `logs/` and `data/` follow the executable's own directory.** Not the
+working directory, and not `FACEPUNCH_ENGINE`.
+
+| Run | `FACEPUNCH_ENGINE` | Working directory | `logs/` landed | `data/` landed |
+| --- | --- | --- | --- | --- |
+| 1 | process env, scratch dir | install dir | install dir | install dir |
+| 2 | Wine registry `HKCU\Environment`, scratch dir | install dir | install dir | install dir |
+| 3 | unset | scratch dir | next to the exe | next to the exe |
+
+So:
+
+- **`FACEPUNCH_ENGINE` relocates nothing here.** `Logging.cs` reads it with
+  `EnvironmentVariableTarget.User`, which on Windows is the registry rather than
+  the process environment, so passing it as a child environment variable could
+  never have worked. Setting it in the Wine registry did not work either. The
+  fallback, `AppContext.BaseDirectory`, is what is actually in effect.
+- **`server.working_dir` does not move the log or the data directory.** The
+  engine resolved its mounts against the install directory from a working
+  directory elsewhere. Whatever `working_dir` is for, it is not this.
+- **`server.log_file` remains Cellar's read path only.** Nothing Cellar passes
+  changes the engine's write path.
+
+**Consequence: one install tree per instance.** A shared tree gives two servers
+one `logs/sbox-server.log`, so both tailers parse both servers' lines and every
+player join is counted twice, and one `data/<org>/<package>`, so they share
+`hosting.json`, `features.json` and `permissions.json`. `Config::validate`
+refuses both collisions rather than letting them happen quietly. A few gigabytes
+per tree is the price, and there is no cheaper option, only an unmeasured belief
+that there was one.
+
+The `WINEPREFIX` finding is separate and still stands: every Wine process in one
+prefix shares a `wineserver` that jointly holds their sockets, and
+`wineserver -k` is prefix-scoped, so instances need a prefix each on Linux.
+
+---
+
 ## Stated assumptions
 
 1. **Bridge auth starts unverified** (`trusted`), justified by the process-tree

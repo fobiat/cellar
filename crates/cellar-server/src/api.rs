@@ -709,13 +709,18 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         path.as_ref()
             .and_then(|path| crate::config_manager::load(path).ok())
     });
-    let configured_game = active_config
+    // The primary instance's, matching what `server` below describes. The
+    // registry work replaces this with a lookup by the requested instance.
+    let active_server = active_config
         .as_ref()
-        .and_then(|config| config.server.game.clone())
+        .and_then(cellar_core::config::Config::primary_server);
+    let configured_game = active_server
+        .as_ref()
+        .and_then(|server| server.game.clone())
         .or_else(|| state.configured_game.clone());
-    let configured_map = active_config
+    let configured_map = active_server
         .as_ref()
-        .and_then(|config| config.server.map.clone())
+        .and_then(|server| server.map.clone())
         .or_else(|| state.configured_map.clone());
     let map_log = match (&state.log_file, configured_map.as_deref()) {
         (Some(path), Some(map)) => tokio::fs::read_to_string(path)
@@ -743,10 +748,10 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         .await
         .ok()
         .map(|(features, _)| feature_enabled(&features, "admin.inviteonly"));
-    let mode = active_config
+    let mode = active_server
         .as_ref()
-        .map(|config| {
-            if config.server.game.is_some() {
+        .map(|server| {
+            if server.is_published() {
                 "published"
             } else {
                 "development"
@@ -1019,7 +1024,11 @@ async fn activate_config(
         );
     }
     let current_log = state.log_file.as_deref();
-    if current_log != Some(cellar_runtime::log_file_for(&config.server).as_path()) {
+    let candidate_log = config
+        .primary_server()
+        .unwrap_or_default()
+        .engine_log_file();
+    if current_log != Some(candidate_log.as_path()) {
         return error(
             StatusCode::BAD_REQUEST,
             "profiles must use the active server log path",

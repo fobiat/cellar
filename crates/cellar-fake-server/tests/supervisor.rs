@@ -24,7 +24,8 @@ const FAKE_SERVER: &str = env!("CARGO_BIN_EXE_cellar-fake-server");
 
 fn config(log_file: PathBuf, extra: &[&str]) -> Config {
     Config {
-        server: ServerConfig {
+        instances: Default::default(),
+        server: Some(ServerConfig {
             executable: PathBuf::from(FAKE_SERVER),
             project: PathBuf::from("/tmp/applejackrp.sbproj"),
             game: None,
@@ -44,7 +45,7 @@ fn config(log_file: PathBuf, extra: &[&str]) -> Config {
                 args
             },
             data_dir: None,
-        },
+        }),
         supervisor: Default::default(),
         bridge: Default::default(),
         database: Default::default(),

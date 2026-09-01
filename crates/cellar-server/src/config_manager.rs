@@ -56,17 +56,18 @@ pub fn load(path: &Path) -> Result<Config, String> {
 
 fn profile(path: PathBuf, active: Option<&Path>) -> Option<Profile> {
     let config = Config::load(&path).ok()?;
+    let server = config.primary_server()?;
     Some(Profile {
         name: path.file_stem()?.to_string_lossy().into_owned(),
-        mode: if config.server.game.is_some() {
+        mode: if server.is_published() {
             "published"
         } else {
             "development"
         },
         path: path.to_string_lossy().into_owned(),
         active: active.is_some_and(|current| current == path.as_path()),
-        game: config.server.game,
-        project: config.server.project.to_string_lossy().into_owned(),
-        map: config.server.map,
+        game: server.game,
+        project: server.project.to_string_lossy().into_owned(),
+        map: server.map,
     })
 }

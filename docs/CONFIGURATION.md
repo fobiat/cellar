@@ -66,6 +66,58 @@ the bridge and quietly keeps writing to local files. `cellar doctor` says so.
 
 ---
 
+## `[instances.<id>]`
+
+The other spelling of `[server]`, for running more than one server in one Cellar
+process. A config uses one or the other, never both.
+
+```toml
+[instances.published]
+scope = "applejackrp-local"
+
+[instances.published.server]
+executable = "/srv/published/sbox-server.exe"
+game = "fobiat.applejackrp"
+data_dir = "/srv/published/data/fobiat/applejackrp"
+
+[instances.dev]
+enabled = false
+
+[instances.dev.server]
+executable = "/srv/dev/sbox-server.exe"
+project = "/srv/dev/applejackrp.sbproj"
+data_dir = "/srv/dev/data/fobiat/applejackrp#local"
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `scope` | the id | Whose data this is: the `scope` column in `aj_document` and the operations tables. |
+| `enabled` | `true` | Declared but not started. How a Windows-only development instance stays in a file that also deploys to Linux. |
+| `required` | `true` | Whether `/readyz` speaks for this instance. |
+| `server` | required | Exactly the `[server]` table, nested. |
+| `supervisor` | inherits `[supervisor]` | Per-instance override. |
+| `bridge` | inherits `[bridge]` | Per-instance override. |
+
+The id must match `[a-z0-9][a-z0-9-]{0,31}`. It ends up in a URL query value, a
+metrics label, a tracing span and a database column, and restricting it once at
+parse time is what makes it safe in all four.
+
+**The id and the scope are different things on purpose.** The id is the routing
+key, the scope is the storage key. A deployment gaining a second instance names
+its existing scope explicitly so its documents stay where they are.
+
+**A `[server]` config keeps the scope it has today.** It desugars to one
+instance with the id `default` and the scope taken from the global
+`bridge.scope`, not from the id, so nothing moves and no migration runs.
+
+**Each instance needs its own s&box install directory.** Both `logs/` and
+`data/` follow the executable's own directory, measured rather than assumed, and
+neither `server.working_dir` nor `FACEPUNCH_ENGINE` moves them. See
+[Architecture](ARCHITECTURE.md#where-the-engine-writes-two-instances-cannot-share-an-install-tree).
+`validate()` refuses two enabled instances that would collide.
+
+---
+
 ## `[supervisor]`
 
 | Key | Default | Meaning |

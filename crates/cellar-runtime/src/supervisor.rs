@@ -9,7 +9,7 @@
 use std::time::{Duration, Instant};
 
 use cellar_core::ansi::LineAssembler;
-use cellar_core::config::Config;
+use cellar_core::config::{Config, ServerConfig};
 use cellar_core::event::{Event, Origin, StatusBar};
 use cellar_core::grammar::{self, Line};
 use cellar_core::lifecycle::{Decision, RestartTracker, State};
@@ -176,6 +176,13 @@ impl Handle {
 /// Owns the child process and everything watching it.
 pub struct Supervisor {
     config: Config,
+    /// The primary instance's server settings, resolved once.
+    ///
+    /// A field rather than a lookup because `SwitchConfig` can replace the
+    /// config mid-run and every read must see the same answer as the spawn
+    /// that is currently running. The registry work replaces this with the
+    /// whole `Instance` and `new` starts taking one.
+    server: ServerConfig,
     tracker: Tracker,
     restarts: RestartTracker,
     sampler: Sampler,
@@ -192,7 +199,8 @@ impl Supervisor {
         let (events, _) = broadcast::channel(1024);
         let (control_tx, control_rx) = mpsc::channel(64);
 
-        let tracker = Tracker::new(config.server.hostname.clone(), 0);
+        let server = config.primary_server().unwrap_or_default();
+        let tracker = Tracker::new(server.hostname.clone(), 0);
 
         let handle = Handle {
             control: control_tx,
@@ -202,6 +210,7 @@ impl Supervisor {
         (
             Self {
                 config,
+                server,
                 tracker,
                 restarts: RestartTracker::new(),
                 sampler: Sampler::new(),
@@ -212,6 +221,28 @@ impl Supervisor {
             handle,
             control_rx,
         )
+    }
+
+    /// Adopt a new profile, rolling back if it cannot be prepared.
+    ///
+    /// One place, because the config and the resolved server settings have to
+    /// move together and three call sites each doing it by hand is three
+    /// chances for them to drift apart.
+    fn switch_to(&mut self, config: Config) -> Result<(), String> {
+        let previous_config = std::mem::replace(&mut self.config, config);
+        let previous_server = std::mem::replace(
+            &mut self.server,
+            self.config.primary_server().unwrap_or_default(),
+        );
+
+        match self.prepare_hosting() {
+            Ok(_) => Ok(()),
+            Err(why) => {
+                self.config = previous_config;
+                self.server = previous_server;
+                Err(why)
+            }
+        }
     }
 
     fn publish(&mut self, event: Event) {
@@ -228,7 +259,7 @@ impl Supervisor {
     pub fn prepare_hosting(&self) -> Result<String, String> {
         let document = hosting::document_for(&self.config.bridge);
 
-        let Some(path) = hosting::document_path(&self.config.server) else {
+        let Some(path) = hosting::document_path(&self.server) else {
             if self.config.bridge.enabled {
                 return Err(
                     "bridge.enabled but server.data_dir is unset, so hosting.json cannot be \
@@ -312,12 +343,8 @@ impl Supervisor {
                                     let _ = reply.send(Err("the server is not running".to_owned()));
                                 }
                                 Some(Control::SwitchConfig { config, reply }) => {
-                                    let previous = std::mem::replace(&mut self.config, *config);
-                                    let result = self.prepare_hosting();
-                                    if result.is_err() {
-                                        self.config = previous;
-                                    }
-                                    let _ = reply.send(result.map(|_| ()));
+                                    let result = self.switch_to(*config);
+                                    let _ = reply.send(result);
                                 }
                                 None => return,
                             }
@@ -355,12 +382,8 @@ impl Supervisor {
                     let _ = reply.send(Err("the server is not running".to_owned()));
                 }
                 Some(Control::SwitchConfig { config, reply }) => {
-                    let previous = std::mem::replace(&mut self.config, *config);
-                    let result = self.prepare_hosting();
-                    if result.is_err() {
-                        self.config = previous;
-                    }
-                    let _ = reply.send(result.map(|_| ()));
+                    let result = self.switch_to(*config);
+                    let _ = reply.send(result);
                 }
                 Some(Control::Shutdown { reply }) => {
                     let _ = reply.send(());
@@ -373,18 +396,18 @@ impl Supervisor {
 
     async fn run_once(&mut self, control: &mut mpsc::Receiver<Control>) -> RunOutcome {
         let needs_local_http = self.config.bridge.enabled;
-        let command = launch::command_for(&self.config.server, needs_local_http);
-        let redacted = command.redacted(self.config.server.gslt.as_ref());
+        let command = launch::command_for(&self.server, needs_local_http);
+        let redacted = command.redacted(self.server.gslt.as_ref());
 
         // Armed before the child starts, so the follow position is this run's
         // first byte. Arming after would race the engine's boot lines, and the
         // engine writes several before anything else happens.
-        let mut tailer = Tailer::new(launch::log_file_for(&self.config.server));
+        let mut tailer = Tailer::new(launch::log_file_for(&self.server));
         tailer.poll();
 
         let spawned = process::spawn(
             &command,
-            self.config.server.working_dir.as_ref(),
+            self.server.working_dir.as_ref(),
             &[],
             redacted.clone(),
         );
@@ -421,7 +444,7 @@ impl Supervisor {
         });
 
         let mut assembler = LineAssembler::new();
-        let ready_pattern = self.config.server.ready_pattern.clone();
+        let ready_pattern = self.server.ready_pattern.clone();
 
         // Only one channel produces events, or every line is counted twice.
         //
@@ -579,10 +602,7 @@ impl Supervisor {
                             }
                         }
                         Some(Control::SwitchConfig { config, reply }) => {
-                            let previous = std::mem::replace(&mut self.config, *config);
-                            let prepare = self.prepare_hosting();
-                            if let Err(why) = prepare {
-                                self.config = previous;
+                            if let Err(why) = self.switch_to(*config) {
                                 let _ = reply.send(Err(why));
                             } else {
                                 restart_requested = true;
@@ -868,7 +888,7 @@ impl Supervisor {
         if let Event::ServerReady { hostname, .. } = &event {
             tracing::info!(
                 "the server is ready and accepting players as '{}'",
-                hostname.as_deref().unwrap_or(&self.config.server.hostname),
+                hostname.as_deref().unwrap_or(&self.server.hostname),
             );
         }
         self.publish(event);
@@ -910,7 +930,8 @@ mod tests {
 
     fn config(data_dir: Option<PathBuf>) -> Config {
         Config {
-            server: ServerConfig {
+            instances: Default::default(),
+            server: Some(ServerConfig {
                 executable: PathBuf::from("/bin/true"),
                 project: PathBuf::from("/tmp/a.sbproj"),
                 game: None,
@@ -926,7 +947,7 @@ mod tests {
                 ready_pattern: "Lobby created".into(),
                 extra_args: Vec::new(),
                 data_dir,
-            },
+            }),
             supervisor: Default::default(),
             bridge: Default::default(),
             database: Default::default(),

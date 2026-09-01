@@ -65,7 +65,13 @@ pub fn show_config(path: &Path) -> Result<()> {
 
     println!("# secrets come from the environment and print as ***:");
     for (variable, present) in [
-        ("CELLAR_GSLT", config.server.gslt.is_some()),
+        (
+            "CELLAR_GSLT",
+            config
+                .instances()
+                .iter()
+                .any(|instance| instance.server.gslt.is_some()),
+        ),
         ("CELLAR_DATABASE_URL", config.database.url.is_some()),
         (
             "CELLAR_BRIDGE_SECRET",
@@ -103,99 +109,24 @@ pub async fn doctor(path: &Path) -> Result<()> {
         }
     };
 
-    let executable = &config.server.executable;
-    check(
-        executable.exists(),
-        "server.executable",
-        format!("{}", executable.display()),
-    );
-
-    if let Some(game) = config
-        .server
-        .game
-        .as_deref()
-        .filter(|game| !game.trim().is_empty())
-    {
-        check(true, "server.game", game.to_owned());
-    } else {
-        let project = &config.server.project;
-        check(
-            project.exists(),
-            "server.project",
-            format!("{}", project.display()),
-        );
-
-        // StartGame enumerates this and throws DirectoryNotFoundException when it
-        // is absent, so the server exits to a bare console with no gamemode
-        // loaded and on_failure retries it into the same wall. Git does not keep
-        // empty directories, which is how a checkout loses it.
-        if let Some(libraries) = project.parent().map(|dir| dir.join("Libraries")) {
-            let present = libraries.is_dir();
-            check(
-                present,
-                "project Libraries",
-                if present {
-                    format!("{}", libraries.display())
-                } else {
-                    format!(
-                        "{} is missing, so the server will start and exit without loading the \
-                         gamemode",
-                        libraries.display()
-                    )
-                },
-            );
+    // Per instance, not per config. One label prefix per instance so a config
+    // with several says which one it is complaining about, and none so a
+    // single-server config reads exactly as it did.
+    let instances = config.instances();
+    let one = instances.len() == 1;
+    for instance in &instances {
+        let name = |field: &str| {
+            if one {
+                field.to_owned()
+            } else {
+                format!("{}: {field}", instance.id)
+            }
+        };
+        if !instance.enabled {
+            println!("  note  {}: declared but not enabled", instance.id);
+            continue;
         }
-    }
-
-    if let Some(map) = config.server.map.as_deref() {
-        check(
-            map.split('.').count() == 2
-                && map
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.'),
-            "server.map",
-            map.to_owned(),
-        );
-    }
-
-    let spawn_source = config
-        .server
-        .project
-        .parent()
-        .map(|path| path.join("Code/Characters/CharacterDirector.cs"));
-    if let Some(path) = spawn_source {
-        let grounded = std::fs::read_to_string(&path)
-            .map(|text| text.contains("GroundedOrAuthored") && text.contains("Scene.Trace"))
-            .unwrap_or(false);
-        check(grounded, "spawn validation", format!("{}", path.display()));
-    }
-
-    if let Some(dir) = &config.server.data_dir {
-        match config.server.data_dir_mode_mismatch() {
-            Some(why) => check(false, "server.data_dir mode", why),
-            None => check(true, "server.data_dir mode", format!("{}", dir.display())),
-        }
-    }
-
-    if config.server.launcher == cellar_core::Launcher::Wine {
-        let wine = which("wine");
-        check(
-            wine.is_some(),
-            "wine",
-            wine.unwrap_or_else(|| "not on PATH; the Windows-only server cannot start".to_owned()),
-        );
-    }
-
-    if config.bridge.enabled {
-        check(
-            config.server.data_dir.is_some(),
-            "server.data_dir",
-            match &config.server.data_dir {
-                Some(dir) => format!("{}", dir.display()),
-                None => "unset, so hosting.json cannot be written and the bridge will be unused"
-                    .to_owned(),
-            },
-        );
+        check_one_server(&instance.server, instance.bridge.enabled, &name, &mut check);
     }
 
     if config.database.enabled {
@@ -247,10 +178,20 @@ pub async fn doctor(path: &Path) -> Result<()> {
         }
     }
 
-    for (label, port) in [
-        ("server.port", config.server.port),
-        ("server.query_port", config.server.query_port),
-    ] {
+    let mut ports: Vec<(String, u16)> = Vec::new();
+    for instance in instances.iter().filter(|instance| instance.enabled) {
+        let name = |field: &str| {
+            if one {
+                field.to_owned()
+            } else {
+                format!("{}: {field}", instance.id)
+            }
+        };
+        ports.push((name("server.port"), instance.server.port));
+        ports.push((name("server.query_port"), instance.server.query_port));
+    }
+    for (label, port) in ports {
+        let label = label.as_str();
         if let Err(why) = std::net::UdpSocket::bind(("0.0.0.0", port)) {
             // A note, not a failure. The overwhelmingly common cause is the
             // server this profile describes already running, and doctor cannot
@@ -264,15 +205,31 @@ pub async fn doctor(path: &Path) -> Result<()> {
         }
     }
 
-    for (label, path) in [
-        ("disk, install", Some(config.server.executable.as_path())),
-        ("disk, data", config.server.data_dir.as_deref()),
-        ("disk, backups", config.backup.directory.as_deref()),
-    ] {
-        let Some(path) = path else { continue };
-        let Some((free, mount)) = cellar_runtime::metrics::disk_free(path) else {
+    // Deduped by mount point, since instances sharing an install tree would
+    // otherwise report the same filesystem several times.
+    let mut disks: Vec<(String, std::path::PathBuf)> = Vec::new();
+    for instance in instances.iter().filter(|instance| instance.enabled) {
+        disks.push((
+            format!("disk, {} install", instance.id),
+            instance.server.executable.clone(),
+        ));
+        if let Some(dir) = &instance.server.data_dir {
+            disks.push((format!("disk, {} data", instance.id), dir.clone()));
+        }
+    }
+    if let Some(dir) = &config.backup.directory {
+        disks.push(("disk, backups".to_owned(), dir.clone()));
+    }
+    let mut seen_mounts: Vec<std::path::PathBuf> = Vec::new();
+    for (label, path) in disks {
+        let label = label.as_str();
+        let Some((free, mount)) = cellar_runtime::metrics::disk_free(&path) else {
             continue;
         };
+        if seen_mounts.contains(&mount) {
+            continue;
+        }
+        seen_mounts.push(mount.clone());
         // The dedicated server install alone is 4.9GB and a game update writes
         // before it deletes, so a couple of gigabytes is the point at which the
         // next update fails halfway rather than refusing.
@@ -295,22 +252,140 @@ pub async fn doctor(path: &Path) -> Result<()> {
 
     steam_app_check(&config, &mut check);
 
-    let log = cellar_runtime::log_file_for(&config.server);
-    println!(
-        "  note  log file: {} ({})",
-        log.display(),
-        if log.exists() {
-            "present"
+    for instance in instances.iter().filter(|instance| instance.enabled) {
+        let log = instance.server.engine_log_file();
+        let label = if one {
+            "log file".to_owned()
         } else {
-            "not yet written"
-        }
-    );
+            format!("{}: log file", instance.id)
+        };
+        println!(
+            "  note  {label}: {} ({})",
+            log.display(),
+            if log.exists() {
+                "present"
+            } else {
+                "not yet written"
+            }
+        );
+    }
 
     if problems == 0 {
         println!("\nNothing to fix.");
         Ok(())
     } else {
         anyhow::bail!("{problems} problem(s) above")
+    }
+}
+
+/// The checks that are about one supervised server rather than about the host.
+///
+/// Split out so a config with several instances runs them once per instance.
+fn check_one_server(
+    server: &cellar_core::config::ServerConfig,
+    bridge_enabled: bool,
+    name: &impl Fn(&str) -> String,
+    check: &mut impl FnMut(bool, &str, String),
+) {
+    let executable = &server.executable;
+    check(
+        executable.exists(),
+        &name("server.executable"),
+        format!("{}", executable.display()),
+    );
+
+    if let Some(game) = server
+        .game
+        .as_deref()
+        .filter(|game| !game.trim().is_empty())
+    {
+        check(true, &name("server.game"), game.to_owned());
+    } else {
+        let project = &server.project;
+        check(
+            project.exists(),
+            &name("server.project"),
+            format!("{}", project.display()),
+        );
+
+        // StartGame enumerates this and throws DirectoryNotFoundException when it
+        // is absent, so the server exits to a bare console with no gamemode
+        // loaded and on_failure retries it into the same wall. Git does not keep
+        // empty directories, which is how a checkout loses it.
+        if let Some(libraries) = project.parent().map(|dir| dir.join("Libraries")) {
+            let present = libraries.is_dir();
+            check(
+                present,
+                &name("project Libraries"),
+                if present {
+                    format!("{}", libraries.display())
+                } else {
+                    format!(
+                        "{} is missing, so the server will start and exit without loading the \
+                         gamemode",
+                        libraries.display()
+                    )
+                },
+            );
+        }
+    }
+
+    if let Some(map) = server.map.as_deref() {
+        check(
+            map.split('.').count() == 2
+                && map
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.'),
+            &name("server.map"),
+            map.to_owned(),
+        );
+    }
+
+    let spawn_source = server
+        .project
+        .parent()
+        .map(|path| path.join("Code/Characters/CharacterDirector.cs"));
+    if let Some(path) = spawn_source {
+        let grounded = std::fs::read_to_string(&path)
+            .map(|text| text.contains("GroundedOrAuthored") && text.contains("Scene.Trace"))
+            .unwrap_or(false);
+        check(
+            grounded,
+            &name("spawn validation"),
+            format!("{}", path.display()),
+        );
+    }
+
+    if let Some(dir) = &server.data_dir {
+        match server.data_dir_mode_mismatch() {
+            Some(why) => check(false, &name("server.data_dir mode"), why),
+            None => check(
+                true,
+                &name("server.data_dir mode"),
+                format!("{}", dir.display()),
+            ),
+        }
+    }
+
+    if server.launcher == cellar_core::Launcher::Wine {
+        let wine = which("wine");
+        check(
+            wine.is_some(),
+            &name("wine"),
+            wine.unwrap_or_else(|| "not on PATH; the Windows-only server cannot start".to_owned()),
+        );
+    }
+
+    if bridge_enabled {
+        check(
+            server.data_dir.is_some(),
+            &name("server.data_dir"),
+            match &server.data_dir {
+                Some(dir) => format!("{}", dir.display()),
+                None => "unset, so hosting.json cannot be written and the bridge will be unused"
+                    .to_owned(),
+            },
+        );
     }
 }
 
@@ -355,7 +430,11 @@ fn steam_app_check(config: &Config, check: &mut impl FnMut(bool, &str, String)) 
     if let Some(dir) = &config.update.steam_dir {
         roots.push(dir.clone());
     }
-    if let Some(parent) = config.server.executable.parent() {
+    if let Some(parent) = config
+        .primary_server()
+        .as_ref()
+        .and_then(|server| server.executable.parent())
+    {
         roots.push(parent.to_path_buf());
     }
 
@@ -858,7 +937,9 @@ pub async fn settings(path: &Path, action: crate::SettingsAction) -> Result<()> 
             find,
         } => {
             let mut snapshot = client.capture(&find).await?;
-            snapshot.hostname = Some(config.server.hostname.clone());
+            snapshot.hostname = config
+                .primary_server()
+                .map(|server| server.hostname.clone());
             snapshot.captured_at = Some(chrono::Utc::now().to_rfc3339());
 
             if overrides {
@@ -1350,10 +1431,9 @@ fn probe_for(config: &Config) -> cellar_update::Probe {
 
 fn project_dir(config: &Config) -> std::path::PathBuf {
     config
-        .server
-        .project
-        .parent()
-        .map(Path::to_path_buf)
+        .primary_server()
+        .as_ref()
+        .and_then(|server| server.project.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 

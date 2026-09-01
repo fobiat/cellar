@@ -5,6 +5,7 @@
 //! they come from the environment and are held in [`Secret`], which cannot print
 //! itself.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,21 @@ use crate::secret::Secret;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    pub server: ServerConfig,
+    /// The single-server spelling, desugared into one instance.
+    ///
+    /// Kept deserializable indefinitely: seven shipped profiles,
+    /// `deploy/cellar.toml` and the Kubernetes ConfigMap all use it, and a
+    /// config that stops parsing is a server that stops starting. Read it
+    /// through [`Config::instances`] rather than directly, or the
+    /// `[instances]` spelling is invisible to whatever is reading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<ServerConfig>,
+
+    /// A map keyed by id, not a list: the key is the name, so it cannot be
+    /// forgotten or duplicated. `BTreeMap` so every listing is stably ordered.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub instances: BTreeMap<InstanceId, InstanceConfig>,
+
     #[serde(default)]
     pub supervisor: SupervisorConfig,
     #[serde(default)]
@@ -36,6 +51,112 @@ pub struct Config {
     pub backup: BackupConfig,
     #[serde(default)]
     pub release: ReleaseConfig,
+}
+
+/// The id a legacy `[server]` table desugars to.
+pub const DEFAULT_INSTANCE_ID: &str = "default";
+
+/// A stable name for one supervised server.
+///
+/// Restricted to `[a-z0-9][a-z0-9-]{0,31}`. The same string ends up in a URL
+/// query value, a Prometheus label, a tracing span and a `VARCHAR(64)` column,
+/// and restricting the charset once at parse time is what makes it safe in all
+/// four, the same argument `is_valid_identifier` makes for the SQL bootstrap.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct InstanceId(String);
+
+impl InstanceId {
+    pub fn new(value: &str) -> Result<Self, String> {
+        let mut bytes = value.bytes();
+        let first_is_alphanumeric = bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
+        let rest_is_safe =
+            bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+
+        if !first_is_alphanumeric || !rest_is_safe || value.len() > 32 {
+            return Err(format!(
+                "instance id '{value}' must match [a-z0-9][a-z0-9-]{{0,31}}: it is used as a URL \
+                 query value, a metrics label and a database column"
+            ));
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for InstanceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for InstanceId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(d)?;
+        Self::new(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
+/// One entry under `[instances.<id>]`.
+///
+/// The server settings are nested under `[instances.<id>.server]` rather than
+/// flattened. Flattening would read more like `[server]` and cost
+/// `deny_unknown_fields`, which serde cannot apply through a flatten, and a
+/// silently ignored `hostnam` in the most important table in the file is a
+/// worse trade than three extra characters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstanceConfig {
+    /// Whose data this is. Defaults to the instance id.
+    ///
+    /// Separate from the id because the id is the routing key and the scope is
+    /// the storage key. Collapsing them would move an existing deployment's
+    /// documents the moment it named its instance.
+    #[serde(default)]
+    pub scope: Option<String>,
+
+    /// Declared but not started. How a Windows-only development instance stays
+    /// in one config file that also deploys to Linux.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+
+    /// Whether `/readyz` speaks for this instance.
+    ///
+    /// The highest-consequence flag here: a development instance that cannot
+    /// start on a host with no editor must not fail readiness for a healthy
+    /// production server.
+    #[serde(default = "yes")]
+    pub required: bool,
+
+    pub server: ServerConfig,
+
+    /// Overrides the process-wide `[supervisor]` for this instance only.
+    #[serde(default)]
+    pub supervisor: Option<SupervisorConfig>,
+    #[serde(default)]
+    pub bridge: Option<BridgeConfig>,
+}
+
+const fn yes() -> bool {
+    true
+}
+
+/// One instance with every default resolved, which is what the supervisor
+/// registry is built from. Produced by [`Config::instances`]; never parsed.
+#[derive(Debug, Clone)]
+pub struct Instance {
+    pub id: InstanceId,
+    pub scope: String,
+    pub enabled: bool,
+    pub required: bool,
+    pub server: ServerConfig,
+    pub supervisor: SupervisorConfig,
+    pub bridge: BridgeConfig,
 }
 
 /// What Cellar is allowed to do about a new version.
@@ -132,13 +253,20 @@ pub struct ServerConfig {
     #[serde(default)]
     pub launcher: Launcher,
 
-    /// Working directory for the child. The engine writes `logs/` relative to
-    /// its own base directory, so this decides where the log file lands.
+    /// Working directory for the child.
+    ///
+    /// It does **not** decide where the engine writes. Measured 2026-09-01:
+    /// `logs/` and `data/` both follow the executable's own directory, and a
+    /// working directory elsewhere moved neither. See `docs/ARCHITECTURE.md`.
     #[serde(default)]
     pub working_dir: Option<PathBuf>,
 
-    /// Where `logs/sbox-server.log` actually is, when it is not under
-    /// `working_dir`. The engine honours `FACEPUNCH_ENGINE` for this.
+    /// Where Cellar reads `sbox-server.log` from, when it is somewhere other
+    /// than beside the executable.
+    ///
+    /// A read path, not a write path. Nothing Cellar passes moves the engine's
+    /// write path, `FACEPUNCH_ENGINE` included, so pointing this at a file the
+    /// engine does not write means readiness silently never fires.
     #[serde(default)]
     pub log_file: Option<PathBuf>,
 
@@ -171,6 +299,33 @@ pub struct ServerConfig {
     /// The engine's data directory, where `hosting.json` is written.
     #[serde(default)]
     pub data_dir: Option<PathBuf>,
+}
+
+/// The same values an empty `[server]` table would deserialize to.
+///
+/// Written out rather than derived, because several fields carry a serde
+/// `default = "..."` and a derived `Default` would disagree with the file
+/// format about `hostname`, `port` and `ready_pattern`.
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            executable: PathBuf::new(),
+            project: PathBuf::new(),
+            game: None,
+            map: None,
+            launcher: Launcher::default(),
+            working_dir: None,
+            log_file: None,
+            hostname: default_hostname(),
+            gslt: None,
+            direct_connect: false,
+            port: default_port(),
+            query_port: default_query_port(),
+            ready_pattern: default_ready_pattern(),
+            extra_args: Vec::new(),
+            data_dir: None,
+        }
+    }
 }
 
 /// The engine's suffix for a package loaded from a local `.sbproj`.
@@ -207,11 +362,12 @@ impl ServerConfig {
 
     /// Where the engine writes its log file.
     ///
-    /// `Logging.cs` builds `{base}/logs/{processName}.log`, where the process
-    /// name for `sbox-server.exe` is `sbox-server` and `{base}` is the
-    /// `FACEPUNCH_ENGINE` environment variable when set, otherwise the
-    /// executable's own directory. `server.log_file` overrides Cellar's read
-    /// path and does not move the engine's write path.
+    /// `Logging.cs` builds `{base}/logs/{processName}.log`, and `{base}` is
+    /// `AppContext.BaseDirectory`: the executable's own directory. It reads
+    /// `FACEPUNCH_ENGINE` first, but with `EnvironmentVariableTarget.User`,
+    /// which is the Windows registry rather than the process environment, and
+    /// setting it in either was measured to move nothing. `server.log_file`
+    /// overrides Cellar's read path and does not move the engine's write path.
     pub fn engine_log_file(&self) -> PathBuf {
         if let Some(explicit) = &self.log_file {
             return explicit.clone();
@@ -675,9 +831,80 @@ impl Config {
     }
 
     /// Which server's data this is, for the bridge's `scope` column and the
-    /// operations tables. One value today; see `20_PERSISTENCE.md` Q1.
+    /// operations tables. The primary instance's scope.
     pub fn scope(&self) -> String {
-        self.bridge.scope.clone()
+        self.primary()
+            .map(|instance| instance.scope)
+            .unwrap_or_else(|| self.bridge.scope.clone())
+    }
+
+    /// Every declared instance, with the process-wide defaults resolved.
+    ///
+    /// The load-bearing property is in the legacy arm: a `[server]` config
+    /// takes its scope from the existing global `bridge.scope`, **not** from
+    /// its id. Every shipped profile therefore keeps writing to exactly the
+    /// scope it writes to today, so gaining this feature moves no rows and runs
+    /// no migration.
+    pub fn instances(&self) -> Vec<Instance> {
+        if !self.instances.is_empty() {
+            return self
+                .instances
+                .iter()
+                .map(|(id, declared)| Instance {
+                    id: id.clone(),
+                    scope: declared
+                        .scope
+                        .clone()
+                        .unwrap_or_else(|| id.as_str().to_owned()),
+                    enabled: declared.enabled,
+                    required: declared.required,
+                    server: declared.server.clone(),
+                    supervisor: declared
+                        .supervisor
+                        .clone()
+                        .unwrap_or_else(|| self.supervisor.clone()),
+                    bridge: declared
+                        .bridge
+                        .clone()
+                        .unwrap_or_else(|| self.bridge.clone()),
+                })
+                .collect();
+        }
+
+        let Some(server) = &self.server else {
+            return Vec::new();
+        };
+
+        vec![Instance {
+            // Unwrap-free: the literal is checked by a test below.
+            id: InstanceId::new(DEFAULT_INSTANCE_ID)
+                .unwrap_or_else(|_| InstanceId("default".to_owned())),
+            scope: self.bridge.scope.clone(),
+            enabled: true,
+            required: true,
+            server: server.clone(),
+            supervisor: self.supervisor.clone(),
+            bridge: self.bridge.clone(),
+        }]
+    }
+
+    /// The instance an unqualified request means.
+    ///
+    /// The first enabled one in id order, so a config that disables its
+    /// development instance on Linux still has a primary.
+    pub fn primary(&self) -> Option<Instance> {
+        let instances = self.instances();
+        instances
+            .iter()
+            .find(|instance| instance.enabled)
+            .or_else(|| instances.first())
+            .cloned()
+    }
+
+    /// The primary's server settings, for a caller that has not been taught
+    /// about instances yet.
+    pub fn primary_server(&self) -> Option<ServerConfig> {
+        self.primary().map(|instance| instance.server)
     }
 
     /// Pull every secret out of the environment.
@@ -686,7 +913,18 @@ impl Config {
     /// environment variable, so "where does this credential come from" has one
     /// answer.
     pub fn overlay_env(&mut self) {
-        self.server.gslt = Secret::from_env("CELLAR_GSLT").or(self.server.gslt.take());
+        // Every instance shares one GSLT today. Steam issues a token per app
+        // account rather than per server process, and the engine takes it as a
+        // launch argument, so a per-instance override would be a setting with
+        // nothing behind it.
+        if let Some(gslt) = Secret::from_env("CELLAR_GSLT") {
+            if let Some(server) = self.server.as_mut() {
+                server.gslt = Some(gslt.clone());
+            }
+            for declared in self.instances.values_mut() {
+                declared.server.gslt = Some(gslt.clone());
+            }
+        }
         self.database.url = Secret::from_env("CELLAR_DATABASE_URL").or(self.database.url.take());
         self.bridge.shared_secret =
             Secret::from_env("CELLAR_BRIDGE_SECRET").or(self.bridge.shared_secret.take());
@@ -725,34 +963,24 @@ impl Config {
     /// Refuse a configuration that would fail later, in a way that is harder to
     /// diagnose than a message at startup.
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.server.executable.as_os_str().is_empty() {
-            return Err(ConfigError::Invalid("server.executable is required".into()));
-        }
-
-        if self.server.project.as_os_str().is_empty()
-            && self.server.game.as_deref().is_none_or(str::is_empty)
-        {
+        if self.server.is_some() && !self.instances.is_empty() {
             return Err(ConfigError::Invalid(
-                "server.project or server.game is required".into(),
+                "a config may use [server] or [instances], not both. Move the [server] table \
+                 under [instances.<name>.server] and give it a scope, or the two would disagree \
+                 about which server is the one being described."
+                    .into(),
             ));
         }
 
-        if let Some(map) = self
-            .server
-            .map
-            .as_deref()
-            .filter(|map| !map.trim().is_empty())
-        {
-            if self.server.game.as_deref().is_none_or(str::is_empty) {
-                return Err(ConfigError::Invalid(
-                    "server.map is only valid with a published server.game ident".into(),
-                ));
-            }
-            if !qualified_ident(map) {
-                return Err(ConfigError::Invalid(format!(
-                    "server.map '{map}' must use org.package form"
-                )));
-            }
+        let instances = self.instances();
+        if instances.is_empty() {
+            return Err(ConfigError::Invalid(
+                "no server is configured: add a [server] table or an [instances.<name>] one".into(),
+            ));
+        }
+
+        for instance in &instances {
+            validate_server(&instance.id, &instance.server)?;
         }
 
         if self.backup.enabled {
@@ -925,23 +1153,29 @@ impl Config {
 
     /// What each running instance must hold to itself.
     ///
-    /// One element today, because a config has one `[server]` table. The
-    /// concurrent-instance work returns one per enabled instance, and the
-    /// refusals below start being reachable at that point rather than being
-    /// written then.
+    /// Disabled instances are excluded: one that is declared but not started
+    /// holds nothing, and that is exactly how a Windows-only development
+    /// instance stays in a config file that also deploys to Linux.
     fn exclusive_resources(&self) -> Vec<Exclusive> {
-        vec![Exclusive {
-            id: "server".to_owned(),
-            log_file: self.server.engine_log_file(),
-            data_dir: self.server.game_data_dir(),
-            scope: self.scope(),
-            bridge_bind: self
-                .bridge
-                .enabled
-                .then(|| self.bridge.bind.clone())
-                .filter(|bind| !bind.trim().is_empty()),
-            direct_port: self.server.direct_connect.then_some(self.server.port),
-        }]
+        self.instances()
+            .into_iter()
+            .filter(|instance| instance.enabled)
+            .map(|instance| Exclusive {
+                log_file: instance.server.engine_log_file(),
+                data_dir: instance.server.game_data_dir(),
+                bridge_bind: instance
+                    .bridge
+                    .enabled
+                    .then_some(instance.bridge.bind)
+                    .filter(|bind| !bind.trim().is_empty()),
+                direct_port: instance
+                    .server
+                    .direct_connect
+                    .then_some(instance.server.port),
+                scope: instance.scope,
+                id: instance.id.as_str().to_owned(),
+            })
+            .collect()
     }
 }
 
@@ -1038,6 +1272,41 @@ fn refuse_shared_resources(instances: &[Exclusive]) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// The refusals that are about one server rather than about the process.
+///
+/// Every message names the table it is talking about, because with several
+/// instances "server.executable is required" would not say whose.
+fn validate_server(id: &InstanceId, server: &ServerConfig) -> Result<(), ConfigError> {
+    let where_ = |field: &str| format!("instance '{id}': {field}");
+
+    if server.executable.as_os_str().is_empty() {
+        return Err(ConfigError::Invalid(where_(
+            "server.executable is required",
+        )));
+    }
+
+    if server.project.as_os_str().is_empty() && server.game.as_deref().is_none_or(str::is_empty) {
+        return Err(ConfigError::Invalid(where_(
+            "server.project or server.game is required",
+        )));
+    }
+
+    if let Some(map) = server.map.as_deref().filter(|map| !map.trim().is_empty()) {
+        if server.game.as_deref().is_none_or(str::is_empty) {
+            return Err(ConfigError::Invalid(where_(
+                "server.map is only valid with a published server.game ident",
+            )));
+        }
+        if !qualified_ident(map) {
+            return Err(ConfigError::Invalid(where_(&format!(
+                "server.map '{map}' must use org.package form"
+            ))));
+        }
+    }
+
+    Ok(())
+}
+
 /// Whether a name is safe to interpolate into a bootstrap SQL statement.
 ///
 /// `mariadb.database`/`mariadb.username` can't be bind parameters: MariaDB
@@ -1095,7 +1364,8 @@ mod tests {
 
     fn minimal() -> Config {
         Config {
-            server: ServerConfig {
+            instances: BTreeMap::new(),
+            server: Some(ServerConfig {
                 executable: PathBuf::from("/home/container/sbox/sbox-server.exe"),
                 project: PathBuf::from("/home/container/projects/applejackrp/applejackrp.sbproj"),
                 game: None,
@@ -1111,7 +1381,7 @@ mod tests {
                 ready_pattern: default_ready_pattern(),
                 extra_args: Vec::new(),
                 data_dir: None,
-            },
+            }),
             supervisor: SupervisorConfig::default(),
             bridge: BridgeConfig::default(),
             database: DatabaseConfig::default(),
@@ -1140,13 +1410,17 @@ mod tests {
         minimal().validate().unwrap();
     }
 
+    fn minimal_server() -> ServerConfig {
+        minimal().server.unwrap_or_default()
+    }
+
     fn with_data_dir(game: Option<&str>, leaf: &str) -> ServerConfig {
         ServerConfig {
             game: game.map(str::to_owned),
             data_dir: Some(PathBuf::from(format!(
                 "/home/container/sbox/data/fobiat/{leaf}"
             ))),
-            ..minimal().server
+            ..minimal().server.unwrap_or_default()
         }
     }
 
@@ -1171,7 +1445,7 @@ mod tests {
         let server = ServerConfig {
             game: Some("fobiat.applejackrp".to_owned()),
             data_dir: None,
-            ..minimal().server
+            ..minimal().server.unwrap_or_default()
         };
         let derived = server.game_data_dir().expect("a published profile derives");
 
@@ -1183,7 +1457,7 @@ mod tests {
         let server = ServerConfig {
             game: None,
             data_dir: None,
-            ..minimal().server
+            ..minimal().server.unwrap_or_default()
         };
 
         assert_eq!(server.game_data_dir(), None);
@@ -1223,7 +1497,7 @@ mod tests {
 
     #[test]
     fn an_unset_data_dir_has_no_mode_to_disagree_with() {
-        assert!(minimal().server.data_dir_mode_mismatch().is_none());
+        assert!(minimal_server().data_dir_mode_mismatch().is_none());
     }
 
     /// Every AppleJackRP profile shipped with the `#local` leaf, published ones
@@ -1235,9 +1509,17 @@ mod tests {
     fn the_shipped_profiles_agree_with_their_own_mode() {
         for (name, config) in shipped_profiles() {
             assert!(
-                config.server.data_dir_mode_mismatch().is_none(),
+                config
+                    .primary_server()
+                    .unwrap_or_default()
+                    .data_dir_mode_mismatch()
+                    .is_none(),
                 "{name}: {}",
-                config.server.data_dir_mode_mismatch().unwrap()
+                config
+                    .primary_server()
+                    .unwrap_or_default()
+                    .data_dir_mode_mismatch()
+                    .unwrap()
             );
         }
     }
@@ -1316,12 +1598,256 @@ mod tests {
     #[test]
     fn every_shipped_profile_still_resolves_to_exactly_one_instance() {
         for (name, config) in shipped_profiles() {
+            let instances = config.instances();
             assert_eq!(
-                config.exclusive_resources().len(),
+                instances.len(),
                 1,
                 "{name} resolved to more than one instance"
             );
+
+            // The load-bearing property of the desugaring. A legacy config takes
+            // its scope from the global bridge.scope, never from its id, so
+            // gaining the instance model moves no rows and runs no migration.
+            // If this ever fails, a deployment's documents are about to move.
+            assert_eq!(
+                instances[0].scope, config.bridge.scope,
+                "{name}'s scope moved"
+            );
+            assert_eq!(instances[0].id.as_str(), DEFAULT_INSTANCE_ID, "{name}");
         }
+    }
+
+    /// The two spellings, side by side, at the level the file format works at.
+    fn parse(text: &str) -> Result<Config, String> {
+        toml::from_str::<Config>(text).map_err(|why| why.to_string())
+    }
+
+    const TWO_INSTANCES: &str = r#"
+        [instances.dev.server]
+        executable = "/srv/dev/sbox-server.exe"
+        project = "/srv/dev/applejackrp.sbproj"
+        data_dir = "/srv/dev/data/fobiat/applejackrp#local"
+
+        [instances.published.server]
+        executable = "/srv/published/sbox-server.exe"
+        game = "fobiat.applejackrp"
+        data_dir = "/srv/published/data/fobiat/applejackrp"
+    "#;
+
+    #[test]
+    fn an_instances_config_defaults_each_scope_to_its_own_id() {
+        let config = parse(TWO_INSTANCES).unwrap();
+        config.validate().unwrap();
+
+        let instances = config.instances();
+        assert_eq!(instances.len(), 2);
+        // BTreeMap, so the order is the id order rather than the file order.
+        assert_eq!(instances[0].id.as_str(), "dev");
+        assert_eq!(instances[0].scope, "dev");
+        assert_eq!(instances[1].id.as_str(), "published");
+        assert_eq!(instances[1].scope, "published");
+        assert!(
+            instances
+                .iter()
+                .all(|instance| instance.enabled && instance.required)
+        );
+    }
+
+    #[test]
+    fn an_instance_may_name_a_scope_that_is_not_its_id() {
+        // The id is the routing key and the scope is the storage key. An
+        // existing deployment names its old scope here so its documents stay
+        // where they are while it gains a second instance.
+        let config = parse(
+            r#"
+            [instances.published]
+            scope = "applejackrp-local"
+            [instances.published.server]
+            executable = "/srv/sbox-server.exe"
+            game = "fobiat.applejackrp"
+        "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.instances()[0].scope, "applejackrp-local");
+    }
+
+    #[test]
+    fn a_config_may_not_use_both_spellings() {
+        let config = parse(
+            r#"
+            [server]
+            executable = "/srv/sbox-server.exe"
+            project = "/srv/a.sbproj"
+
+            [instances.dev.server]
+            executable = "/srv/dev/sbox-server.exe"
+            project = "/srv/dev/a.sbproj"
+        "#,
+        )
+        .unwrap();
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("[server] or [instances]"), "{error}");
+        assert!(error.contains("Move the [server] table"), "{error}");
+    }
+
+    #[test]
+    fn a_config_with_no_server_at_all_is_refused() {
+        let config = parse(
+            "[web]
+enabled = false
+",
+        )
+        .unwrap();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("no server is configured"), "{error}");
+    }
+
+    #[test]
+    fn a_refusal_names_which_instance_it_is_about() {
+        let config = parse(
+            r#"
+            [instances.dev.server]
+            executable = "/srv/dev/sbox-server.exe"
+        "#,
+        )
+        .unwrap();
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("instance 'dev'"), "{error}");
+        assert!(error.contains("server.project or server.game"), "{error}");
+    }
+
+    #[test]
+    fn an_instance_id_is_restricted_to_what_is_safe_in_a_url_and_a_label() {
+        assert!(InstanceId::new("dev").is_ok());
+        assert!(InstanceId::new("published-2").is_ok());
+        assert!(InstanceId::new("0").is_ok());
+
+        for bad in [
+            "",
+            "-dev",
+            "Dev",
+            "de v",
+            "dev/../etc",
+            "dev.one",
+            &"a".repeat(33),
+        ] {
+            assert!(InstanceId::new(bad).is_err(), "'{bad}' should be refused");
+        }
+    }
+
+    #[test]
+    fn a_typo_inside_an_instance_is_refused_rather_than_ignored() {
+        // The whole reason the server table is nested rather than flattened:
+        // serde cannot apply deny_unknown_fields through a flatten, and a
+        // silently ignored `hostnam` in this table is a server with the wrong
+        // name and no way to find out why.
+        let error = parse(
+            r#"
+            [instances.dev.server]
+            executable = "/srv/sbox-server.exe"
+            project = "/srv/a.sbproj"
+            hostnam = "typo"
+        "#,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("hostnam"), "{error}");
+    }
+
+    #[test]
+    fn the_collision_refusals_are_reachable_once_a_config_has_two_instances() {
+        // Phase 1 wrote these before anything could reach them. This is the
+        // moment they start mattering.
+        let config = parse(
+            r#"
+            [instances.dev.server]
+            executable = "/srv/one/sbox-server.exe"
+            project = "/srv/dev/a.sbproj"
+
+            [instances.published.server]
+            executable = "/srv/one/sbox-server.exe"
+            game = "fobiat.applejackrp"
+        "#,
+        )
+        .unwrap();
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("the log file"), "{error}");
+        assert!(error.contains("counted twice"), "{error}");
+    }
+
+    #[test]
+    fn a_disabled_instance_holds_nothing_and_so_cannot_collide() {
+        // How a Windows-only development instance stays in a config file that
+        // also deploys to Linux.
+        let config = parse(
+            r#"
+            [instances.dev]
+            enabled = false
+            [instances.dev.server]
+            executable = "/srv/one/sbox-server.exe"
+            project = "/srv/dev/a.sbproj"
+
+            [instances.published.server]
+            executable = "/srv/one/sbox-server.exe"
+            game = "fobiat.applejackrp"
+        "#,
+        )
+        .unwrap();
+
+        config.validate().unwrap();
+        assert_eq!(config.exclusive_resources().len(), 1);
+        // Still declared, and still the second entry.
+        assert_eq!(config.instances().len(), 2);
+    }
+
+    #[test]
+    fn the_primary_is_the_first_enabled_instance() {
+        let config = parse(
+            r#"
+            [instances.dev]
+            enabled = false
+            [instances.dev.server]
+            executable = "/srv/dev/sbox-server.exe"
+            project = "/srv/dev/a.sbproj"
+
+            [instances.published.server]
+            executable = "/srv/published/sbox-server.exe"
+            game = "fobiat.applejackrp"
+        "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.primary().unwrap().id.as_str(), "published");
+    }
+
+    #[test]
+    fn an_instance_inherits_the_process_wide_supervisor_unless_it_overrides_it() {
+        let config = parse(
+            r#"
+            [supervisor]
+            start_timeout_seconds = 42
+
+            [instances.dev.server]
+            executable = "/srv/dev/sbox-server.exe"
+            project = "/srv/dev/a.sbproj"
+
+            [instances.published]
+            [instances.published.supervisor]
+            start_timeout_seconds = 7
+            [instances.published.server]
+            executable = "/srv/published/sbox-server.exe"
+            game = "fobiat.applejackrp"
+        "#,
+        )
+        .unwrap();
+
+        let instances = config.instances();
+        assert_eq!(instances[0].supervisor.start_timeout_seconds, 42);
+        assert_eq!(instances[1].supervisor.start_timeout_seconds, 7);
     }
 
     #[test]
@@ -1652,7 +2178,9 @@ mod tests {
     #[test]
     fn a_config_round_trips_without_leaking_a_secret() {
         let mut config = minimal();
-        config.server.gslt = Some(Secret::new("A-REAL-LOOKING-GSLT"));
+        if let Some(server) = config.server.as_mut() {
+            server.gslt = Some(Secret::new("A-REAL-LOOKING-GSLT"));
+        }
         config.database.url = Some(Secret::new("mysql://user:password@host/db"));
 
         let text = toml::to_string(&config).unwrap();

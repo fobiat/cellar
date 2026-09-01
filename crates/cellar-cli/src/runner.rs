@@ -38,9 +38,14 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     let mariadb = start_mariadb(&config).await?;
 
     let pool = open_database(&config).await?;
+    let primary = config
+        .primary()
+        .context("no server is configured; `cellar doctor` says which table is missing")?;
+
     let state = build_state(
         config_path,
         &config,
+        &primary,
         pool.clone(),
         handle.clone(),
         mariadb.clone(),
@@ -58,7 +63,7 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         servers.push(bind(&config.web.bind, router, "web ui").await?);
     }
 
-    if let Some(notifier) = cellar_notify::Notifier::new(&config.notify, &config.server.hostname) {
+    if let Some(notifier) = cellar_notify::Notifier::new(&config.notify, &primary.server.hostname) {
         tokio::spawn(notifier.run(handle.subscribe()));
     }
 
@@ -167,6 +172,7 @@ async fn start_mariadb(config: &Config) -> Result<Option<cellar_mariadb::Handle>
 fn build_state(
     config_path: &Path,
     config: &Config,
+    primary: &cellar_core::config::Instance,
     pool: Option<sqlx::MySqlPool>,
     handle: Handle,
     mariadb: Option<cellar_mariadb::Handle>,
@@ -205,7 +211,9 @@ fn build_state(
         config.update.program_release_url.clone(),
     )));
     state.release_config = config.release.clone();
-    state.log_file = Some(cellar_runtime::log_file_for(&config.server));
+    // The primary's. The registry work gives AppState one of these per
+    // instance and this whole block moves with it.
+    state.log_file = Some(primary.server.engine_log_file());
     if let Ok(mut path) = state.config_path.lock() {
         *path = Some(config_path.to_owned());
     }
@@ -213,12 +221,12 @@ fn build_state(
     state.web_enabled = config.web.enabled;
     state.bridge_bind = config.bridge.bind.clone();
     state.bridge_enabled = config.bridge.enabled;
-    state.server_port = config.server.port;
-    state.query_port = config.server.query_port;
-    state.server_direct_connect = config.server.direct_connect;
-    state.configured_game = config.server.game.clone();
-    state.configured_map = config.server.map.clone();
-    state.game_data_dir = config.server.game_data_dir();
+    state.server_port = primary.server.port;
+    state.query_port = primary.server.query_port;
+    state.server_direct_connect = primary.server.direct_connect;
+    state.configured_game = primary.server.game.clone();
+    state.configured_map = primary.server.map.clone();
+    state.game_data_dir = primary.server.game_data_dir();
     state.version_probe = Some(cellar_update::Probe {
         project_dir: project_dir(config),
         steam_dir: config.update.steam_dir.clone(),
@@ -465,10 +473,9 @@ async fn watch_for_program_updates(
 
 fn project_dir(config: &Config) -> std::path::PathBuf {
     config
-        .server
-        .project
-        .parent()
-        .map(Path::to_path_buf)
+        .primary_server()
+        .as_ref()
+        .and_then(|server| server.project.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
