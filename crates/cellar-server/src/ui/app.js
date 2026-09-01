@@ -331,6 +331,7 @@ function selectInstance(id, tab, sub) {
   consoleRecords = [];
   cpuHistory = [];
   resourceHistory = [];
+  timingHistory = [];
   playerHistory = new Map();
   loadInstances();
   refreshStatus();
@@ -500,6 +501,11 @@ function showTab(name, moveFocus, sub) {
   });
 
   if (moveFocus) $(`#tab-${name}`)?.focus();
+
+  /* A chart drawn while its tab was hidden has no box to measure, so it was
+   * drawn at the fallback size. Redraw once it is on screen rather than
+   * leaving it wrong until the next two second poll. */
+  redrawCharts();
 
   if (SUB_TABS[name]) showSub(name, activeSub(name));
   const pane = TAB_LOADERS[name];
@@ -869,6 +875,37 @@ async function loadAccess() {
   }
   $("#access-toggle").textContent = data.invite_only ? "Turn gate off" : "Turn gate on";
   $("#access-toggle").onclick = () => changeAccess({ action: "gate", enabled: !data.invite_only });
+  renderAccessScope();
+}
+
+/* Which files this panel writes, and which servers read them.
+ *
+ * The gate and the allowlist are `features.json` and `permissions.json` in one
+ * instance's data directory. Two instances normally have different ones, and
+ * nothing stops a config pointing both at the same directory, at which point
+ * an edit here is an edit to both servers and the screen should say so. */
+function renderAccessScope() {
+  const target = $("#access-scope");
+  if (!target) return;
+  const entry = knownInstances.find((candidate) => candidate.id === instanceId())
+    || knownInstances[0];
+  const dir = entry?.server?.data_dir;
+  target.replaceChildren();
+  if (!dir) {
+    target.append(el("span", null,
+      "This writes features.json and permissions.json in the server's data directory."));
+    return;
+  }
+
+  const sharing = knownInstances
+    .filter((candidate) => candidate.server?.data_dir === dir && candidate.id !== entry.id)
+    .map((candidate) => candidate.id);
+
+  target.append(el("span", null, "Writes "), el("code", null, `${dir}/features.json`));
+  target.append(el("span", null, " and "), el("code", null, "permissions.json"));
+  target.append(el("span", null, sharing.length
+    ? `. ${sharing.join(", ")} read the same directory, so this applies to them too.`
+    : ". Only this server reads them."));
 }
 
 async function changeAccess(body) {
@@ -1211,6 +1248,10 @@ async function refreshStatus() {
     }
 
     renderRoster(server.players);
+    if (server.status_bar) {
+      timingHistory.push(server.status_bar);
+      if (timingHistory.length > 150) timingHistory.shift();
+    }
     renderTimings(server.status_bar);
     $("#stat-unparsed").textContent = server.unparsed_lines;
   }
@@ -1235,6 +1276,7 @@ async function refreshStatus() {
     setLamp($("#stat-mariadb"), lamps[mariadb.state] || "down", mariadb.state.replace("_", " "));
   }
 
+  renderIdentity(data);
   const health = data.health || {};
   setLamp($("#stat-map"), health.map ? "up" : "down", health.map ? "loaded" : "check needed");
   renderAddresses(data.addresses);
@@ -1242,6 +1284,67 @@ async function refreshStatus() {
   renderWebAuth(data.web_auth);
   const access = data.access || {};
   setLamp($("#stat-access"), access.invite_only ? "up" : "wait", access.invite_only ? "invite-only" : "public");
+}
+
+/* Which server the console below belongs to, said in full.
+ *
+ * The strip says which tile is lit and the masthead says the mode; neither
+ * says the join address, and the address is the thing an operator is asked for
+ * while they are looking at the console. */
+function renderIdentity(data) {
+  const target = $("#identity-facts");
+  if (!target) return;
+  const server = data.server;
+  const entry = knownInstances.find((candidate) => candidate.id === instanceId());
+
+  const summary = $("#identity-summary");
+  const name = server?.hostname || server?.status_bar?.hostname || entry?.id || "This server";
+  summary.textContent = knownInstances.length > 1 && entry
+    ? `${name} · ${entry.id}`
+    : name;
+
+  const game = data.game || entry?.server?.game || entry?.profile?.name || null;
+  const join = (data.addresses || []).find((address) => address.label === "Game server");
+  const facts = [
+    ["mode", data.mode || "unknown"],
+    ["gamemode", game || "unknown"],
+    ["map", entry?.server?.map || "not pinned"],
+    ["players", server ? `${server.players.length}/${server.max_players || "?"}` : "—"],
+    ["uptime", server?.started_at ? formatUptime(server.started_at) : "—"],
+    ["restart policy", data.supervisor?.restart_policy || "unknown"],
+    ["document scope", data.scope || "unknown"],
+  ];
+
+  target.replaceChildren();
+  for (const [label, value] of facts) {
+    const cell = el("div");
+    cell.append(el("span", "muted small", label), el("strong", null, text(value)));
+    target.append(cell);
+  }
+
+  if (join) {
+    const cell = el("div");
+    const address = join.remote_url || join.local_url;
+    const copy = el("button", "chip ghost", "copy");
+    copy.type = "button";
+    copy.onclick = () => copyText(address, "Join address copied.");
+    const line = el("span", "value-with-action");
+    line.append(el("strong", null, text(address)), copy);
+    cell.append(el("span", "muted small", "join address"), line);
+    target.append(cell);
+  }
+}
+
+/* One clipboard helper, because three screens want one and the API fails in
+ * ways worth reporting: it is unavailable outside a secure context, and a
+ * denied permission rejects rather than throwing synchronously. */
+async function copyText(value, said) {
+  try {
+    await navigator.clipboard.writeText(String(value));
+    showToast(said, "success");
+  } catch {
+    showToast("This browser would not let Cellar write to the clipboard.", "warn");
+  }
 }
 
 function renderAntiCheat(status) {
@@ -1365,18 +1468,28 @@ function setLamp(node, state, label) {
   node.textContent = label;
 }
 
+/* The last few minutes of status bars, for the average column.
+ *
+ * One sample is a spike, and a spike is what an operator sees when they happen
+ * to look. Five minutes at the two second poll is 150. */
+let timingHistory = [];
+
+const TIMING_FIELDS = [
+  ["network", "network_ms"],
+  ["physics", "physics_ms"],
+  ["navmesh", "navmesh_ms"],
+  ["animation", "animation_ms"],
+  ["update", "update_ms"],
+];
+
 function renderTimings(bar) {
   const target = $("#timings");
   target.replaceChildren();
   if (!bar) return;
 
-  const entries = [
-    ["network", bar.network_ms],
-    ["physics", bar.physics_ms],
-    ["navmesh", bar.navmesh_ms],
-    ["animation", bar.animation_ms],
-    ["update", bar.update_ms],
-  ].filter(([, value]) => value !== null && value !== undefined);
+  const entries = TIMING_FIELDS
+    .map(([name, field]) => [name, bar[field]])
+    .filter(([, value]) => value !== null && value !== undefined);
 
   if (!entries.length) {
     target.append(el("p", "muted small", "No frame timings in the status bar yet."));
@@ -1384,14 +1497,67 @@ function renderTimings(bar) {
   }
 
   const table = el("table");
+  const head = el("thead");
+  const headRow = el("tr");
+  headRow.append(el("th", null, ""), el("th", null, "now"), el("th", null, "average"));
+  head.append(headRow);
   const body = el("tbody");
+
+  const average = (field) => {
+    const values = timingHistory
+      .map((sample) => sample[field])
+      .filter((value) => value !== null && value !== undefined);
+    if (!values.length) return null;
+    return values.reduce((total, value) => total + value, 0) / values.length;
+  };
+
   for (const [name, value] of entries) {
+    const mean = average(TIMING_FIELDS.find(([label]) => label === name)[1]);
     const row = el("tr");
-    row.append(el("td", null, name), el("td", null, `${value.toFixed(2)} ms`));
+    row.append(
+      el("td", null, name),
+      el("td", null, `${value.toFixed(2)} ms`),
+      el("td", "muted", mean === null ? "—" : `${mean.toFixed(2)} ms`),
+    );
     body.append(row);
   }
-  table.append(body);
+
+  /* The engine's status bar reports no frame rate, so a frame rate here would
+   * be Cellar inventing one. What it does report is the time each stage took,
+   * and their sum is the measured work in a tick. That sum is honest, and so
+   * is the ceiling it implies: what the tick rate could reach if nothing else
+   * on the machine cost anything. Both are labelled as derived. */
+  const total = entries.reduce((sum, [, value]) => sum + value, 0);
+  const totalMean = TIMING_FIELDS
+    .map(([, field]) => average(field))
+    .filter((value) => value !== null)
+    .reduce((sum, value) => sum + value, 0);
+
+  const totalRow = el("tr", "timing-total");
+  totalRow.append(
+    el("td", null, "measured frame"),
+    el("td", null, `${total.toFixed(2)} ms`),
+    el("td", "muted", totalMean ? `${totalMean.toFixed(2)} ms` : "—"),
+  );
+  body.append(totalRow);
+
+  const ceilingRow = el("tr", "timing-total");
+  ceilingRow.append(
+    el("td", null, "tick ceiling"),
+    el("td", null, total > 0 ? `${Math.round(1000 / total)}/s` : "—"),
+    el("td", "muted", totalMean > 0 ? `${Math.round(1000 / totalMean)}/s` : "—"),
+  );
+  body.append(ceilingRow);
+
+  table.append(head, body);
   target.append(table);
+  target.append(el(
+    "p",
+    "muted small",
+    `Averages over ${timingHistory.length} sample${timingHistory.length === 1 ? "" : "s"}. `
+    + "The engine reports stage times, not a frame rate: the frame is their sum, "
+    + "and the ceiling is what that sum alone would allow.",
+  ));
 }
 
 /* Every account this Cellar has ever recorded, by Steam ID, so a connected
@@ -1439,10 +1605,14 @@ function renderRoster(players) {
     const actions = el("td");
     actions.append(kick);
 
+    /* A dash rather than a guess. Somebody absent from the history could be
+     * here for the first time, or could have joined after this panel read it,
+     * or the database could be off; "first visit" would be Cellar deciding
+     * which without knowing. */
     const seen = playerHistory.get(String(player.steam_id));
     row.append(
       el("td", null, text(player.name)),
-      el("td", null, text(player.steam_id)),
+      steamIdCell(player.steam_id),
       el("td", null, formatUptime(player.joined_at)),
       el("td", null, seen ? formatDuration(seen.total_seconds) : "—"),
       el("td", null, seen ? text(seen.sessions) : "—"),
@@ -1757,11 +1927,13 @@ async function loadPlayers() {
   const players = await response.json();
 
   if (!Array.isArray(players) || !players.length) {
-    const row = el("tr");
-    const cell = el("td", "muted", "No player history recorded yet.");
-    cell.colSpan = 5;
-    row.append(cell);
-    body.append(row);
+    /* "Nobody has ever played here" and "nothing is recording" look identical
+     * in an empty table, and `/api/players` answers with an empty array for
+     * both. The status already says which, so say it. */
+    emptyRow(body, 5, lastStatus && !lastStatus.database
+      ? "No player history: the operations database is off, so joins are not recorded. "
+        + "Set database.enabled and CELLAR_DATABASE_URL."
+      : "No player history recorded yet.");
     return;
   }
 
@@ -1769,7 +1941,7 @@ async function loadPlayers() {
     const row = el("tr");
     row.append(
       el("td", null, text(player.last_name)),
-      el("td", null, text(player.steam_id)),
+      steamIdCell(player.steam_id),
       el("td", null, formatDuration(player.total_seconds)),
       el("td", null, text(player.sessions)),
       el("td", null, clock(player.last_seen)),
@@ -1778,11 +1950,39 @@ async function loadPlayers() {
   }
 }
 
+/* A SteamID is 17 digits nobody retypes correctly. */
+function steamIdCell(steamId) {
+  const cell = el("td");
+  const copy = el("button", "chip ghost", "copy");
+  copy.type = "button";
+  copy.title = "Copy this SteamID";
+  copy.onclick = () => copyText(steamId, `${steamId} copied.`);
+  cell.append(el("span", null, text(steamId)), copy);
+  return cell;
+}
+
 /* ---- records (the bridge's documents) ----------------------------------- */
+
+/* Documents are separated by the bridge's scope, and the scope is not always
+ * the instance id: a config may name one. Deleting the wrong character sheet
+ * is the cost of guessing, so the list says which scope it is showing. */
+function renderRecordsScope() {
+  const target = $("#records-scope");
+  if (!target) return;
+  const scope = lastStatus?.scope
+    || knownInstances.find((entry) => entry.id === instanceId())?.scope;
+  target.replaceChildren();
+  if (!scope) return;
+  target.append(el("span", null, "Documents in scope "), el("code", null, scope));
+  target.append(el("span", null, knownInstances.length > 1
+    ? ". Another server writes its own scope, and the two never see each other's keys."
+    : "."));
+}
 
 async function loadDocuments() {
   const body = $("#documents");
   body.replaceChildren();
+  renderRecordsScope();
 
   const prefix = $("#doc-prefix").value.trim();
   const response = await fetch(forInstance(`/api/docs?prefix=${encodeURIComponent(prefix)}`));
@@ -1891,6 +2091,17 @@ async function loadDatabase() {
     $("#db-connection").textContent = "unavailable";
     $("#db-version").textContent = text(info.error);
   }
+
+  /* One connection for the whole process. Without saying so, an operator who
+   * switches server in the strip and sees the same tables has been shown two
+   * screens that look like two databases and are one. */
+  const scope = $("#db-scope");
+  if (scope) {
+    scope.textContent = knownInstances.length > 1
+      ? `One connection, shared by every server here: ${knownInstances.map((entry) => entry.id).join(", ")}. `
+        + "The instance strip does not filter these tables; the gamemode decides what in them belongs to which server."
+      : "";
+  }
   loadTables();
 }
 
@@ -1986,7 +2197,9 @@ function formatDuration(seconds) {
   const minutes = Math.floor((seconds % 3600) / 60);
   if (hours) return `${hours}h${String(minutes).padStart(2, "0")}m`;
   if (minutes) return `${minutes}m`;
-  return `${seconds}s`;
+  // Whole seconds: the uptime is computed from a timestamp, so the fraction
+  // was three digits of noise repainting twice a second.
+  return `${Math.floor(seconds)}s`;
 }
 
 const formatUptime = (iso) =>
@@ -1996,12 +2209,33 @@ function drawSpark(svg, values) {
   drawPercentChart(svg, [{ values, className: "chart-process" }], true);
 }
 
+/* Both charts, from the samples already held. Called when a tab appears and
+ * when the window changes size, because the drawing is in pixels now and a
+ * pixel is not what it was a moment ago. */
+function redrawCharts() {
+  if (cpuHistory.length) drawSpark($("#spark-cpu"), cpuHistory);
+  if (resourceHistory.length) {
+    drawPercentChart($("#spark-resources"), [
+      { values: resourceHistory.map(processCpuAverage), className: "chart-process" },
+      { values: resourceHistory.map((sample) => sample.host_cpu_percent), className: "chart-host" },
+    ]);
+  }
+}
+
+/* The chart is drawn in real pixels, not in a stretched coordinate space.
+ *
+ * It used to carry a fixed `viewBox` and `preserveAspectRatio="none"`, so a
+ * 320-unit box painted across a 1180px panel stretched every unit by 3.7 while
+ * leaving the height alone. The line survived that; the axis labels did not,
+ * and "100%" came out nearly four times as wide as it was tall. Matching the
+ * viewBox to the element's own box means one unit is one pixel and nothing is
+ * distorted. */
 function drawPercentChart(svg, series, compact = false) {
   svg.replaceChildren();
-  const view = svg.viewBox.baseVal;
-  const width = view.width || (compact ? 320 : 640);
-  const height = view.height || (compact ? 64 : 154);
-  const left = compact ? 24 : 32;
+  const width = Math.round(svg.clientWidth) || (compact ? 320 : 640);
+  const height = Math.round(svg.clientHeight) || (compact ? 64 : 154);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  const left = compact ? 30 : 34;
   const right = width - 4;
   const top = 7;
   const bottom = height - (compact ? 10 : 13);
@@ -2338,6 +2572,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("#login").onsubmit = signIn;
 
   document.addEventListener("keydown", globalKeys);
+  window.addEventListener("resize", redrawCharts);
   $("#palette-input").addEventListener("input", () => { paletteCursor = 0; renderPalette(); });
   $("#palette-input").addEventListener("keydown", paletteKey);
   $("#palette").addEventListener("click", (event) => {

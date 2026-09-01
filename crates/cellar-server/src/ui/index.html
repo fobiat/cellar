@@ -91,6 +91,17 @@
 
     <!-- Dispatch: the live console. -->
     <section id="tab-dispatch" role="tabpanel" aria-labelledby="tabfor-dispatch" tabindex="-1">
+      <!-- Which server this console is, above the console. Not a tab of its
+           own: a screen whose only job is to restate the instance strip is a
+           screen that gets opened once. Collapsible, and remembered, because
+           an operator who knows their deployment wants the lines back. -->
+      <details class="panel identity" id="instance-identity" open>
+        <summary id="identity-summary">This server</summary>
+        <div class="body">
+          <div class="metric-grid" id="identity-facts"></div>
+        </div>
+      </details>
+
       <div class="panel">
         <h2>Console</h2>
         <div class="body">
@@ -167,7 +178,7 @@
         <div class="panel">
           <h2>Load</h2>
           <div class="body">
-            <svg class="spark live" id="spark-cpu" viewBox="0 0 320 64" preserveAspectRatio="none" role="img" aria-label="Average process CPU over time"></svg>
+            <svg class="spark live" id="spark-cpu" role="img" aria-label="Average process CPU over time"></svg>
             <p class="muted small">CPU across the whole process tree. Under Wine that is the wine
             process and sbox-server.exe beneath it.</p>
           </div>
@@ -199,7 +210,7 @@
               <span class="chart-key chart-key-process">process CPU avg</span>
               <span class="chart-key chart-key-host">host CPU</span>
             </div>
-            <svg class="spark large" id="spark-resources" viewBox="0 0 640 154" preserveAspectRatio="none" role="img" aria-label="Process and host CPU over time"></svg>
+            <svg class="spark large" id="spark-resources" role="img" aria-label="Process and host CPU over time"></svg>
             <p class="muted small" id="telemetry-state">Waiting for resource samples.</p>
           </div>
         </div>
@@ -359,10 +370,11 @@
               <thead><tr><th>Name</th><th>Steam ID</th><th>Connected</th><th>Playtime</th><th>Visits</th><th></th></tr></thead>
               <tbody id="roster"></tbody>
             </table>
-            <p class="muted small" style="margin-top:12px">
-              Playtime and visits come from the recorded history, joined on the Steam ID. They
-              are dashes when the operations database is off, which is not the same as a first
-              visit.
+            <p class="muted small" id="roster-note" style="margin-top:12px">
+              Playtime and visits come from the recorded history, joined on the Steam ID. A dash
+              means this account is not in that history: a first visit, a join since this panel
+              read it, or the operations database being off. Those are three different things and
+              Cellar will not guess which.
             </p>
           </div>
         </div>
@@ -404,7 +416,13 @@
         </div>
         <div class="panel">
           <h2>Allowed accounts</h2>
-          <div class="body scroll"><div class="table-tools"><label class="sr-only" for="access-search">Search the allowlist</label><input type="search" id="access-search" placeholder="search Steam ID…"></div><table><thead><tr><th>Steam ID</th><th></th></tr></thead><tbody id="access-list"></tbody></table></div>
+          <div class="body scroll"><div class="table-tools"><label class="sr-only" for="access-search">Search the allowlist</label><input type="search" id="access-search" placeholder="search Steam ID…"></div><table><thead><tr><th>Steam ID</th><th></th></tr></thead><tbody id="access-list"></tbody></table>
+            <!-- Which files this writes, and who reads them. Two instances
+                 never share a data directory by default, but nothing stops a
+                 config pointing both at one, and then an edit here silently
+                 applies to both servers. -->
+            <p class="muted small" id="access-scope" style="margin-top:12px"></p>
+          </div>
         </div>
       </div>
     </section>
@@ -572,6 +590,9 @@
               <tbody id="documents"></tbody>
             </table>
           </div>
+          <!-- Documents are separated by the bridge's scope, not by which tab
+               you are on, so the scope is the honest label for this list. -->
+          <p class="muted small" id="records-scope" style="margin-top:12px"></p>
         </div>
       </div>
 
@@ -605,6 +626,11 @@
           </div>
           <div class="table-tools"><label class="sr-only" for="table-search">Search tables</label><input type="search" id="table-search" placeholder="search tables…"><label class="sr-only" for="table-sort">Sort tables</label><select id="table-sort"><option value="0">sort name</option><option value="1">sort rows</option></select></div>
           <p class="muted small" id="db-version">The gamemode owns the schema. Cellar only inspects it.</p>
+          <!-- One connection for the whole process, whatever the instance
+               strip is pointing at. Without saying so, an operator switching
+               servers and seeing the same tables believes they are two
+               databases. -->
+          <p class="muted small" id="db-scope"></p>
           <div class="chips" id="tables"></div>
         </div>
       </div>

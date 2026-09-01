@@ -69,6 +69,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A theme control offering Dark, Light and System, with the choice remembered.
 
+- **Which server this is, above the console it belongs to.** A collapsible
+  header carrying the mode, gamemode, map, players, uptime, restart policy,
+  document scope and the join address with a copy button. Not a tab: a screen
+  whose only job is to restate the instance strip is a screen that gets opened
+  once.
+
+- **Average frame timings, a measured frame total, and the tick ceiling it
+  implies.** The engine's status bar reports stage times and no frame rate, so
+  Cellar reports their sum rather than inventing an FPS, and labels the ceiling
+  as what the sum alone would allow. Averages run over the last five minutes of
+  samples, because one reading is a spike and a spike is what an operator sees
+  when they happen to look.
+
 - **Playtime and visits beside every connected player.** The roster and the
   recorded history were two separate tabs, so an operator deciding whether to
   kick somebody could not see that they had forty hours here. They are one
@@ -152,6 +165,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   version, and shutting it down. Every old route still resolves, now to the
   sub-tab its screen went to.
 
+- **A screen that shows shared data now says whose it is.** The database
+  browser names every instance on that one connection, because switching server
+  in the strip and seeing the same tables reads as two databases. The access
+  panel names the two files it writes and whether another instance reads the
+  same directory. Records names its bridge scope.
+
 - **SteamIDs are strings in every JSON response**, because JSON numbers are
   doubles and every real SteamID64 is above 2^53. Deserialising still accepts a
   number, so an older recorded payload reads back.
@@ -166,6 +185,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   build commit on the left. Dropped the "server control" tagline.
 
 ### Fixed
+
+- **Both charts stretched their own coordinate space.** They carried a fixed
+  `viewBox` and `preserveAspectRatio="none"`, so a 320-unit box painted across
+  a 1180px panel stretched every unit horizontally and left the height alone.
+  The line survived that; the axis labels came out nearly four times as wide as
+  they were tall. The viewBox is the element's own pixel box now, and a chart
+  drawn while its tab was hidden is redrawn when it appears.
+
+- **An empty player history could not be told from a disabled one.** Both were
+  an empty table. The status already carries which, so the empty state names
+  `database.enabled` when that is the reason.
+
+- Report uptime in whole seconds. Below a minute it carried three decimal
+  places computed from a timestamp, so it repainted twice a second.
 
 - **Every SteamID the dashboard showed was rounded.** They crossed as JSON
   numbers, and `JSON.parse` turns a number above 2^53 into the nearest double,

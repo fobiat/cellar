@@ -870,6 +870,49 @@ mod tests {
         );
     }
 
+    /// A chart drawn in a stretched coordinate space stretches its labels.
+    ///
+    /// The two SVGs carried a fixed `viewBox` and `preserveAspectRatio="none"`,
+    /// so a 320-unit box painted across a 1180px panel stretched every unit by
+    /// 3.7 horizontally and left the height alone. The line survived it; "100%"
+    /// came out nearly four times as wide as it was tall.
+    #[test]
+    fn the_charts_are_not_drawn_in_a_stretched_coordinate_space() {
+        assert!(
+            !HTML.contains("preserveAspectRatio"),
+            "an SVG is back to stretching its own coordinate space"
+        );
+        assert!(
+            JS.contains("svg.clientWidth"),
+            "the chart is not measuring the box it is drawn into"
+        );
+        assert!(
+            JS.contains("redrawCharts"),
+            "a chart drawn while hidden has no box to measure and nothing redraws it"
+        );
+    }
+
+    /// Three screens show data that is not the selected instance's alone.
+    ///
+    /// Two instances never share a `data_dir` by default and always share the
+    /// game database, and a screen that shows either without saying so is a
+    /// claim about the wrong server. Navigation depth stays at two; the
+    /// honesty is an annotation.
+    #[test]
+    fn every_shared_scope_screen_says_whose_data_it_is() {
+        for (id, filler) in [
+            ("access-scope", "renderAccessScope"),
+            ("records-scope", "renderRecordsScope"),
+            ("db-scope", "#db-scope"),
+        ] {
+            assert!(
+                HTML.contains(&format!(r#"id="{id}""#)),
+                "no place for the {id} annotation"
+            );
+            assert!(JS.contains(filler), "nothing fills {id}");
+        }
+    }
+
     #[test]
     fn every_tab_in_the_nav_has_a_section() {
         let tabs: Vec<&str> = HTML
