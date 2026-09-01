@@ -103,6 +103,7 @@ fn bootstrap_sql(database: &str, username: &str, password: &str) -> Vec<String> 
 pub async fn provision(
     config: &MariaDbConfig,
     client: &reqwest::Client,
+    existing_password: Option<&str>,
 ) -> Result<String, ProvisionError> {
     // Before the download, not after: `release::archive_url` serves the winx64
     // zip unconditionally, and every binary this module spawns is named `.exe`.
@@ -158,7 +159,9 @@ pub async fn provision(
         return Err(error);
     }
 
-    let password = credentials::generate_password();
+    let password = existing_password
+        .map(str::to_owned)
+        .unwrap_or_else(credentials::generate_password);
     let statements = bootstrap_sql(&config.database, &config.username, &password);
     let bootstrap_result = run_root_sql(&bin_dir, config.port, &statements).await;
 

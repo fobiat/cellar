@@ -753,8 +753,8 @@ impl Default for NotifyConfig {
 /// whether `cellar run` also spawns and supervises a `mariadbd` process.
 /// `database.url` (`CELLAR_DATABASE_URL`) is still the one source of the
 /// connection string everything else uses, whether it points at a managed
-/// instance or a remote one: `cellar mariadb provision` prints a URL for
-/// the operator to set, it does not write one anywhere itself.
+/// instance or a remote one. Managed provisioning writes the generated URL to
+/// `database.url_file` when that path is configured.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct MariaDbConfig {

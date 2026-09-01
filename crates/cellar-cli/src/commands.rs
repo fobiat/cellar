@@ -513,14 +513,28 @@ pub async fn mariadb(path: &Path, action: MariadbAction) -> Result<()> {
     match action {
         MariadbAction::Provision => {
             let client = reqwest_client()?;
-            let url = cellar_mariadb::provision(mariadb, &client).await?;
+            let existing_password = config.database.url.as_ref().and_then(|url| {
+                cellar_mariadb::credentials::password_from_database_url(url.expose())
+            });
+            let url =
+                cellar_mariadb::provision(mariadb, &client, existing_password.as_deref()).await?;
+
+            if let Some(url_file) = config.database.url_file.as_ref() {
+                if let Some(parent) = url_file.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(url_file, format!("{url}\n"))?;
+                println!("Stored the database URL in {}.", url_file.display());
+            }
 
             println!(
                 "Provisioned mariadb {} on 127.0.0.1:{}.",
                 mariadb.version, mariadb.port
             );
             println!("\nCELLAR_DATABASE_URL='{url}'");
-            println!("\nSet this in your environment before running `cellar run`.");
+            if config.database.url_file.is_none() {
+                println!("\nSet this in your environment before running `cellar run`.");
+            }
         }
         MariadbAction::Status => {
             let installed = mariadb
