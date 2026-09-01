@@ -253,6 +253,7 @@ mod tests {
         assert!(page.contains(AUTH_SLOT));
         assert!(page.contains("id=\"header-profile\""));
         assert!(page.contains("id=\"header-restart\""));
+        assert!(page.contains("id=\"kill-cellar\""));
         assert!(page.contains("id=\"header-build\""));
         assert!(page.contains("LIVE - DEVELOPMENT"));
         assert!(page.contains("AUTO-RESTART ON CRASH"));
@@ -482,6 +483,10 @@ mod tests {
         for (route, what) in [
             ("/api/logout", "signing out"),
             ("/api/control/exit", "shutting Cellar down"),
+            (
+                "/api/control/kill",
+                "killing Cellar and its managed processes",
+            ),
             ("method: \"DELETE\"", "deleting a document"),
             // Written in Phase 1 with no button. A restore is looked for
             // under pressure, and a command nobody has run is a command
@@ -491,6 +496,23 @@ mod tests {
         ] {
             assert!(JS.contains(route), "no way to reach {what} from the UI");
         }
+    }
+
+    /// The one control on the page that skips every shutdown step. It must not
+    /// be reachable with a single click, and it must not read as instance work.
+    #[test]
+    fn killing_cellar_is_typed_out_and_never_scoped_to_an_instance() {
+        assert!(HTML.contains(r#"id="kill-cellar""#));
+        assert!(
+            JS.contains(r#"typed: "KILL ALL""#),
+            "the kill has to be typed out rather than clicked"
+        );
+        // `?instance=` on this route would read as killing one supervised
+        // server, and the route is process-wide.
+        assert!(
+            !JS.contains(r#"forInstance("/api/control/kill")"#),
+            "the kill route is process-wide and takes no instance"
+        );
     }
 
     /// A route that used to exist has to land where its screen went.
@@ -627,10 +649,11 @@ mod tests {
             .lines()
             .map(str::trim)
             .filter(|line| line.contains("fetch(") && !line.contains("forInstance("))
-            // `control/exit` is the one control action that is about the
-            // process rather than about a server: the handler ignores the
-            // target and stops every instance. Naming one would be a lie.
+            // `control/exit` and `control/kill` are the two control actions
+            // about the process rather than about a server: both handlers
+            // ignore the target. Naming one instance would be a lie.
             .filter(|line| !line.contains("/api/control/exit"))
+            .filter(|line| !line.contains("/api/control/kill"))
             .filter(|line| SCOPED.iter().any(|route| line.contains(route)))
             .map(str::to_owned)
             .collect();

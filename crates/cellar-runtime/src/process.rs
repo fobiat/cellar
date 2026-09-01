@@ -13,11 +13,13 @@
 //! The cost is that the stream carries the console's colouring and its in-place
 //! status bar redraws. `cellar_core::ansi` handles that.
 
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySize, native_pty_system};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::sync::mpsc;
 
 use crate::launch::Command;
@@ -73,6 +75,157 @@ pub struct Child {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     pid: Option<u32>,
     command_line: String,
+}
+
+/// How long Cellar stays alive after the sweep, so the HTTP reply reaches the
+/// browser that asked for this before its connection dies with the process.
+const ROOT_KILL_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Kill every process Cellar owns, then Cellar itself, with no graceful stop.
+///
+/// This is deliberately not the supervisor's stop. It is for an operator who
+/// needs the whole local stack gone now, including a server that has stopped
+/// answering its console.
+pub fn emergency_kill_current_process_tree() {
+    let root = Pid::from_u32(std::process::id());
+    kill_descendants(root, &process_table());
+
+    // After the sweep, never before: the helper is itself a child of Cellar, so
+    // a sweep run later would kill the thing doing the killing.
+    schedule_root_kill(root.as_u32());
+}
+
+/// Every process on the machine, carrying only the fields the walk reads.
+///
+/// `System::new_all` also collects command lines, environments, memory and disk
+/// usage for all of them, which is a great deal of work to then throw away.
+fn process_table() -> System {
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::new());
+    system
+}
+
+/// SIGKILL, or `TerminateProcess` on Windows, to everything under `root`.
+///
+/// Deepest first, so a parent cannot notice a dead child and restart it while
+/// the walk is still going.
+fn kill_descendants(root: Pid, system: &System) {
+    for pid in descendants_in_postorder(root, &children_by_parent(system)) {
+        if let Some(process) = system.process(pid)
+            && !process.kill()
+        {
+            tracing::warn!(pid = pid.as_u32(), "could not kill a process Cellar owns");
+        }
+    }
+}
+
+fn children_by_parent(system: &System) -> HashMap<Pid, Vec<Pid>> {
+    let mut children = HashMap::<Pid, Vec<Pid>>::new();
+    for (pid, process) in system.processes() {
+        let Some(parent) = process.parent() else {
+            continue;
+        };
+        // Windows leaves a dead parent's id on its orphans and reuses pids, so
+        // an unrelated process can claim Cellar as its parent. A real child
+        // cannot have started before the parent did.
+        if system
+            .process(parent)
+            .is_some_and(|owner| owner.start_time() > process.start_time())
+        {
+            continue;
+        }
+        children.entry(parent).or_default().push(*pid);
+    }
+    children
+}
+
+fn descendants_in_postorder(root: Pid, children: &HashMap<Pid, Vec<Pid>>) -> Vec<Pid> {
+    fn visit(
+        pid: Pid,
+        children: &HashMap<Pid, Vec<Pid>>,
+        seen: &mut HashSet<Pid>,
+        result: &mut Vec<Pid>,
+    ) {
+        if !seen.insert(pid) {
+            return;
+        }
+
+        if let Some(kids) = children.get(&pid) {
+            for child in kids {
+                visit(*child, children, seen, result);
+            }
+        }
+        result.push(pid);
+    }
+
+    let mut result = Vec::new();
+    visit(root, children, &mut HashSet::new(), &mut result);
+    result.pop();
+    result
+}
+
+/// Arrange for Cellar itself to be gone shortly, two ways.
+///
+/// The thread is what normally does it. The detached helper is the fallback for
+/// the cases the thread cannot cover: a wedged process that never reaches the
+/// exit, and any atexit handler that decides to block on the way out.
+fn schedule_root_kill(pid: u32) {
+    // A plain OS thread, not a task. The async runtime is one of the things
+    // being torn down here.
+    std::thread::spawn(|| {
+        std::thread::sleep(ROOT_KILL_DELAY);
+        std::process::exit(EMERGENCY_KILL_EXIT_CODE);
+    });
+
+    if let Err(why) = spawn_root_killer(pid) {
+        tracing::warn!("could not spawn the fallback killer for Cellar itself: {why}");
+    }
+}
+
+/// What Cellar exits with when an operator kills it from the dashboard, so a
+/// service manager's log says which of the two shutdowns this was.
+pub const EMERGENCY_KILL_EXIT_CODE: i32 = 137;
+
+fn spawn_root_killer(pid: u32) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        // No `/T`. The tree it would walk contains this helper and the
+        // taskkill running inside it, so which of the three dies first would be
+        // down to enumeration order. The sweep already took the descendants.
+        let script = format!("Start-Sleep -Milliseconds 800; taskkill.exe /PID {pid} /F");
+        std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                script.as_str(),
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+    }
+
+    #[cfg(unix)]
+    {
+        // Whole seconds: fractional `sleep` is a GNU and BSD extension, not
+        // something POSIX `sh` owes anyone.
+        let script = format!("sleep 1; kill -KILL {pid}");
+        std::process::Command::new("sh")
+            .args(["-c", script.as_str()])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+    }
+
+    Ok(())
 }
 
 impl Child {
@@ -218,6 +371,98 @@ pub fn spawn(
 mod tests {
     use super::*;
 
+    #[test]
+    fn descendants_are_returned_deepest_first_without_the_root() {
+        let root = Pid::from_u32(1);
+        let child = Pid::from_u32(2);
+        let grandchild = Pid::from_u32(3);
+        let mut children = HashMap::new();
+        children.insert(root, vec![child]);
+        children.insert(child, vec![grandchild]);
+
+        assert_eq!(
+            descendants_in_postorder(root, &children),
+            vec![grandchild, child]
+        );
+    }
+
+    /// The sweep against a real process table, on a throwaway tree this test
+    /// built. It starts at a shell spawned here and not at Cellar, so nothing
+    /// else on the machine is ever in scope.
+    #[test]
+    fn the_sweep_reaches_a_grandchild_it_did_not_spawn_itself() {
+        let (mut parent, grandchild_name) = if cfg!(windows) {
+            // `ping` counts seconds and needs no console input, which `pause`
+            // and `timeout` both do.
+            let child = std::process::Command::new("cmd.exe")
+                .args(["/C", "ping", "-n", "120", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            (child, "ping")
+        } else {
+            // `sh -c` execs a lone command instead of forking one, so it needs
+            // something to wait on before there is a grandchild at all.
+            let child = std::process::Command::new("/bin/sh")
+                .args(["-c", "sleep 120 & wait"])
+                .spawn()
+                .unwrap();
+            (child, "sleep")
+        };
+        let parent_pid = Pid::from_u32(parent.id());
+
+        let found = wait_for(|| {
+            let system = process_table();
+            let grandchild = children_by_parent(&system)
+                .get(&parent_pid)?
+                .iter()
+                .find(|pid| {
+                    // Lowercased: cmd.exe reports its child as `PING.EXE`.
+                    system.process(**pid).is_some_and(|kid| {
+                        kid.name()
+                            .to_string_lossy()
+                            .to_lowercase()
+                            .contains(grandchild_name)
+                    })
+                })
+                .copied()?;
+            Some((system, grandchild))
+        });
+        let Some((system, grandchild)) = found else {
+            let _ = parent.kill();
+            let _ = parent.wait();
+            panic!("the throwaway shell started a child of its own");
+        };
+
+        kill_descendants(parent_pid, &system);
+        let gone = wait_for(|| process_table().process(grandchild).is_none().then_some(()));
+
+        let _ = parent.kill();
+        let _ = parent.wait();
+        if gone.is_none()
+            && let Some(survivor) = process_table().process(grandchild)
+        {
+            survivor.kill();
+        }
+
+        assert!(gone.is_some(), "the grandchild outlived the sweep");
+    }
+
+    /// Poll until `check` answers, for up to twenty seconds. Both platforms take
+    /// their own time to show a new process and to retire a dead one.
+    fn wait_for<T>(mut check: impl FnMut() -> Option<T>) -> Option<T> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            if let Some(answer) = check() {
+                return Some(answer);
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
     fn shell_command(script: &str) -> Command {
         if cfg!(windows) {
             Command {
@@ -232,6 +477,11 @@ mod tests {
         }
     }
 
+    /// Every wait here is bounded. A pty that never speaks is a plausible
+    /// failure, and an unbounded `recv` turns it into a suite that hangs
+    /// forever rather than a test that fails.
+    const PTY_TEST_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
+
     #[tokio::test]
     async fn a_child_on_a_pty_produces_output_and_then_eof() {
         let (mut child, mut rx) = spawn(
@@ -243,14 +493,43 @@ mod tests {
         .unwrap();
 
         let mut seen = String::new();
-        while let Some(output) = rx.recv().await {
-            match output {
-                Output::Bytes(bytes) => seen.push_str(&String::from_utf8_lossy(&bytes)),
-                Output::Eof => break,
+        let found = tokio::time::timeout(PTY_TEST_LIMIT, async {
+            while let Some(output) = rx.recv().await {
+                match output {
+                    Output::Bytes(bytes) => {
+                        seen.push_str(&String::from_utf8_lossy(&bytes));
+                        if seen.contains("hello-from-the-pty") {
+                            return true;
+                        }
+                    }
+                    Output::Eof => return false,
+                }
             }
+            false
+        })
+        .await;
+
+        assert_eq!(found, Ok(true), "saw: {seen:?}");
+
+        // Unix only, measured rather than assumed: ConPTY holds the master
+        // readable after the child exits, so the read that reports EOF on a
+        // unix pty simply never returns on Windows. Waiting for one there hung
+        // the whole suite. The supervisor does not depend on it either way; it
+        // decides a run is over from `try_wait`.
+        #[cfg(unix)]
+        {
+            let eof = tokio::time::timeout(PTY_TEST_LIMIT, async {
+                while let Some(output) = rx.recv().await {
+                    if matches!(output, Output::Eof) {
+                        return true;
+                    }
+                }
+                false
+            })
+            .await;
+            assert_eq!(eof, Ok(true), "the pty never reported EOF");
         }
 
-        assert!(seen.contains("hello-from-the-pty"), "saw: {seen:?}");
         // Dropping the slave is what makes this terminate rather than hang.
         let _ = child.try_wait();
     }

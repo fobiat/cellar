@@ -2787,6 +2787,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("#logout").onclick = signOut;
   $("#backup-now").onclick = backupNow;
   $("#cellar-exit").onclick = exitCellar;
+  $("#kill-cellar").onclick = emergencyKill;
   $("#run-query").onclick = runQuery;
   $("#release-build").onclick = () => runRelease("build");
   $("#release-publish").onclick = () => runRelease("publish");
@@ -3018,6 +3019,34 @@ async function control(action) {
     showToast(`Could not ${action} ${named}: ${text(data.error) || response.status}`, "error");
   }
   refreshStatus();
+}
+
+/* The kill is process-wide, so no `forInstance`: an `?instance=` here would
+ * read as "kill that one server" and this button has never meant that. */
+async function emergencyKill() {
+  const going = await confirmAction({
+    title: "Kill Cellar and everything it runs?",
+    body: "No graceful shutdown. Cellar, every supervised server and their child processes are terminated where they stand, which skips the engine's convar save and its Steam logoff.",
+    typed: "KILL ALL",
+  });
+  if (!going) return;
+
+  let response;
+  try {
+    response = await fetch("/api/control/kill", { method: "POST" });
+  } catch {
+    // Cellar dies a fraction of a second after it replies, so a dropped
+    // connection here is the request working, not the request failing.
+    showToast("Cellar is gone. This page has nothing left to talk to.", "warn");
+    return;
+  }
+
+  if (response.ok) {
+    showToast("Cellar and everything it runs are being killed.", "warn");
+  } else {
+    const data = await response.json().catch(() => ({}));
+    showToast(`Could not kill Cellar: ${text(data.error) || response.status}`, "error");
+  }
 }
 
 /* ---- the three endpoints that had no way in ------------------------------ */

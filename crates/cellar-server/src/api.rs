@@ -31,6 +31,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/configs/activate", post(activate_config))
         .route("/api/release/{action}", post(release))
         .route("/api/exec", post(exec))
+        .route("/api/control/kill", post(kill))
         .route("/api/control/{action}", post(control))
         .route("/api/players", get(players))
         .route("/api/docs", get(documents))
@@ -1413,7 +1414,17 @@ async fn exec(
     }
 }
 
-/// Start, stop or restart the server.
+/// Kill Cellar and its complete process tree without requiring an instance.
+async fn kill(State(_state): State<Arc<AppState>>, operator: Operator) -> Response {
+    tracing::warn!(
+        "{} requested an emergency kill of Cellar and its process tree",
+        operator.name
+    );
+    cellar_runtime::process::emergency_kill_current_process_tree();
+    Json(serde_json::json!({ "ok": true, "action": "kill" })).into_response()
+}
+
+/// Start, stop or restart one server.
 async fn control(
     State(state): State<Arc<AppState>>,
     operator: Operator,
@@ -2148,5 +2159,41 @@ async fn db_query(
     match cellar_store::admin::query(pool, &request.sql, cellar_store::admin::MAX_ROWS).await {
         Ok(result) => Json(result).into_response(),
         Err(why) => error(StatusCode::BAD_REQUEST, why.to_string()),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    use super::*;
+
+    /// `/api/control/kill` shares a prefix with `/api/control/{action}`, and
+    /// which one wins decides whether the button kills anything: the parameter
+    /// route would hand `control` an action it refuses. Stand-in handlers, so
+    /// nothing here can kill the test runner.
+    #[tokio::test]
+    async fn the_static_control_route_beats_the_parameter_one() {
+        let router: Router = Router::new()
+            .route("/api/control/kill", post(async || "static"))
+            .route("/api/control/{action}", post(async || "parameter"));
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/control/kill")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&body[..], b"static");
     }
 }
