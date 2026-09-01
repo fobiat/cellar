@@ -31,7 +31,7 @@ const SERVICE_WORKER: &str = include_str!("ui/service-worker.js");
 const FAVICON: &str = include_str!("ui/assets/favicon.svg");
 const APP_ICON: &str = include_str!("ui/assets/cellar-icon.svg");
 const AUTH_SLOT: &str = r#"<div id="auth-reminder" class="security-banner" hidden></div>"#;
-const MANIFEST: &str = r##"{"name":"Cellar","short_name":"Cellar","start_url":"/","display":"standalone","theme_color":"#0E0F11","background_color":"#0E0F11","icons":[{"src":"/cellar-icon.svg","sizes":"192x192","type":"image/svg+xml","purpose":"any maskable"},{"src":"/cellar-icon.svg","sizes":"512x512","type":"image/svg+xml","purpose":"any maskable"}],"shortcuts":[{"name":"Dispatch","url":"/?tab=dispatch"},{"name":"Monitoring","url":"/?tab=monitoring"}],"description":"The dedicated server manager built for s&box."}"##;
+const MANIFEST: &str = r##"{"name":"Cellar","short_name":"Cellar","start_url":"/","display":"standalone","theme_color":"#0E0F11","background_color":"#0E0F11","icons":[{"src":"/cellar-icon.svg","sizes":"192x192","type":"image/svg+xml","purpose":"any maskable"},{"src":"/cellar-icon.svg","sizes":"512x512","type":"image/svg+xml","purpose":"any maskable"}],"shortcuts":[{"name":"Dispatch","url":"/#/dispatch"},{"name":"Monitoring","url":"/#/monitoring"}],"description":"The dedicated server manager built for s&box."}"##;
 
 /// The finished page, built once.
 fn page() -> &'static str {
@@ -342,6 +342,67 @@ mod tests {
         assert!(
             offenders.is_empty(),
             "a gamemode's commands belong in its profile, not in the assets: {offenders:?}"
+        );
+    }
+
+    /// Every route that is about one supervised server must carry the
+    /// instance, or a two-server dashboard silently answers about the primary.
+    ///
+    /// The check is that no bare literal survives, rather than that
+    /// `forInstance` is called some number of times: a new call site added
+    /// later fails this without anyone having to remember the rule.
+    #[test]
+    fn every_instance_scoped_fetch_names_its_instance() {
+        const SCOPED: [&str; 8] = [
+            "/api/status",
+            "/api/exec",
+            "/api/control/",
+            "/api/logs",
+            "/api/access",
+            "/api/settings",
+            "/api/docs",
+            "/api/settings/import",
+        ];
+
+        let offenders: Vec<String> = JS
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.contains("fetch(") && !line.contains("forInstance("))
+            .filter(|line| SCOPED.iter().any(|route| line.contains(route)))
+            .map(str::to_owned)
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "these fetches are about one server and do not say which: {offenders:?}"
+        );
+    }
+
+    /// Tab state was a JS variable, which is why both PWA manifest shortcuts
+    /// landed on the same screen and a reload lost the tab. It is the location
+    /// hash now, and the manifest has to point at hashes for that to help.
+    #[test]
+    fn the_manifest_shortcuts_are_routes_rather_than_the_same_screen_twice() {
+        let parsed: serde_json::Value =
+            serde_json::from_str(MANIFEST).expect("the manifest is valid JSON");
+        let targets: Vec<&str> = parsed["shortcuts"]
+            .as_array()
+            .expect("shortcuts is an array")
+            .iter()
+            .map(|entry| entry["url"].as_str().expect("a shortcut has a url"))
+            .collect();
+
+        assert!(targets.len() >= 2, "fewer than two shortcuts");
+        for target in &targets {
+            assert!(target.contains('#'), "{target} is not a route");
+        }
+        assert_eq!(
+            targets
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            targets.len(),
+            "two shortcuts point at the same screen: {targets:?}"
         );
     }
 

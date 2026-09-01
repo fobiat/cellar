@@ -335,8 +335,12 @@ async fn external_logs(
     .await
 }
 
-async fn external_resources(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response {
-    let snapshot = match &state.supervisor {
+async fn external_resources(
+    _: State<Arc<AppState>>,
+    _api: ExternalApi,
+    target: Target,
+) -> Response {
+    let snapshot = match &target.handle {
         Some(supervisor) => supervisor.snapshot().await,
         None => None,
     };
@@ -390,20 +394,43 @@ async fn external_configs(State(state): State<Arc<AppState>>, _: ExternalApi) ->
 /// Asked of the running server every time rather than cached: a feature toggled
 /// from the in-game admin panel is exactly the change an operator most wants
 /// this screen to be honest about.
-async fn settings(State(state): State<Arc<AppState>>, _: Operator) -> Response {
-    let Some(supervisor) = &state.supervisor else {
-        return error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "no server is being supervised",
-        );
+/// The settings catalogue for one instance, or why it has none.
+///
+/// A gamemode that declares no `convar_prefix` has no catalogue Cellar can ask
+/// for. Saying that is the whole improvement: before profiles, every such
+/// server got `applejack_features` sent to it, which the console rejected, and
+/// the tab rendered as empty rather than as unsupported.
+fn catalogue_for(target: &Target) -> Option<cellar_core::convar::Catalogue<'_>> {
+    target
+        .descriptor
+        .profile
+        .convar_prefix
+        .as_deref()
+        .map(cellar_core::convar::Catalogue::new)
+}
+
+fn no_catalogue() -> Response {
+    error(
+        StatusCode::NOT_IMPLEMENTED,
+        "this gamemode's profile declares no convar_prefix, so Cellar does not know what to ask \
+         it for. Add one to [profile] to get the settings catalogue.",
+    )
+}
+
+async fn settings(_: State<Arc<AppState>>, _operator: Operator, target: Target) -> Response {
+    let Some(supervisor) = &target.handle else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, unavailable(&target));
+    };
+    let Some(catalogue) = catalogue_for(&target) else {
+        return no_catalogue();
     };
 
-    let features = match supervisor.exec("applejack_features", "web").await {
+    let features = match supervisor.exec(&catalogue.list_features(), "web").await {
         Ok(reply) => cellar_core::convar::parse_features(&reply),
         Err(why) => return error(StatusCode::BAD_GATEWAY, why),
     };
 
-    let settings = match supervisor.exec("applejack_settings", "web").await {
+    let settings = match supervisor.exec(&catalogue.list_settings(), "web").await {
         Ok(reply) => cellar_core::convar::parse_settings(&reply),
         Err(why) => return error(StatusCode::BAD_GATEWAY, why),
     };
@@ -424,13 +451,14 @@ struct SetRequest {
 async fn set_setting(
     State(state): State<Arc<AppState>>,
     operator: Operator,
+    target: Target,
     Json(request): Json<SetRequest>,
 ) -> Response {
-    let Some(supervisor) = &state.supervisor else {
-        return error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "no server is being supervised",
-        );
+    let Some(supervisor) = &target.handle else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, unavailable(&target));
+    };
+    let Some(catalogue) = catalogue_for(&target) else {
+        return no_catalogue();
     };
 
     // The id and the value both reach a console that runs at full engine
@@ -445,11 +473,11 @@ async fn set_setting(
     }
 
     let command = match request.kind.as_str() {
-        "feature" => cellar_core::convar::feature_command(
+        "feature" => catalogue.feature_command(
             &request.id,
             matches!(request.value.as_str(), "on" | "true" | "1"),
         ),
-        "setting" => cellar_core::convar::setting_command(&request.id, &request.value),
+        "setting" => catalogue.setting_command(&request.id, &request.value),
         other => return error(StatusCode::BAD_REQUEST, format!("unknown kind '{other}'")),
     };
 
@@ -484,27 +512,28 @@ struct ExportQuery {
 
 /// The configuration as a file, for committing or for applying elsewhere.
 async fn export_settings(
-    State(state): State<Arc<AppState>>,
-    _: Operator,
+    _: State<Arc<AppState>>,
+    _operator: Operator,
+    target: Target,
     Query(query): Query<ExportQuery>,
 ) -> Response {
-    let Some(supervisor) = &state.supervisor else {
-        return error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "no server is being supervised",
-        );
+    let Some(supervisor) = &target.handle else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, unavailable(&target));
+    };
+    let Some(catalogue) = catalogue_for(&target) else {
+        return no_catalogue();
     };
 
     let mut snapshot = cellar_core::convar::Snapshot {
         captured_at: Some(chrono::Utc::now().to_rfc3339()),
         hostname: supervisor.snapshot().await.map(|s| s.hostname),
         features: supervisor
-            .exec("applejack_features", "web")
+            .exec(&catalogue.list_features(), "web")
             .await
             .map(|reply| cellar_core::convar::parse_features(&reply))
             .unwrap_or_default(),
         settings: supervisor
-            .exec("applejack_settings", "web")
+            .exec(&catalogue.list_settings(), "web")
             .await
             .map(|reply| cellar_core::convar::parse_settings(&reply))
             .unwrap_or_default(),
@@ -546,8 +575,9 @@ struct ImportSettingsRequest {
 /// Preview or apply a TOML/YAML settings snapshot without writing it into the
 /// gamemode checkout. Applying still goes through the live console catalogue.
 async fn import_settings(
-    State(state): State<Arc<AppState>>,
+    _: State<Arc<AppState>>,
     operator: Operator,
+    target: Target,
     Json(request): Json<ImportSettingsRequest>,
 ) -> Response {
     if request.contents.len() > 512 * 1024 {
@@ -560,11 +590,11 @@ async fn import_settings(
         Ok(snapshot) => snapshot,
         Err(why) => return error(StatusCode::BAD_REQUEST, why),
     };
-    let Some(supervisor) = &state.supervisor else {
-        return error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "no server is being supervised",
-        );
+    let Some(supervisor) = &target.handle else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, unavailable(&target));
+    };
+    let Some(catalogue) = catalogue_for(&target) else {
+        return no_catalogue();
     };
 
     let current = cellar_core::convar::Snapshot {
@@ -574,18 +604,18 @@ async fn import_settings(
             .await
             .map(|snapshot| snapshot.hostname),
         features: supervisor
-            .exec("applejack_features", "web")
+            .exec(&catalogue.list_features(), "web")
             .await
             .map(|reply| cellar_core::convar::parse_features(&reply))
             .unwrap_or_default(),
         settings: supervisor
-            .exec("applejack_settings", "web")
+            .exec(&catalogue.list_settings(), "web")
             .await
             .map(|reply| cellar_core::convar::parse_settings(&reply))
             .unwrap_or_default(),
         convars: Vec::new(),
     };
-    let changes = cellar_core::convar::plan(&current, &desired);
+    let changes = cellar_core::convar::plan(&catalogue, &current, &desired);
     if !request.apply {
         return Json(serde_json::json!({
             "applied": [],
@@ -745,7 +775,7 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator, target: Target)
 
     let addresses = addresses(&state).await;
     let anti_cheat = crate::security::inspect(target.descriptor.log_file.as_deref()).await;
-    let invite_only = read_access_files(&state)
+    let invite_only = read_access_files(target.descriptor.data_dir.as_deref())
         .await
         .ok()
         .map(|(features, _)| feature_enabled(&features, "admin.inviteonly"));
@@ -917,11 +947,12 @@ async fn tailscale_ip() -> Option<String> {
 }
 
 /// The AppleJack invite gate and its SteamID64 allowlist.
-async fn access(State(state): State<Arc<AppState>>, _: Operator) -> Response {
-    let (features, permissions) = match read_access_files(&state).await {
-        Ok(files) => files,
-        Err(why) => return error(StatusCode::BAD_GATEWAY, why),
-    };
+async fn access(_: State<Arc<AppState>>, _operator: Operator, target: Target) -> Response {
+    let (features, permissions) =
+        match read_access_files(target.descriptor.data_dir.as_deref()).await {
+            Ok(files) => files,
+            Err(why) => return error(StatusCode::BAD_GATEWAY, why),
+        };
 
     Json(serde_json::json!({
         "invite_only": feature_enabled(&features, "admin.inviteonly"),
@@ -1105,8 +1136,10 @@ struct AccessRequest {
 async fn change_access(
     State(state): State<Arc<AppState>>,
     operator: Operator,
+    target: Target,
     Json(request): Json<AccessRequest>,
 ) -> Response {
+    let root = target.descriptor.data_dir.clone();
     let result = match request.action.as_str() {
         "allow" | "revoke" => {
             let Some(steam_id) = request.steam_id.as_deref() else {
@@ -1115,30 +1148,36 @@ async fn change_access(
             if !valid_steam_id(steam_id) {
                 return error(StatusCode::BAD_REQUEST, "steam_id must be a SteamID64");
             }
-            edit_allowlist(&state, steam_id, request.action == "allow", &operator.name).await
+            edit_allowlist(
+                root.as_deref(),
+                steam_id,
+                request.action == "allow",
+                &operator.name,
+            )
+            .await
         }
         "gate" => {
             let Some(enabled) = request.enabled else {
                 return error(StatusCode::BAD_REQUEST, "enabled is required");
             };
-            edit_gate(&state, enabled, &operator.name).await
+            edit_gate(root.as_deref(), enabled, &operator.name).await
         }
         other => Err(format!("unknown access action '{other}'")),
     };
 
     match result {
-        Ok(()) => access(State(state), operator).await,
+        Ok(()) => access(State(state), operator, target).await,
         Err(why) => error(StatusCode::BAD_GATEWAY, why),
     }
 }
 
 async fn edit_allowlist(
-    state: &AppState,
+    root: Option<&std::path::Path>,
     steam_id: &str,
     allow: bool,
     operator: &str,
 ) -> Result<(), String> {
-    let (_, mut permissions) = read_access_files(state).await?;
+    let (_, mut permissions) = read_access_files(root).await?;
     let grants = permissions
         .as_object_mut()
         .ok_or_else(|| "permissions.json is not an object".to_owned())?
@@ -1190,11 +1229,15 @@ async fn edit_allowlist(
         }
     }
 
-    write_access_file(state, "permissions.json", &permissions, operator).await
+    write_access_file(root, "permissions.json", &permissions, operator).await
 }
 
-async fn edit_gate(state: &AppState, enabled: bool, operator: &str) -> Result<(), String> {
-    let (mut features, _) = read_access_files(state).await?;
+async fn edit_gate(
+    root: Option<&std::path::Path>,
+    enabled: bool,
+    operator: &str,
+) -> Result<(), String> {
+    let (mut features, _) = read_access_files(root).await?;
     let object = features
         .as_object_mut()
         .ok_or_else(|| "features.json is not an object".to_owned())?;
@@ -1214,13 +1257,20 @@ async fn edit_gate(state: &AppState, enabled: bool, operator: &str) -> Result<()
         values.retain(|value| value.as_str() != Some("admin.inviteonly"));
     }
 
-    write_access_file(state, "features.json", &features, operator).await
+    write_access_file(root, "features.json", &features, operator).await
 }
 
+/// `features.json` and `permissions.json` for one instance.
+///
+/// Takes the directory rather than reading the primary's. Two instances of one
+/// gamemode have different data directories by force: the engine appends
+/// `#local` to a local project's ident, so the development and published sides
+/// cannot share these files however much they look like they should. Reading
+/// the primary's for both is a panel that silently describes the wrong server.
 async fn read_access_files(
-    state: &AppState,
+    root: Option<&std::path::Path>,
 ) -> Result<(serde_json::Value, serde_json::Value), String> {
-    let Some(root) = state.game_data_dir() else {
+    let Some(root) = root else {
         return Ok((serde_json::json!({}), serde_json::json!({})));
     };
     let features = read_json_file(
@@ -1256,12 +1306,12 @@ async fn read_json_file(
 }
 
 async fn write_access_file(
-    state: &AppState,
+    root: Option<&std::path::Path>,
     name: &str,
     value: &serde_json::Value,
     operator: &str,
 ) -> Result<(), String> {
-    let Some(root) = state.game_data_dir() else {
+    let Some(root) = root else {
         return Err("the configured server has no game data directory".to_owned());
     };
     let path = root.join(name);
@@ -1436,6 +1486,7 @@ struct ListQuery {
 async fn documents(
     State(state): State<Arc<AppState>>,
     _: Operator,
+    target: Target,
     Query(query): Query<ListQuery>,
 ) -> Response {
     let Some(pool) = &state.pool else {
@@ -1444,7 +1495,7 @@ async fn documents(
 
     match cellar_store::document::list(
         pool,
-        &state.scope,
+        &target.scope,
         query.prefix.as_deref(),
         query.limit.unwrap_or(200),
     )
@@ -1459,6 +1510,7 @@ async fn documents(
 async fn document(
     State(state): State<Arc<AppState>>,
     _: Operator,
+    target: Target,
     Path(key): Path<String>,
 ) -> Response {
     let Some(pool) = &state.pool else {
@@ -1469,13 +1521,13 @@ async fn document(
         return error(StatusCode::BAD_REQUEST, refusal.to_string());
     }
 
-    let document = match cellar_store::document::get(pool, &state.scope, &key).await {
+    let document = match cellar_store::document::get(pool, &target.scope, &key).await {
         Ok(Some(document)) => document,
         Ok(None) => return error(StatusCode::NOT_FOUND, "no such document"),
         Err(why) => return error(StatusCode::BAD_GATEWAY, why.to_string()),
     };
 
-    let history = cellar_store::document::revisions(pool, &state.scope, &key, 25)
+    let history = cellar_store::document::revisions(pool, &target.scope, &key, 25)
         .await
         .unwrap_or_default();
 
@@ -1487,6 +1539,7 @@ async fn document(
 async fn delete_document(
     State(state): State<Arc<AppState>>,
     operator: Operator,
+    target: Target,
     Path(key): Path<String>,
 ) -> Response {
     let Some(pool) = &state.pool else {
@@ -1497,9 +1550,13 @@ async fn delete_document(
         return error(StatusCode::BAD_REQUEST, refusal.to_string());
     }
 
-    match cellar_store::document::delete(pool, &state.scope, &key).await {
+    match cellar_store::document::delete(pool, &target.scope, &key).await {
         Ok(true) => {
-            tracing::warn!("{} deleted the document {key}", operator.name);
+            tracing::warn!(
+                "{} deleted the document {key} in scope {}",
+                operator.name,
+                target.scope
+            );
             Json(serde_json::json!({ "ok": true })).into_response()
         }
         Ok(false) => error(StatusCode::NOT_FOUND, "no such document"),

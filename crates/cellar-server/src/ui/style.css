@@ -129,6 +129,112 @@ a { color: var(--aj-azure); }
 
 /* ---- tabs --------------------------------------------------------------- */
 
+/* ---- the instance strip -------------------------------------------------- */
+
+/* The same device the tab bar uses, promoted one level: the selected tile gets
+ * an azure border and the raised background. Rack channel strip, not a
+ * dropdown, because the point is that every server is visible at once. */
+nav.instances {
+  display: flex;
+  gap: 1px;
+  padding: 0;
+  background: color-mix(in srgb, var(--aj-frost) 18%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--aj-frost) 22%, transparent);
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+}
+
+nav.instances .instance {
+  appearance: none;
+  border: 0;
+  border-top: 2px solid transparent;
+  background: var(--aj-shell);
+  color: var(--aj-text-muted);
+  font: inherit;
+  text-align: left;
+  padding: 8px 16px;
+  min-width: 160px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  scroll-snap-align: start;
+}
+
+nav.instances .instance:hover { color: var(--aj-text); }
+
+nav.instances .instance[aria-selected="true"] {
+  border-top-color: var(--aj-azure);
+  background: var(--aj-raised);
+  color: var(--aj-text);
+}
+
+.instance-id {
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.instance-state { font-size: 12px; }
+
+/* ---- the command palette ------------------------------------------------- */
+
+.palette {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--aj-ink) 72%, transparent);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  z-index: 50;
+}
+
+.palette[hidden] { display: none; }
+
+.palette-box {
+  width: min(560px, 92vw);
+  background: var(--aj-raised);
+  border: 1px solid color-mix(in srgb, var(--aj-frost) 30%, transparent);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.palette-box input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--aj-frost) 20%, transparent);
+  background: transparent;
+  color: var(--aj-text);
+  font: inherit;
+  font-size: 15px;
+  padding: 13px 16px;
+}
+
+.palette-box input:focus { outline: 2px solid var(--aj-azure); outline-offset: -2px; }
+
+.palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 44vh;
+  overflow-y: auto;
+}
+
+.palette-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: baseline;
+  padding: 9px 16px;
+  cursor: pointer;
+}
+
+.palette-list li.selected { background: color-mix(in srgb, var(--aj-azure) 22%, transparent); }
+.palette-list li:hover { background: color-mix(in srgb, var(--aj-frost) 12%, transparent); }
+.palette-hint { font-family: var(--aj-mono, monospace); }
+
 nav.tabs {
   display: flex;
   gap: 2px;

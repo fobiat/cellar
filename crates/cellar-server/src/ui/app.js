@@ -102,9 +102,81 @@ async function api(path, options) {
  * `?instance=` is absent, so a single-server config never sends the parameter
  * and its access log stays as it was. */
 let selectedInstance = null;
+let knownInstances = [];
+let lastStatus = null;
 
 function instanceId() {
   return selectedInstance;
+}
+
+/* ---- the instance strip -------------------------------------------------- */
+
+/* Draw one tile per declared instance and remember which is selected.
+ *
+ * Hidden for a single-server config: a selector with one option is furniture
+ * that teaches an operator nothing, and every route already defaults to the
+ * primary when no instance is named. */
+async function loadInstances() {
+  const data = await api("/api/instances");
+  knownInstances = data.instances || [];
+
+  if (selectedInstance && !knownInstances.some((entry) => entry.id === selectedInstance)) {
+    selectedInstance = null;
+  }
+  /* Deliberately left null for a single-server config, rather than filled in
+   * with the primary. Naming the only instance would be correct and would also
+   * put `?instance=default` in every request and `#/i/default/` in every
+   * bookmark of a deployment that has never heard of instances. Measured: it
+   * did exactly that until this line existed. */
+  if (!selectedInstance && knownInstances.length > 1) {
+    selectedInstance = data.primary || null;
+  }
+
+  const strip = $("#instance-strip");
+  strip.hidden = knownInstances.length < 2;
+  strip.replaceChildren();
+  if (strip.hidden) return knownInstances;
+
+  knownInstances.forEach((entry, index) => {
+    const tile = el("button", "instance");
+    tile.type = "button";
+    tile.setAttribute("role", "tab");
+    tile.setAttribute("aria-selected", String(entry.id === selectedInstance));
+    tile.dataset.instance = entry.id;
+
+    const state = entry.unavailable ? "off" : entry.running ? "on" : "off";
+    tile.append(el("span", "instance-id", entry.id));
+    tile.append(el("span", `instance-state lamp ${state === "on" ? "ok" : "wait"}`,
+      entry.unavailable ? "unavailable" : entry.running ? "running" : "stopped"));
+    /* The scope, not the id. Two instances can share one, and an operator
+     * about to delete a document needs to know which of those they are in. */
+    tile.append(el("span", "instance-scope muted small", `scope ${entry.scope}`));
+    if (!entry.required) tile.append(el("span", "instance-note muted small", "not in /readyz"));
+
+    tile.title = index < 9 ? `${entry.id} (Ctrl+${index + 1})` : entry.id;
+    tile.onclick = () => selectInstance(entry.id);
+    strip.append(tile);
+  });
+
+  return knownInstances;
+}
+
+/* Switch instance and reload everything that was about the old one.
+ *
+ * Reloading rather than patching in place, because a partial switch is the
+ * failure mode that matters here: a console still streaming the old server
+ * under a header naming the new one is how an operator types `quit` into the
+ * wrong thing. */
+function selectInstance(id) {
+  if (id === selectedInstance) return;
+  selectedInstance = id;
+  writeRoute();
+  consoleRecords = [];
+  cpuHistory = [];
+  resourceHistory = [];
+  loadInstances();
+  refreshStatus();
+  showTab(activeTab);
 }
 
 /* Append `?instance=` when one is selected. Every call that is about a
@@ -154,10 +226,54 @@ function notifyOperator(title, body) {
   }
 }
 
+/* ---- routing ------------------------------------------------------------- */
+
+/* The location hash is the tab state, not a JS variable.
+ *
+ * It was a variable, which is why the PWA's two manifest shortcuts both landed
+ * on whichever tab happened to be default, why a reload lost the tab, and why
+ * a link to "the console on the dev instance" could not be written down at all.
+ *
+ * `#/i/<id>/<tab>` names both; `#/<tab>` is the primary's. `?tab=` still works
+ * and redirects, because it is in the wild in bookmarks and in the manifest. */
+function readRoute() {
+  const legacy = new URLSearchParams(location.search).get("tab");
+  if (legacy && !location.hash) return { instance: null, tab: legacy };
+
+  const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  if (parts[0] === "i" && parts.length >= 2) {
+    return { instance: parts[1], tab: parts[2] || "dispatch" };
+  }
+  return { instance: null, tab: parts[0] || "dispatch" };
+}
+
+function writeRoute() {
+  const wanted = selectedInstance ? `#/i/${selectedInstance}/${activeTab}` : `#/${activeTab}`;
+  if (location.hash !== wanted) {
+    /* replaceState, not assignment: switching tabs is not navigation, and a
+     * back button that walks an operator through every tab they glanced at is
+     * a back button nobody can use to leave. */
+    history.replaceState(null, "", wanted);
+  }
+}
+
+function applyRoute() {
+  const route = readRoute();
+  if (route.instance && route.instance !== selectedInstance
+      && knownInstances.some((entry) => entry.id === route.instance)) {
+    selectInstance(route.instance);
+    return;
+  }
+  showTab(TAB_LOADERS[route.tab] || document.getElementById(`tab-${route.tab}`)
+    ? route.tab
+    : "dispatch");
+}
+
 /* ---- tabs --------------------------------------------------------------- */
 
 function showTab(name) {
   activeTab = name;
+  writeRoute();
   document.querySelectorAll("nav.tabs button").forEach((button) => {
     button.setAttribute("aria-selected", String(button.dataset.tab === name));
   });
@@ -240,7 +356,7 @@ async function loadPalette() {
 /* ---- access ------------------------------------------------------------- */
 
 async function loadAccess() {
-  const response = await fetch("/api/access");
+  const response = await fetch(forInstance("/api/access"));
   const data = await response.json();
   if (!response.ok) {
     $("#access-notice").textContent = text(data.error);
@@ -269,7 +385,7 @@ async function loadAccess() {
 }
 
 async function changeAccess(body) {
-  const response = await fetch("/api/access", {
+  const response = await fetch(forInstance("/api/access"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -287,7 +403,7 @@ async function loadSettings() {
   featureRows.replaceChildren();
   settingRows.replaceChildren();
 
-  const response = await fetch("/api/settings");
+  const response = await fetch(forInstance("/api/settings"));
   const data = await response.json();
 
   if (!response.ok) {
@@ -374,7 +490,7 @@ async function loadSettings() {
 }
 
 async function setSetting(kind, id, value) {
-  const response = await fetch("/api/settings", {
+  const response = await fetch(forInstance("/api/settings"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ kind, id, value }),
@@ -391,7 +507,7 @@ async function setSetting(kind, id, value) {
 }
 
 async function exportSettings(format, overrides) {
-  const response = await fetch(`/api/settings/export?format=${format}&overrides=${overrides}`);
+  const response = await fetch(forInstance(`/api/settings/export?format=${format}&overrides=${overrides}`));
   $("#export").textContent = await response.text();
 }
 
@@ -511,13 +627,17 @@ function firstSentence(item) {
 async function refreshStatus() {
   let data;
   try {
-    const response = await fetch("/api/status");
+    const response = await fetch(forInstance("/api/status"));
     if (response.status === 401) return showGate();
     data = await response.json();
   } catch {
     setLamp($("#stat-state"), "down", "unreachable");
     return;
   }
+
+  /* Kept so a confirm dialog can say what a destructive action costs without
+   * a second round trip while the operator is waiting on the prompt. */
+  lastStatus = data;
 
   const server = data.server;
   const bridge = data.bridge;
@@ -851,7 +971,7 @@ async function runCommand(command) {
   appendLine("echo", now(), "you", `> ${command}`);
 
   try {
-    const response = await fetch("/api/exec", {
+    const response = await fetch(forInstance("/api/exec"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ command }),
@@ -972,7 +1092,7 @@ async function loadDocuments() {
   body.replaceChildren();
 
   const prefix = $("#doc-prefix").value.trim();
-  const response = await fetch(`/api/docs?prefix=${encodeURIComponent(prefix)}`);
+  const response = await fetch(forInstance(`/api/docs?prefix=${encodeURIComponent(prefix)}`));
   const documents = await response.json();
 
   if (!Array.isArray(documents)) {
@@ -1003,7 +1123,7 @@ async function loadDocuments() {
 }
 
 async function openDocument(key) {
-  const response = await fetch(`/api/docs/${key}`);
+  const response = await fetch(forInstance(`/api/docs/${key}`));
   const data = await response.json();
 
   $("#doc-title").textContent = key;
@@ -1257,10 +1377,22 @@ function watchForSilentFailures() {
   });
 }
 
-function start() {
+async function start() {
   if (started) return;
   started = true;
   watchForSilentFailures();
+  /* Before anything else: the route names an instance, and every later fetch
+   * is about whichever one this settles on. */
+  const route = readRoute();
+  await load("the instance list", $("#instance-strip"), async () => {
+    await loadInstances();
+    if (route.instance && knownInstances.some((entry) => entry.id === route.instance)) {
+      selectedInstance = route.instance;
+      await loadInstances();
+    }
+  });
+  showTab(document.getElementById(`tab-${route.tab}`) ? route.tab : "dispatch");
+  window.addEventListener("hashchange", applyRoute);
   // Null: a failure here must not replace the console, which is where the
   // operator is reading the very lines that explain the failure.
   load("the log", null, () => loadLogs());
@@ -1272,6 +1404,9 @@ function start() {
     refreshStatus();
     if (activeTab === "database") loadDatabase();
   }, 2000);
+  /* Slower than the status poll: the strip changes when a server starts or
+   * dies, not every two seconds, and each tick is a whole config read. */
+  setInterval(() => loadInstances().catch(() => {}), 10000);
   setInterval(refreshBuildHealth, 30000);
   renderAlertButton();
   if (alertsEnabled() && "serviceWorker" in navigator) {
@@ -1290,7 +1425,7 @@ async function runRelease(action) {
 }
 
 async function loadLogs() {
-  const response = await fetch("/api/logs?limit=250");
+  const response = await fetch(forInstance("/api/logs?limit=250"));
   if (!response.ok) return;
   const data = await response.json();
   for (const line of data.lines || []) appendLine(line.level === "error" ? "error" : "", clock(line.at), line.tag, line.message, false, line.level, line.category);
@@ -1304,7 +1439,7 @@ async function importSettings(apply) {
     return;
   }
   if (apply && !confirm(`Apply settings from ${file.name}?`)) return;
-  const response = await fetch("/api/settings/import", {
+  const response = await fetch(forInstance("/api/settings/import"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ contents: await file.text(), apply }),
@@ -1339,7 +1474,7 @@ async function scanLogs() {
   if (query) params.set("q", query);
   if (level) params.set("level_min", level);
   if (category) params.set("category", category);
-  const response = await fetch(`/api/logs?${params}`);
+  const response = await fetch(forInstance(`/api/logs?${params}`));
   const data = await response.json();
   if (!response.ok) return showToast(text(data.error));
   consoleRecords = [];
@@ -1396,6 +1531,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   $("#login").onsubmit = signIn;
+
+  document.addEventListener("keydown", globalKeys);
+  $("#palette-input").addEventListener("input", () => { paletteCursor = 0; renderPalette(); });
+  $("#palette-input").addEventListener("keydown", paletteKey);
+  $("#palette").addEventListener("click", (event) => {
+    if (event.target === $("#palette")) closePalette();
+  });
 
   $("#command").addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -1457,7 +1599,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     $("#" + sortId)?.addEventListener("change", applyTableTools);
   }
 
-  const probe = await fetch("/api/status");
+  const probe = await fetch(forInstance("/api/status"));
   if (probe.status === 401) {
     showGate();
   } else {
@@ -1466,8 +1608,143 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 });
 
+/* ---- the command palette ------------------------------------------------- */
+
+/* Ctrl-K. Three kinds of entry in one list: a tab to jump to, an instance to
+ * switch to, and a command from the gamemode's profile to run.
+ *
+ * This is where the Precinct tab went. A tab existed only because there was
+ * nowhere to put buttons; a palette is where a command belongs, and it costs
+ * nothing per gamemode because the entries come from the profile. */
+let paletteEntries = [];
+let paletteCursor = 0;
+
+function paletteCandidates() {
+  const entries = [];
+
+  for (const button of document.querySelectorAll("nav.tabs button")) {
+    entries.push({
+      kind: "tab",
+      label: button.textContent.trim(),
+      hint: "tab",
+      run: () => showTab(button.dataset.tab),
+    });
+  }
+
+  if (knownInstances.length > 1) {
+    for (const instance of knownInstances) {
+      entries.push({
+        kind: "instance",
+        label: instance.id,
+        hint: `server . ${instance.scope}`,
+        run: () => selectInstance(instance.id),
+      });
+    }
+  }
+
+  const current = knownInstances.find((entry) => entry.id === selectedInstance) || knownInstances[0];
+  for (const command of (current && current.profile && current.profile.command) || []) {
+    entries.push({
+      kind: "command",
+      label: command.label,
+      hint: command.command,
+      run: () => {
+        if (command.confirm && !confirm(`Run ${command.command}?`)) return;
+        showTab("dispatch");
+        runCommand(command.command);
+      },
+    });
+  }
+
+  return entries;
+}
+
+function openPalette() {
+  paletteEntries = paletteCandidates();
+  paletteCursor = 0;
+  $("#palette").hidden = false;
+  $("#palette-input").value = "";
+  renderPalette();
+  $("#palette-input").focus();
+}
+
+function closePalette() {
+  $("#palette").hidden = true;
+  $("#command").focus({ preventScroll: true });
+}
+
+function paletteMatches() {
+  const needle = $("#palette-input").value.trim().toLowerCase();
+  if (!needle) return paletteEntries;
+  return paletteEntries.filter((entry) =>
+    entry.label.toLowerCase().includes(needle) || entry.hint.toLowerCase().includes(needle));
+}
+
+function renderPalette() {
+  const list = $("#palette-list");
+  const matches = paletteMatches();
+  if (paletteCursor >= matches.length) paletteCursor = Math.max(0, matches.length - 1);
+  list.replaceChildren();
+
+  if (!matches.length) {
+    list.append(el("li", "muted", "Nothing matches."));
+    return;
+  }
+
+  matches.forEach((entry, index) => {
+    const item = el("li", index === paletteCursor ? "selected" : "");
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", String(index === paletteCursor));
+    item.append(el("span", "palette-label", entry.label));
+    item.append(el("span", "palette-hint muted small", entry.hint));
+    item.onclick = () => { closePalette(); entry.run(); };
+    list.append(item);
+  });
+}
+
+function paletteKey(event) {
+  if (event.key === "Escape") { closePalette(); return; }
+  if (event.key === "ArrowDown") { paletteCursor += 1; renderPalette(); event.preventDefault(); return; }
+  if (event.key === "ArrowUp") { paletteCursor = Math.max(0, paletteCursor - 1); renderPalette(); event.preventDefault(); return; }
+  if (event.key === "Enter") {
+    const chosen = paletteMatches()[paletteCursor];
+    closePalette();
+    if (chosen) chosen.run();
+    event.preventDefault();
+  }
+}
+
+/* Ctrl-K opens it; Ctrl-1 through Ctrl-9 selects instance N, which is the
+ * gesture someone running three servers will actually reach for. */
+function globalKeys(event) {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    if ($("#palette").hidden) openPalette(); else closePalette();
+    return;
+  }
+  if ((event.ctrlKey || event.metaKey) && /^[1-9]$/.test(event.key)) {
+    const wanted = knownInstances[Number(event.key) - 1];
+    if (wanted) { event.preventDefault(); selectInstance(wanted.id); }
+  }
+}
+
+/* Confirming a stop or restart names the server and counts who is on it.
+ *
+ * "Really stop the server?" is a question an operator can only answer wrongly:
+ * it does not say which server, and with two instances that is the whole
+ * decision, nor how many people are about to be disconnected. Both come from
+ * the snapshot that is already on screen. */
 async function control(action) {
-  if (!confirm(`Really ${action} the server?`)) return;
-  await fetch(`/api/control/${action}`, { method: "POST" });
+  const server = lastStatus && lastStatus.server;
+  const players = (server && server.players && server.players.length) || 0;
+  const named = selectedInstance && knownInstances.length > 1
+    ? `the '${selectedInstance}' server`
+    : "the server";
+  const cost = players === 0
+    ? "Nobody is connected."
+    : `${players} ${players === 1 ? "player is" : "players are"} connected and will be disconnected.`;
+
+  if (!confirm(`Really ${action} ${named}?\n\n${cost}`)) return;
+  await fetch(forInstance(`/api/control/${action}`), { method: "POST" });
   refreshStatus();
 }

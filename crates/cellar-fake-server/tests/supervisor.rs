@@ -289,7 +289,7 @@ async fn the_configuration_can_be_captured_changed_and_read_back() {
         ..Default::default()
     };
 
-    let changes = convar::plan(&current, &desired);
+    let changes = convar::plan(&convar::Catalogue::new("applejack"), &current, &desired);
     assert_eq!(changes.len(), 2, "{changes:#?}");
 
     for change in &changes {

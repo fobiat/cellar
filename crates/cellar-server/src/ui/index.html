@@ -48,6 +48,10 @@
     <button class="action danger" id="stop">Stop</button>
   </header>
 
+  <!-- One tile per declared instance. Hidden entirely for a single-server
+       config, where a selector with one option is noise. -->
+  <nav class="instances" id="instance-strip" role="tablist" aria-label="servers" hidden></nav>
+
   <div class="strip">
     <div class="stat"><div class="label">Server</div><div class="value lamp wait" id="stat-state">…</div></div>
     <div class="stat"><div class="label">Players</div><div class="value" id="stat-players">—</div></div>
@@ -439,6 +443,17 @@
         <div class="body" id="changelog"></div>
       </div>
     </section>
+
+  <!-- Ctrl-K. Every tab, every instance, and the gamemode's own commands in
+       one list, because a dashboard with eleven tabs is a dashboard where the
+       thing you want is behind a tab you have to remember the name of. -->
+  <div id="palette" class="palette" hidden role="dialog" aria-modal="true" aria-label="jump or run">
+    <div class="palette-box">
+      <input type="text" id="palette-input" placeholder="jump to a tab, switch server, or run a command"
+             autocomplete="off" aria-controls="palette-list" aria-expanded="true">
+      <ul id="palette-list" class="palette-list" role="listbox"></ul>
+    </div>
+  </div>
 
   </main>
 

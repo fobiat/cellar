@@ -184,7 +184,7 @@ pub struct Change {
 /// is a request to set those three, not a request to reset everything else to
 /// its default, because the second reading turns a partial file into a way to
 /// wipe a server's configuration.
-pub fn plan(current: &Snapshot, desired: &Snapshot) -> Vec<Change> {
+pub fn plan(catalogue: &Catalogue<'_>, current: &Snapshot, desired: &Snapshot) -> Vec<Change> {
     let mut changes = Vec::new();
 
     for wanted in &desired.features {
@@ -193,7 +193,7 @@ pub fn plan(current: &Snapshot, desired: &Snapshot) -> Vec<Change> {
                 id: wanted.id.clone(),
                 from: "absent".to_owned(),
                 to: state_word(wanted.enabled).to_owned(),
-                command: feature_command(&wanted.id, wanted.enabled),
+                command: catalogue.feature_command(&wanted.id, wanted.enabled),
                 refused: Some("this server has no feature with that id".to_owned()),
                 needs_restart: false,
             });
@@ -208,7 +208,7 @@ pub fn plan(current: &Snapshot, desired: &Snapshot) -> Vec<Change> {
             id: wanted.id.clone(),
             from: state_word(existing.enabled).to_owned(),
             to: state_word(wanted.enabled).to_owned(),
-            command: feature_command(&wanted.id, wanted.enabled),
+            command: catalogue.feature_command(&wanted.id, wanted.enabled),
             // The live server's own catalogue decides, not the file's: a file
             // could claim a core feature is toggleable and it would still be
             // refused by the gamemode.
@@ -224,7 +224,7 @@ pub fn plan(current: &Snapshot, desired: &Snapshot) -> Vec<Change> {
                 id: wanted.id.clone(),
                 from: "absent".to_owned(),
                 to: wanted.value.clone(),
-                command: setting_command(&wanted.id, &wanted.value),
+                command: catalogue.setting_command(&wanted.id, &wanted.value),
                 refused: Some("this server has no setting with that id".to_owned()),
                 needs_restart: false,
             });
@@ -239,7 +239,7 @@ pub fn plan(current: &Snapshot, desired: &Snapshot) -> Vec<Change> {
             id: wanted.id.clone(),
             from: existing.value.clone(),
             to: wanted.value.clone(),
-            command: setting_command(&wanted.id, &wanted.value),
+            command: catalogue.setting_command(&wanted.id, &wanted.value),
             refused: None,
             needs_restart: false,
         });
@@ -252,14 +252,40 @@ fn state_word(enabled: bool) -> &'static str {
     if enabled { "on" } else { "off" }
 }
 
-/// The command that sets a feature.
-pub fn feature_command(id: &str, enabled: bool) -> String {
-    format!("applejack_feature_set {id} {}", state_word(enabled))
-}
+/// The four commands a gamemode has to expose for the settings catalogue to
+/// work, derived from its `profile.convar_prefix`.
+///
+/// `<prefix>_features`, `<prefix>_settings`, `<prefix>_feature_set` and
+/// `<prefix>_setting_set`. This is AppleJackRP's naming convention, not an
+/// engine one, and it is stated here rather than assumed: a gamemode that
+/// declares a prefix and names its commands differently gets a console error
+/// naming the command it does not have, which is a better failure than the
+/// hardcoded `applejack_*` this replaced, where every other gamemode saw an
+/// empty settings tab and no explanation.
+pub struct Catalogue<'a>(&'a str);
 
-/// The command that sets a catalogued setting.
-pub fn setting_command(id: &str, value: &str) -> String {
-    format!("applejack_setting_set {id} {value}")
+impl<'a> Catalogue<'a> {
+    pub fn new(convar_prefix: &'a str) -> Self {
+        Self(convar_prefix)
+    }
+
+    pub fn list_features(&self) -> String {
+        format!("{}_features", self.0)
+    }
+
+    pub fn list_settings(&self) -> String {
+        format!("{}_settings", self.0)
+    }
+
+    /// The command that sets a feature.
+    pub fn feature_command(&self, id: &str, enabled: bool) -> String {
+        format!("{}_feature_set {id} {}", self.0, state_word(enabled))
+    }
+
+    /// The command that sets a catalogued setting.
+    pub fn setting_command(&self, id: &str, value: &str) -> String {
+        format!("{}_setting_set {id} {value}", self.0)
+    }
 }
 
 /// Parse the output of `applejack_features`.
@@ -451,6 +477,12 @@ pub fn parse_convars(lines: &[String]) -> Vec<Convar> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// The catalogue these tests were written against, named once so the
+    /// assertions still read as being about the plan rather than the prefix.
+    fn applejack() -> Catalogue<'static> {
+        Catalogue::new("applejack")
+    }
 
     fn lines(text: &str) -> Vec<String> {
         text.lines().map(str::to_owned).collect()
@@ -645,7 +677,7 @@ mod tests {
             source: None,
         });
 
-        let changes = plan(&current, &desired);
+        let changes = plan(&applejack(), &current, &desired);
         assert_eq!(changes.len(), 2, "{changes:#?}");
 
         assert_eq!(changes[0].command, "applejack_feature_set ui.menu.admin on");
@@ -664,13 +696,13 @@ mod tests {
     fn a_partial_snapshot_does_not_reset_what_it_omits() {
         let current = snapshot();
         let desired = Snapshot::default();
-        assert!(plan(&current, &desired).is_empty());
+        assert!(plan(&applejack(), &current, &desired).is_empty());
     }
 
     #[test]
     fn nothing_to_do_produces_no_changes() {
         let current = snapshot();
-        assert!(plan(&current, &current).is_empty());
+        assert!(plan(&applejack(), &current, &current).is_empty());
     }
 
     #[test]
@@ -686,7 +718,7 @@ mod tests {
             title: String::new(),
         });
 
-        let changes = plan(&current, &desired);
+        let changes = plan(&applejack(), &current, &desired);
         assert_eq!(changes.len(), 1);
         assert!(changes[0].refused.as_deref().unwrap().contains("core"));
     }
@@ -704,7 +736,7 @@ mod tests {
             title: String::new(),
         });
 
-        let changes = plan(&current, &desired);
+        let changes = plan(&applejack(), &current, &desired);
         assert!(changes[0].needs_restart);
         assert!(
             changes[0].refused.is_none(),
@@ -725,7 +757,7 @@ mod tests {
             title: String::new(),
         });
 
-        let changes = plan(&current, &desired);
+        let changes = plan(&applejack(), &current, &desired);
         assert!(
             changes[0]
                 .refused

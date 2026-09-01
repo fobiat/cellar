@@ -126,7 +126,11 @@ neither `server.working_dir` nor `FACEPUNCH_ENGINE` moves them. See
 `validate()` refuses two enabled instances that would collide.
 
 **Addressing one instance over HTTP:** `?instance=<id>` on the existing routes,
-defaulting to the primary, which is the first enabled instance in id order.
+defaulting to the primary, which is the first enabled instance in id order. It
+is accepted by everything about one supervised server: status, exec, control,
+logs, access, the settings catalogue, resources and documents. The dashboard
+sends it only when a config declares more than one instance, so a single-server
+deployment's URLs and access log are exactly as they were.
 `GET /api/instances` lists what a config declares. An unknown id is a 404 naming
 the ids that do exist, never a silent fallback, because the request that would
 get misrouted that way is `quit`. `/api/control/exit` is process-wide and

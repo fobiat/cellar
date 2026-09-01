@@ -8,12 +8,19 @@ The operator API is served on `web.bind`. Set `CELLAR_API_TOKEN` to enable its
 read-only machine endpoints:
 
 ```text
-GET /api/v1/status
+GET /api/v1/status?instance=published
 GET /api/v1/logs?q=storage&level=error&limit=500
 GET /api/v1/resources
 GET /api/v1/addresses
 Authorization: Bearer <CELLAR_API_TOKEN>
 ```
+
+`?instance=<id>` names which server a request is about, on both `/api/v1` and
+the dashboard's own routes. Omitting it means the primary, so a single-server
+deployment's existing calls are unchanged. An unknown id is a 404 listing the
+ids that exist, never a silent fall back to the primary: the request that would
+be misrouted that way is `quit`. `GET /api/instances` lists what a config
+declares.
 
 The API token is read from the environment and never written to TOML or
 returned by status. Keep the web bind private or put it behind TLS and an

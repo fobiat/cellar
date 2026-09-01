@@ -987,8 +987,6 @@ pub async fn doc(path: &Path, action: DocAction) -> Result<()> {
 /// its own channel to the same terminal is two writers on one file descriptor,
 /// and the interleaving is exactly as bad as it sounds.
 pub async fn settings(path: &Path, action: crate::SettingsAction) -> Result<()> {
-    use cellar_core::convar;
-
     let config = Config::load(path)?;
     let client = LiveServer::connect(&config).await?;
 
@@ -1096,9 +1094,9 @@ pub async fn settings(path: &Path, action: crate::SettingsAction) -> Result<()> 
                     value.to_ascii_lowercase().as_str(),
                     "on" | "true" | "1" | "enabled"
                 );
-                convar::feature_command(&id, enabled)
+                client.catalogue()?.feature_command(&id, enabled)
             } else if snapshot.setting(&id).is_some() {
-                convar::setting_command(&id, &value)
+                client.catalogue()?.setting_command(&id, &value)
             } else {
                 anyhow::bail!("this server has no feature or setting called '{id}'");
             };
@@ -1211,6 +1209,9 @@ fn print_changes(changes: &[cellar_core::convar::Change]) {
 struct LiveServer {
     client: reqwest::Client,
     base: String,
+    /// The gamemode's convar prefix, from `[profile]`. Absent means this
+    /// gamemode has no settings catalogue Cellar knows how to ask for.
+    convar_prefix: Option<String>,
 }
 
 impl LiveServer {
@@ -1248,7 +1249,13 @@ impl LiveServer {
             }
         }
 
-        let server = Self { client, base };
+        let server = Self {
+            client,
+            base,
+            convar_prefix: config
+                .primary()
+                .and_then(|instance| instance.profile.convar_prefix.clone()),
+        };
 
         server
             .client
@@ -1293,12 +1300,24 @@ impl LiveServer {
             .unwrap_or_default())
     }
 
+    /// The four catalogue commands for this gamemode, or why there are none.
+    fn catalogue(&self) -> Result<cellar_core::convar::Catalogue<'_>> {
+        match self.convar_prefix.as_deref() {
+            Some(prefix) => Ok(cellar_core::convar::Catalogue::new(prefix)),
+            None => anyhow::bail!(
+                "this gamemode's profile declares no convar_prefix, so Cellar does not know what \
+                 to ask it for. Add one to [profile] in the config."
+            ),
+        }
+    }
+
     /// Ask the server for everything it is set to.
     async fn capture(&self, find: &str) -> Result<cellar_core::convar::Snapshot> {
         use cellar_core::convar;
 
-        let features = convar::parse_features(&self.exec("applejack_features").await?);
-        let settings = convar::parse_settings(&self.exec("applejack_settings").await?);
+        let catalogue = self.catalogue()?;
+        let features = convar::parse_features(&self.exec(&catalogue.list_features()).await?);
+        let settings = convar::parse_settings(&self.exec(&catalogue.list_settings()).await?);
 
         let convars = if find.is_empty() {
             Vec::new()
@@ -1322,7 +1341,11 @@ impl LiveServer {
         let desired = cellar_core::convar::Snapshot::parse(&text).map_err(anyhow::Error::msg)?;
         let current = self.capture("").await?;
 
-        Ok(cellar_core::convar::plan(&current, &desired))
+        Ok(cellar_core::convar::plan(
+            &self.catalogue()?,
+            &current,
+            &desired,
+        ))
     }
 }
 
