@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use cellar_core::config::{Instance, InstanceId};
+use cellar_core::profile::GamemodeProfile;
 use cellar_runtime::Handle;
 use serde::Serialize;
 
@@ -29,6 +30,19 @@ pub struct Descriptor {
     pub direct_connect: bool,
     pub bridge_bind: String,
     pub bridge_enabled: bool,
+    /// What gamemode this instance runs. Carried here so a route can categorise
+    /// a log line or render a command palette without reaching back into the
+    /// config, which `SwitchConfig` can replace underneath it.
+    ///
+    /// Not serialised as part of the descriptor: `/api/instances` lifts it to
+    /// the instance level, because a gamemode is a property of the instance
+    /// rather than of its `[server]` table.
+    #[serde(skip)]
+    pub profile: GamemodeProfile,
+    /// The resolved readiness line, after `server.ready_pattern` and the
+    /// profile have both had their say. Shown in diagnostics: a wrong one is
+    /// invisible otherwise, and it is the defect the profile exists to fix.
+    pub ready_pattern: String,
 }
 
 /// One instance, running or not.
@@ -67,6 +81,8 @@ impl Entry {
                 direct_connect: instance.server.direct_connect,
                 bridge_bind: instance.bridge.bind.clone(),
                 bridge_enabled: instance.bridge.enabled,
+                profile: instance.profile.clone(),
+                ready_pattern: instance.ready_pattern().to_owned(),
             },
         }
     }
@@ -237,6 +253,8 @@ mod tests {
                 direct_connect: false,
                 bridge_bind: "127.0.0.1:8080".to_owned(),
                 bridge_enabled: false,
+                profile: Default::default(),
+                ready_pattern: "Lobby created".to_owned(),
             },
         }
     }

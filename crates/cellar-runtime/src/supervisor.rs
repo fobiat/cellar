@@ -435,7 +435,7 @@ impl Supervisor {
         });
 
         let mut assembler = LineAssembler::new();
-        let ready_pattern = self.instance.server.ready_pattern.clone();
+        let ready_pattern = self.instance.ready_pattern().to_owned();
 
         // Only one channel produces events, or every line is counted twice.
         //
@@ -949,12 +949,13 @@ mod tests {
             scope: "test".to_owned(),
             enabled: true,
             required: true,
+            profile: Default::default(),
             server: ServerConfig {
                 executable: PathBuf::from("/bin/true"),
                 project: PathBuf::from("/tmp/a.sbproj"),
                 launcher: Launcher::Native,
                 hostname: "test".into(),
-                ready_pattern: "Lobby created".into(),
+                ready_pattern: Some("Lobby created".into()),
                 data_dir,
                 ..ServerConfig::default()
             },

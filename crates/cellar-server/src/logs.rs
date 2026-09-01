@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use cellar_core::event::{Event, Level, Origin};
 use cellar_core::grammar::Line;
+use cellar_core::profile::{Category, GamemodeProfile};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -31,7 +32,7 @@ pub struct Record {
     pub at: DateTime<Utc>,
     pub level: Level,
     pub tag: String,
-    pub category: String,
+    pub category: Category,
     pub message: String,
     pub origin: Origin,
     pub raw: String,
@@ -48,7 +49,12 @@ pub struct SearchResult {
     pub persistent: bool,
 }
 
-pub async fn search(path: &Path, query: &Query) -> SearchResult {
+/// Scan the engine's log files.
+///
+/// Takes the profile rather than reading a global one: the categories a line
+/// falls into depend on the gamemode, and with two instances in a process there
+/// is no single right answer to fetch from somewhere else.
+pub async fn search(path: &Path, profile: &GamemodeProfile, query: &Query) -> SearchResult {
     let files = files_for(path).await;
     let mut lines = Vec::new();
     let mut matched = 0;
@@ -61,7 +67,7 @@ pub async fn search(path: &Path, query: &Query) -> SearchResult {
         let mut reader = BufReader::new(handle).lines();
         while let Ok(Some(raw)) = reader.next_line().await {
             scanned_lines += 1;
-            let Some(record) = record(file, &raw) else {
+            let Some(record) = record(file, profile, &raw) else {
                 continue;
             };
             if !matches(query, &record) {
@@ -110,13 +116,13 @@ async fn files_for(current: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn record(file: &Path, raw: &str) -> Option<Record> {
+fn record(file: &Path, profile: &GamemodeProfile, raw: &str) -> Option<Record> {
     let parsed = cellar_core::grammar::parse_line(Line::log_file(raw))?;
     let event = cellar_core::grammar::classify(&parsed, Origin::LogFile, "");
     let Event::Log(line) = event else {
         return None;
     };
-    let category = category(&line.logger, &line.message);
+    let category = profile.category(&line.logger, &line.message);
     Some(Record {
         at: line.at,
         level: line.level,
@@ -146,7 +152,7 @@ fn matches(query: &Query, record: &Record) -> bool {
         return false;
     }
     if let Some(category) = &query.category
-        && !record.category.eq_ignore_ascii_case(category)
+        && !record.category.as_str().eq_ignore_ascii_case(category)
     {
         return false;
     }
@@ -156,25 +162,6 @@ fn matches(query: &Query, record: &Record) -> bool {
             || record.tag.to_ascii_lowercase().contains(&text)
             || record.raw.to_ascii_lowercase().contains(&text)
     })
-}
-
-pub fn category(tag: &str, message: &str) -> String {
-    let text = format!("{} {}", tag, message).to_ascii_lowercase();
-    if text.contains("storage") || text.contains("database") || text.contains("document") {
-        "storage".to_owned()
-    } else if text.contains("network") || text.contains("connect") || text.contains("lobby") {
-        "network".to_owned()
-    } else if text.contains("player") || text.contains("identity") || text.contains("chat") {
-        "players".to_owned()
-    } else if text.contains("physics") || text.contains("render") || text.contains("map") {
-        "engine".to_owned()
-    } else if text.contains("applejack") || text.contains("game") {
-        "gameplay".to_owned()
-    } else if text.contains("cellar") {
-        "cellar".to_owned()
-    } else {
-        "other".to_owned()
-    }
 }
 
 #[cfg(test)]
@@ -187,7 +174,7 @@ mod tests {
             at: Utc::now(),
             level,
             tag: "Bootstrap".to_owned(),
-            category: "network".to_owned(),
+            category: Category::Network,
             message: "Lobby created".to_owned(),
             origin: Origin::LogFile,
             raw: "Lobby created".to_owned(),

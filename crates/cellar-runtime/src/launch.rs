@@ -157,7 +157,7 @@ mod tests {
             direct_connect: false,
             port: 27015,
             query_port: 27016,
-            ready_pattern: "Lobby created".to_owned(),
+            ready_pattern: Some("Lobby created".to_owned()),
             extra_args: Vec::new(),
             data_dir: None,
         }

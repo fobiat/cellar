@@ -9,7 +9,12 @@ log_file = "/home/container/sbox/logs/sbox-server.log"
 direct_connect = true
 port = 27015
 query_port = 27016
-ready_pattern = "Lobby created - session is joinable"
+# Measured 2026-09-01: `Connected to Steam` is the last line facepunch.sandbox
+# ever logs, and the server is answering A2S by then. It used to say AppleJackRP's
+# `Lobby created - session is joinable`, which this gamemode never emits, so this
+# deployment returned 503 from /readyz forever against a healthy server and
+# Kubernetes killed and retried the pod.
+ready_pattern = "Connected to Steam"
 
 [database]
 enabled = true

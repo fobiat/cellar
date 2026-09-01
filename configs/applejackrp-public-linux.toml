@@ -1,5 +1,7 @@
 # Cellar published AppleJackRP profile for Linux under Wine.
 
+profile_file = "profiles/applejackrp.toml"
+
 [server]
 executable = '/home/container/sbox/sbox-server.exe'
 game = "fobiat.applejackrp"

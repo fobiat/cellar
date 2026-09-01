@@ -131,7 +131,7 @@
           <div class="console" id="console"></div>
           <div class="prompt">
             <span class="caret">&gt;</span>
-            <input type="text" id="command" placeholder="type a command, for example applejack_features"
+            <input type="text" id="command" placeholder="type a command, for example status"
                    autocomplete="off" spellcheck="false">
           </div>
         </div>
@@ -245,46 +245,17 @@
       </div>
     </section>
 
-    <!-- Precinct: the admin and developer surface. -->
+    <!-- Precinct: whatever the gamemode's profile says it can do. -->
     <section id="tab-precinct" hidden>
-      <div class="grid-2">
-        <div class="panel">
-          <h2>Features and settings</h2>
-          <div class="body">
-            <div class="chips">
-              <button class="chip" data-command="applejack_features">list features</button>
-              <button class="chip" data-command="applejack_settings">list settings</button>
-              <button class="chip" data-command="applejack_storage">storage</button>
-              <button class="chip" data-command="applejack_feature_set ui.menu.admin on">admin tab on</button>
-              <button class="chip" data-command="applejack_feature_set ui.menu.admin off">admin tab off</button>
-              <button class="chip" data-command="applejack_feature_set ui.menu.devmenu on">dev menu on</button>
-              <button class="chip" data-command="applejack_feature_set ui.menu.devmenu off">dev menu off</button>
-            </div>
-            <p class="muted small" style="margin-top:12px">
-              Output lands in the Dispatch console. Every one of these is a
-              <code>ConVarFlags.Admin</code> command the host console already accepts, so nothing
-              here needs a gamemode change.
-            </p>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2>Engine</h2>
-          <div class="body">
-            <div class="chips">
-              <button class="chip" data-command="status">status</button>
-              <button class="chip" data-command="find applejack">find applejack_*</button>
-              <button class="chip" data-command="applejack_dev_doors">doors</button>
-              <button class="chip" data-command="applejack_dev_warrants">warrants</button>
-              <button class="chip" data-command="applejack_dev_vehicle_roster">vehicles</button>
-              <button class="chip" data-command="applejack_dev_evidence">evidence</button>
-            </div>
-            <p class="muted small" style="margin-top:12px">
-              <code>status</code> and <code>find</code> are native engine commands. They work here
-              because the console is a real terminal, and refuse from gamemode code because
-              <code>ConsoleSystem.Run</code> will not run a protected command.
-            </p>
-          </div>
+      <div class="panel">
+        <h2 id="precinct-title">Gamemode commands</h2>
+        <div class="body">
+          <div id="precinct-palette"></div>
+          <p class="muted small" style="margin-top:12px">
+            These come from the active instance's <code>[profile]</code>, not from Cellar. Output
+            lands in the Dispatch console. A gamemode with no profile shows nothing here, which is
+            correct: Cellar does not know what its commands are.
+          </p>
         </div>
       </div>
     </section>

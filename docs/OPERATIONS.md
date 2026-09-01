@@ -35,10 +35,17 @@ and vice versa.
 | `/healthz` | `200` while the process is up. Liveness. |
 | `/readyz` | `200` once the server is actually serving, `503` before that. Readiness. |
 
-`/readyz` is derived from the log line in `server.ready_pattern`, which defaults
-to AppleJackRP's own `Lobby created - session is joinable` from
-`Code/NetworkBootstrap.cs`. Its body says what it knows, for example
+`/readyz` is derived from a log line: `server.ready_pattern` if the instance
+sets one, otherwise the gamemode's `[profile]`, otherwise AppleJackRP's
+`Lobby created - session is joinable`. Its body says what it knows, for example
 `running, 2 player(s)`.
+
+**A readiness line the gamemode never logs is the failure to look for first.**
+It is indistinguishable from a slow start: the server binds its ports, connects
+to Steam and answers A2S while `/readyz` stays at 503 and Kubernetes kills the
+pod. `GET /api/instances` reports each instance's resolved `ready_pattern`, so
+the answer is one request rather than a guess. See
+[Configuration](CONFIGURATION.md#profile).
 
 This closes a gap the deployment manifest wrote down itself:
 

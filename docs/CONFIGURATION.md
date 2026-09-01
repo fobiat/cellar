@@ -50,7 +50,7 @@ serialisation path, so a config dump or a crash log cannot leak one.
 | `port` | `27015` | Game port. Only meaningful with `direct_connect`. |
 | `query_port` | `27016` | Steam query port. |
 | `gslt` | from env | Steam Game Server Login Token. |
-| `ready_pattern` | `"Lobby created - session is joinable"` | The log line that means "serving". Drives `/readyz`. |
+| `ready_pattern` | from `[profile]` | The log line that means "serving". Drives `/readyz`. Overrides the gamemode profile for this instance only. |
 | `extra_args` | `[]` | Extra arguments appended to the launch line. |
 
 Two deliberate omissions:
@@ -105,6 +105,7 @@ data_dir = "/srv/dev/data/fobiat/applejackrp#local"
 | `server` | required | Exactly the `[server]` table, nested. |
 | `supervisor` | inherits `[supervisor]` | Per-instance override. |
 | `bridge` | inherits `[bridge]` | Per-instance override. |
+| `profile` | inherits `[profile]` | Per-instance override, for the rare config whose instances run different gamemodes. |
 
 The id must match `[a-z0-9][a-z0-9-]{0,31}`. It ends up in a URL query value, a
 metrics label, a tracing span and a database column, and restricting it once at
@@ -137,6 +138,68 @@ a prefix shares one `wineserver` that jointly holds all their sockets, and
 `wineserver -k` is prefix-scoped, so with one prefix neither instance can be
 dealt with without reaching the other. A prefix needs the Windows .NET 10
 runtime installed into it; `cellar doctor` checks for it.
+
+---
+
+## `[profile]`
+
+What gamemode this Cellar is running, described by the gamemode rather than
+assumed by Cellar. Four things used to be hardcoded to AppleJackRP: the
+readiness line, the log category heuristic, a `cellar doctor` check that grepped
+one C# file by path, and thirteen command buttons in the web UI. All four come
+from here now.
+
+```toml
+profile_file = "profiles/applejackrp.toml"
+```
+
+or inline:
+
+```toml
+[profile]
+name = "AppleJackRP"
+ready_pattern = "Lobby created - session is joinable"
+convar_prefix = "applejack"
+
+[[profile.command]]
+group = "features"
+label = "List features"
+command = "applejack_features"
+
+[[profile.check]]
+name = "spawn validation"
+file = "Code/Characters/CharacterDirector.cs"
+contains = ["GroundedOrAuthored", "Scene.Trace"]
+reason = "players spawn inside geometry without it"
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `name` | unset | Shown in the UI. Nothing routes on it. |
+| `ready_pattern` | AppleJackRP's line | The log line that means "serving". A substring match, not a regex. |
+| `convar_prefix` | unset | The prefix this gamemode's convars share. Drives the log category filter. |
+| `command` | `[]` | Array of tables: `label`, `command`, optional `group`, optional `confirm`. Becomes the Precinct palette. |
+| `check` | `[]` | Array of tables: `name`, `file`, `contains`, `reason`. Becomes `cellar doctor` checks named `gamemode: <name>`. |
+
+`profile_file` is read relative to the config file's own directory, and a config
+may set it or `[profile]`, not both. Six shipped AppleJackRP configs point at
+one file rather than each carrying a copy, and a gamemode is welcome to ship a
+profile next to its `.sbproj`.
+
+**The readiness line is the field that matters.** `facepunch.sandbox` never logs
+AppleJackRP's line, so before profiles existed it sat at `starting` and returned
+503 from `/readyz` forever against a server that was bound, Steam-connected and
+answering A2S. In Kubernetes that configuration never passes readiness and the
+pod is killed and retried. `configs/profiles/facepunch-sandbox.toml` records
+what that gamemode actually logs, measured rather than guessed.
+
+**A check path is relative and may not climb out of the project directory.** A
+config file is not a licence to read arbitrary host files back through `cellar
+doctor`'s output; `validate()` refuses an absolute path or a `..` component.
+
+**What this must not become:** an install script, a config-rewrite language, or
+per-gamemode UI layout. A profile describes a gamemode. It does not configure
+one.
 
 ---
 

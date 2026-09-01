@@ -324,6 +324,27 @@ mod tests {
         assert!(offenders.is_empty(), "hardcoded colours: {offenders:?}");
     }
 
+    /// The UI half of the AppleJackRP coupling, pinned.
+    ///
+    /// The Precinct tab was thirteen `data-command="applejack_*"` buttons in
+    /// markup, so every other gamemode's operator got a panel of commands their
+    /// server would reject. They come from `[[profile.command]]` now, and the
+    /// only `applejack` left anywhere in the assets should be prose explaining
+    /// that it is an example.
+    #[test]
+    fn the_page_hardcodes_no_gamemode_commands() {
+        let offenders: Vec<&str> = HTML
+            .lines()
+            .chain(JS.lines())
+            .filter(|line| line.contains("applejack_"))
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "a gamemode's commands belong in its profile, not in the assets: {offenders:?}"
+        );
+    }
+
     #[test]
     fn the_page_loads_nothing_from_the_network() {
         // A dashboard for a server that is down must not need a CDN to render.

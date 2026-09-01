@@ -28,6 +28,7 @@ fn config(log_file: PathBuf, extra: &[&str]) -> Instance {
         scope: "test".to_owned(),
         enabled: true,
         required: true,
+        profile: Default::default(),
         server: ServerConfig {
             executable: PathBuf::from(FAKE_SERVER),
             project: PathBuf::from("/tmp/applejackrp.sbproj"),
@@ -36,7 +37,7 @@ fn config(log_file: PathBuf, extra: &[&str]) -> Instance {
             hostname: "AppleJackRP Dev".to_owned(),
             port: 27015,
             query_port: 27016,
-            ready_pattern: cellar_core::grammar::DEFAULT_READY_PATTERN.to_owned(),
+            ready_pattern: Some(cellar_core::grammar::DEFAULT_READY_PATTERN.to_owned()),
             extra_args: {
                 let mut args = vec!["--log-file".to_owned(), log_file.display().to_string()];
                 args.extend(extra.iter().map(|s| (*s).to_owned()));

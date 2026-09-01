@@ -4,6 +4,8 @@
 # engine and runtime paths when the project is not under the default Windows
 # workspace. Sync the checkout to the external runtime directory before use.
 
+profile_file = "profiles/applejackrp.toml"
+
 [server]
 executable = 'C:\AppleJackServer\sbox\sbox-server.exe'
 project = 'C:\AppleJackServer\applejackrp-runtime\applejackrp.sbproj'

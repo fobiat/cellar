@@ -45,12 +45,36 @@ direct_connect = false
 port = 27015
 query_port = 27016
 
-# The log line that means "serving". Set this to the readiness signal emitted
-# by the game when it has finished loading.
-ready_pattern = "Lobby created - session is joinable"
+# The log line that means "serving". Usually left to the gamemode's [profile]
+# below; set it here only to override the profile for this one instance.
+# ready_pattern = "Lobby created - session is joinable"
 
 # Note: no maxplayers. The engine has no such convar or launch switch; the real
 # ceiling is the project's Metadata.MaxPlayers.
+
+# What gamemode this is, described by the gamemode rather than assumed by
+# Cellar: the readiness line, the convar prefix the log filter groups by, the
+# command palette, and the doctor checks. Point `profile_file` at a file instead
+# to share one profile across several configs.
+#
+# A gamemode that never logs the readiness line below sits at `starting` and
+# returns 503 from /readyz forever while serving perfectly well. That is the
+# single most expensive thing to get wrong here.
+[profile]
+name = "AppleJackRP"
+ready_pattern = "Lobby created - session is joinable"
+convar_prefix = "applejack"
+
+[[profile.command]]
+group = "features"
+label = "List features"
+command = "applejack_features"
+
+[[profile.check]]
+name = "spawn validation"
+file = "Code/Characters/CharacterDirector.cs"
+contains = ["GroundedOrAuthored", "Scene.Trace"]
+reason = "players spawn inside geometry without it"
 
 [supervisor]
 # never | always | on_failure

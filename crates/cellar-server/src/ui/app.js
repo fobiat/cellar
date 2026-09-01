@@ -96,6 +96,27 @@ async function api(path, options) {
   return body;
 }
 
+/* Which instance the dashboard is looking at.
+ *
+ * `null` means the primary, which is what every route already defaults to when
+ * `?instance=` is absent, so a single-server config never sends the parameter
+ * and its access log stays as it was. */
+let selectedInstance = null;
+
+function instanceId() {
+  return selectedInstance;
+}
+
+/* Append `?instance=` when one is selected. Every call that is about a
+ * particular server goes through this rather than building the query inline,
+ * so making a new route instance-aware is one call site rather than a search
+ * for string concatenation. */
+function forInstance(path) {
+  const id = instanceId();
+  if (!id) return path;
+  return path + (path.includes("?") ? "&" : "?") + "instance=" + encodeURIComponent(id);
+}
+
 function alertsEnabled() {
   return localStorage.getItem("cellar.alerts") === "on";
 }
@@ -160,7 +181,61 @@ const TAB_LOADERS = {
   settings: { what: "settings", into: "#settings", run: () => loadSettings() },
   monitoring: { what: "status", into: null, run: () => refreshStatus() },
   configs: { what: "profiles", into: "#config-list", run: () => loadConfigs() },
+  precinct: { what: "the gamemode palette", into: "#precinct-palette", run: () => loadPalette() },
 };
+
+/* ---- the gamemode command palette --------------------------------------- */
+
+/* Was thirteen buttons in index.html naming one gamemode's convars. The
+ * gamemode declares them now, so a server Cellar has never heard of gets a
+ * palette, and AppleJackRP's lives in AppleJackRP's profile. */
+async function loadPalette() {
+  const data = await api("/api/instances");
+  const target = $("#precinct-palette");
+  target.replaceChildren();
+
+  const wanted = instanceId() || data.primary;
+  const current = (data.instances || []).find((entry) => entry.id === wanted)
+    || (data.instances || [])[0];
+  const profile = (current && current.profile) || {};
+  const commands = profile.command || [];
+
+  $("#precinct-title").textContent = profile.name
+    ? `${profile.name} commands`
+    : "Gamemode commands";
+
+  if (!commands.length) {
+    target.append(el("p", "muted",
+      "This gamemode's profile declares no commands. Add [[command]] entries to it, or type "
+      + "into the Dispatch console."));
+    return;
+  }
+
+  /* Ungrouped entries sort last rather than first: a profile that groups some
+   * of its commands and not others is saying the rest are miscellaneous. */
+  const groups = new Map();
+  for (const entry of commands) {
+    const key = entry.group || "";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(entry);
+  }
+  const ordered = [...groups.keys()].sort((a, b) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b)));
+
+  for (const name of ordered) {
+    if (name) target.append(el("h3", "muted small", name));
+    const row = el("div", "chips");
+    for (const entry of groups.get(name)) {
+      const button = el("button", "chip", entry.label);
+      button.title = entry.command;
+      button.onclick = () => {
+        if (entry.confirm && !confirm(`Run ${entry.command}?`)) return;
+        runCommand(entry.command);
+      };
+      row.append(button);
+    }
+    target.append(row);
+  }
+}
 
 /* ---- access ------------------------------------------------------------- */
 

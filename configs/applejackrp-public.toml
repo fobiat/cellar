@@ -2,6 +2,8 @@
 # This profile runs the published package and advertises its map to the lobby.
 # It does not read or write the AppleJackRP checkout.
 
+profile_file = "profiles/applejackrp.toml"
+
 [server]
 executable = 'C:\AppleJackServer\sbox\sbox-server.exe'
 game = "fobiat.applejackrp"

@@ -1,0 +1,27 @@
+# Facepunch's own Sandbox gamemode.
+#
+# The second profile exists to prove the first one generalises. It is four
+# lines, and three of them are the point: a gamemode Cellar knows nothing about
+# needs no code change.
+
+name = "Facepunch Sandbox"
+
+# Measured, not guessed. Running facepunch.sandbox on the Arch box under Wine on
+# 2026-09-01, `Connected to Steam` is the **last line the engine ever logs**:
+# nothing follows it, ten minutes later, on either the log file or the console.
+# The server is serving at that point, confirmed by A2S_INFO answering on the
+# query port with the configured hostname and a 32 player cap.
+#
+# So this is the honest readiness signal for this gamemode, and it is earlier
+# than AppleJackRP's: it means "discoverable", not "a session is joinable".
+ready_pattern = "Connected to Steam"
+
+convar_prefix = "sbox"
+
+[[command]]
+label = "Find sbox_*"
+command = "find sbox"
+
+[[command]]
+label = "List players"
+command = "status"

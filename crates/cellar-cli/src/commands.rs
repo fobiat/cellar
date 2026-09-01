@@ -126,7 +126,7 @@ pub async fn doctor(path: &Path) -> Result<()> {
             println!("  note  {}: declared but not enabled", instance.id);
             continue;
         }
-        check_one_server(&instance.server, instance.bridge.enabled, &name, &mut check);
+        check_one_server(instance, &name, &mut check);
     }
 
     if config.database.enabled {
@@ -278,15 +278,70 @@ pub async fn doctor(path: &Path) -> Result<()> {
     }
 }
 
+/// Assertions the gamemode's own profile asked for.
+///
+/// This used to be one hardcoded check that grepped AppleJackRP's
+/// `Code/Characters/CharacterDirector.cs` for two identifiers. It is now
+/// whatever `[[profile.check]]` declares, so a gamemode Cellar has never heard
+/// of gets the same treatment, and AppleJackRP's check lives in AppleJackRP's
+/// profile where somebody who changes that file will find it.
+fn check_profile(
+    instance: &cellar_core::config::Instance,
+    name: &impl Fn(&str) -> String,
+    check: &mut impl FnMut(bool, &str, String),
+) {
+    // Relative to the project directory, which is where the check it replaced
+    // looked. A published-package instance has no source tree to assert about,
+    // so its checks are skipped rather than failed.
+    let Some(root) = instance.server.project.parent() else {
+        return;
+    };
+    if instance.server.project.as_os_str().is_empty() {
+        return;
+    }
+
+    for declared in &instance.profile.checks {
+        let path = root.join(&declared.file);
+        let text = std::fs::read_to_string(&path);
+        let passed = text
+            .as_ref()
+            .map(|body| declared.contains.iter().all(|needle| body.contains(needle)))
+            .unwrap_or(false);
+
+        check(
+            passed,
+            &name(&format!("gamemode: {}", declared.name)),
+            if passed {
+                format!("{}", path.display())
+            } else if text.is_err() {
+                format!("{} is unreadable. {}", path.display(), declared.reason)
+            } else {
+                format!(
+                    "{} does not contain {}. {}",
+                    path.display(),
+                    declared
+                        .contains
+                        .iter()
+                        .map(|needle| format!("'{needle}'"))
+                        .collect::<Vec<_>>()
+                        .join(" and "),
+                    declared.reason
+                )
+            },
+        );
+    }
+}
+
 /// The checks that are about one supervised server rather than about the host.
 ///
 /// Split out so a config with several instances runs them once per instance.
 fn check_one_server(
-    server: &cellar_core::config::ServerConfig,
-    bridge_enabled: bool,
+    instance: &cellar_core::config::Instance,
     name: &impl Fn(&str) -> String,
     check: &mut impl FnMut(bool, &str, String),
 ) {
+    let server = &instance.server;
+    let bridge_enabled = instance.bridge.enabled;
     let executable = &server.executable;
     check(
         executable.exists(),
@@ -341,20 +396,7 @@ fn check_one_server(
         );
     }
 
-    let spawn_source = server
-        .project
-        .parent()
-        .map(|path| path.join("Code/Characters/CharacterDirector.cs"));
-    if let Some(path) = spawn_source {
-        let grounded = std::fs::read_to_string(&path)
-            .map(|text| text.contains("GroundedOrAuthored") && text.contains("Scene.Trace"))
-            .unwrap_or(false);
-        check(
-            grounded,
-            &name("spawn validation"),
-            format!("{}", path.display()),
-        );
-    }
+    check_profile(instance, name, check);
 
     if let Some(dir) = &server.data_dir {
         match server.data_dir_mode_mismatch() {

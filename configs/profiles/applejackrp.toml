@@ -1,0 +1,82 @@
+# The AppleJackRP gamemode, as Cellar sees it.
+#
+# Referenced by profile_file from every applejackrp*.toml in the directory
+# above, so a change to the readiness line or the palette is one edit rather
+# than six. A gamemode is welcome to ship a file like this next to its .sbproj
+# instead; nothing here is Cellar-specific except the field names.
+
+name = "AppleJackRP"
+
+# Code/NetworkBootstrap.cs logs this once the lobby exists and the session will
+# accept joins. It was Cellar's hardcoded default until 2026-09-01, which is why
+# facepunch.sandbox sat at 503 forever.
+ready_pattern = "Lobby created - session is joinable"
+
+convar_prefix = "applejack"
+
+[[command]]
+group = "features"
+label = "List features"
+command = "applejack_features"
+
+[[command]]
+group = "features"
+label = "List settings"
+command = "applejack_settings"
+
+[[command]]
+group = "features"
+label = "Storage report"
+command = "applejack_storage"
+
+[[command]]
+group = "features"
+label = "Find applejack_*"
+command = "find applejack"
+
+[[command]]
+group = "menus"
+label = "Admin tab on"
+command = "applejack_feature_set ui.menu.admin on"
+
+[[command]]
+group = "menus"
+label = "Admin tab off"
+command = "applejack_feature_set ui.menu.admin off"
+
+[[command]]
+group = "menus"
+label = "Dev menu on"
+command = "applejack_feature_set ui.menu.devmenu on"
+
+[[command]]
+group = "menus"
+label = "Dev menu off"
+command = "applejack_feature_set ui.menu.devmenu off"
+
+[[command]]
+group = "inspect"
+label = "Doors"
+command = "applejack_dev_doors"
+
+[[command]]
+group = "inspect"
+label = "Warrants"
+command = "applejack_dev_warrants"
+
+[[command]]
+group = "inspect"
+label = "Vehicle roster"
+command = "applejack_dev_vehicle_roster"
+
+[[command]]
+group = "inspect"
+label = "Evidence"
+command = "applejack_dev_evidence"
+
+# Was doctor check 6, hardcoded in commands.rs against this exact path.
+[[check]]
+name = "spawn validation"
+file = "Code/Characters/CharacterDirector.cs"
+contains = ["GroundedOrAuthored", "Scene.Trace"]
+reason = "players spawn inside geometry without it"

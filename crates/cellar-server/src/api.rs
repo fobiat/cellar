@@ -321,6 +321,7 @@ async fn external_status(
 async fn external_logs(
     State(state): State<Arc<AppState>>,
     _: ExternalApi,
+    target: Target,
     query: Query<LogsQuery>,
 ) -> Response {
     logs(
@@ -328,6 +329,7 @@ async fn external_logs(
         Operator {
             name: "api".to_owned(),
         },
+        target,
         query,
     )
     .await
@@ -947,11 +949,12 @@ struct LogsQuery {
 /// Scan current and rotated engine logs. The files are the persistent source,
 /// so search remains useful after Cellar or the browser restarts.
 async fn logs(
-    State(state): State<Arc<AppState>>,
-    _: Operator,
+    _: State<Arc<AppState>>,
+    _operator: Operator,
+    target: Target,
     Query(query): Query<LogsQuery>,
 ) -> Response {
-    let Some(path) = state.log_file() else {
+    let Some(path) = target.descriptor.log_file.as_deref() else {
         return Json(serde_json::json!({
             "lines": [], "matched": 0, "scanned_files": 0, "scanned_lines": 0,
             "persistent": false
@@ -960,6 +963,7 @@ async fn logs(
     };
     let result = crate::logs::search(
         path,
+        &target.descriptor.profile,
         &crate::logs::Query {
             text: query.q.filter(|value| !value.trim().is_empty()),
             tag: query.tag.filter(|value| !value.trim().is_empty()),
@@ -1710,6 +1714,7 @@ async fn instances(State(state): State<Arc<AppState>>, _: Operator) -> Response 
             "running": entry.handle.is_some(),
             "unavailable": entry.unavailable,
             "server": entry.descriptor,
+            "profile": entry.descriptor.profile,
         })).collect::<Vec<_>>(),
     }))
     .into_response()

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::grammar::DEFAULT_READY_PATTERN;
 use crate::lifecycle::{BackoffPolicy, RestartPolicy};
+use crate::profile::GamemodeProfile;
 use crate::secret::Secret;
 
 /// Everything Cellar needs to run.
@@ -51,6 +52,24 @@ pub struct Config {
     pub backup: BackupConfig,
     #[serde(default)]
     pub release: ReleaseConfig,
+
+    /// What gamemode every instance runs, unless one overrides it.
+    ///
+    /// Process-wide rather than per-instance by default because the case this
+    /// exists for is a development and a published instance of the *same*
+    /// gamemode: repeating the profile in both would be two places to forget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<GamemodeProfile>,
+
+    /// Read `[profile]` out of this file instead, relative to this config.
+    ///
+    /// Six shipped AppleJackRP profiles differ only in platform and mode, and a
+    /// gamemode's readiness line is the same in all of them. Inlining it would
+    /// be six copies of one fact, which is six chances for five of them to go
+    /// stale. It also lets a gamemode ship its own profile next to its
+    /// `.sbproj`, which is the arrangement this design is for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_file: Option<PathBuf>,
 }
 
 /// The id a legacy `[server]` table desugars to.
@@ -140,6 +159,11 @@ pub struct InstanceConfig {
     pub supervisor: Option<SupervisorConfig>,
     #[serde(default)]
     pub bridge: Option<BridgeConfig>,
+
+    /// Overrides the process-wide `[profile]`, for the rare config whose two
+    /// instances run different gamemodes.
+    #[serde(default)]
+    pub profile: Option<GamemodeProfile>,
 }
 
 const fn yes() -> bool {
@@ -157,6 +181,29 @@ pub struct Instance {
     pub server: ServerConfig,
     pub supervisor: SupervisorConfig,
     pub bridge: BridgeConfig,
+    pub profile: GamemodeProfile,
+}
+
+impl Instance {
+    /// The line that means this instance is serving.
+    ///
+    /// `server.ready_pattern` wins because it is the narrower statement, then
+    /// the profile, then AppleJackRP's line. That last fallback is not a
+    /// default anybody should rely on; it is there because nine shipped configs
+    /// and a Kubernetes ConfigMap depend on it and a silent change of readiness
+    /// semantics is how a healthy deployment starts failing `/readyz`.
+    pub fn ready_pattern(&self) -> &str {
+        self.server
+            .ready_pattern
+            .as_deref()
+            .or(self.profile.ready_pattern.as_deref())
+            .unwrap_or(DEFAULT_READY_PATTERN)
+    }
+
+    /// The prefix this instance's gamemode convars share, if it declared one.
+    pub fn convar_prefix(&self) -> Option<&str> {
+        self.profile.convar_prefix.as_deref()
+    }
 }
 
 /// What Cellar is allowed to do about a new version.
@@ -302,9 +349,16 @@ pub struct ServerConfig {
     #[serde(default = "default_query_port")]
     pub query_port: u16,
 
-    /// Log line that means "serving". See `grammar::DEFAULT_READY_PATTERN`.
-    #[serde(default = "default_ready_pattern")]
-    pub ready_pattern: String,
+    /// Log line that means "serving", overriding whatever the gamemode profile
+    /// says. Unset falls back to `[profile]` and then to
+    /// `grammar::DEFAULT_READY_PATTERN`; read it through
+    /// [`Instance::ready_pattern`] rather than here.
+    ///
+    /// An `Option` rather than a defaulted `String` so that `ready_pattern = ""`
+    /// stays meaningful: it is how an operator says this server has no readiness
+    /// signal at all, and a defaulted field cannot tell that from silence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready_pattern: Option<String>,
 
     /// Extra launch arguments, appended verbatim.
     #[serde(default)]
@@ -336,7 +390,7 @@ impl Default for ServerConfig {
             direct_connect: false,
             port: default_port(),
             query_port: default_query_port(),
-            ready_pattern: default_ready_pattern(),
+            ready_pattern: None,
             extra_args: Vec::new(),
             data_dir: None,
         }
@@ -799,10 +853,6 @@ fn default_query_port() -> u16 {
     27016
 }
 
-fn default_ready_pattern() -> String {
-    DEFAULT_READY_PATTERN.to_owned()
-}
-
 /// Why a config was refused.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -834,15 +884,65 @@ impl Config {
             source,
         })?;
 
-        let mut config: Config = toml::from_str(&text).map_err(|source| ConfigError::Parse {
-            path: path.to_owned(),
-            source: Box::new(source),
-        })?;
+        let mut config = Self::parse_at(&text, path)?;
 
         config.overlay_env();
         config.overlay_database_url_file()?;
         config.validate()?;
         Ok(config)
+    }
+
+    /// Parse config text as if it had been read from `path`, and resolve
+    /// `profile_file` against it.
+    ///
+    /// Split out from [`Config::load`] because a plain `toml::from_str` leaves
+    /// `profile_file` unresolved, which reads as "this config has no profile"
+    /// and is exactly the mistake a test over the shipped profiles exists to
+    /// catch. Anything that parses a config without going through here gets a
+    /// half-loaded one.
+    pub fn parse_at(text: &str, path: &std::path::Path) -> Result<Self, ConfigError> {
+        let mut config: Config = toml::from_str(text).map_err(|source| ConfigError::Parse {
+            path: path.to_owned(),
+            source: Box::new(source),
+        })?;
+        config.load_profile_file(path)?;
+        Ok(config)
+    }
+
+    /// Resolve `profile_file` into `profile`.
+    ///
+    /// Relative to the config file's own directory, not the process working
+    /// directory: a config is started from a service unit, a shell and a
+    /// container with three different working directories, and a path that
+    /// means something different in each is a path that works until it does not.
+    fn load_profile_file(&mut self, config_path: &std::path::Path) -> Result<(), ConfigError> {
+        let Some(relative) = self.profile_file.clone() else {
+            return Ok(());
+        };
+        if self.profile.is_some() {
+            return Err(ConfigError::Invalid(
+                "a config may set [profile] or profile_file, not both: the two would disagree \
+                 about which gamemode is being described"
+                    .into(),
+            ));
+        }
+
+        let path = match config_path.parent() {
+            Some(dir) => dir.join(&relative),
+            None => relative,
+        };
+        let text = std::fs::read_to_string(&path).map_err(|source| ConfigError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        let profile: GamemodeProfile =
+            toml::from_str(&text).map_err(|source| ConfigError::Parse {
+                path,
+                source: Box::new(source),
+            })?;
+
+        self.profile = Some(profile);
+        Ok(())
     }
 
     /// Which server's data this is, for the bridge's `scope` column and the
@@ -882,6 +982,11 @@ impl Config {
                         .bridge
                         .clone()
                         .unwrap_or_else(|| self.bridge.clone()),
+                    profile: declared
+                        .profile
+                        .clone()
+                        .or_else(|| self.profile.clone())
+                        .unwrap_or_default(),
                 })
                 .collect();
         }
@@ -900,6 +1005,7 @@ impl Config {
             server: server.clone(),
             supervisor: self.supervisor.clone(),
             bridge: self.bridge.clone(),
+            profile: self.profile.clone().unwrap_or_default(),
         }]
     }
 
@@ -996,6 +1102,9 @@ impl Config {
 
         for instance in &instances {
             validate_server(&instance.id, &instance.server)?;
+            instance.profile.validate().map_err(|why| {
+                ConfigError::Invalid(format!("instance '{}': {why}", instance.id))
+            })?;
         }
 
         if self.backup.enabled {
@@ -1412,10 +1521,12 @@ mod tests {
                 direct_connect: false,
                 port: default_port(),
                 query_port: default_query_port(),
-                ready_pattern: default_ready_pattern(),
+                ready_pattern: None,
                 extra_args: Vec::new(),
                 data_dir: None,
             }),
+            profile: None,
+            profile_file: None,
             supervisor: SupervisorConfig::default(),
             bridge: BridgeConfig::default(),
             database: DatabaseConfig::default(),
@@ -1558,6 +1669,106 @@ mod tests {
         }
     }
 
+    /// The defect the gamemode profile was written for, pinned.
+    ///
+    /// `facepunch.sandbox` never logs `Lobby created - session is joinable`, so
+    /// with AppleJackRP's line as the fallback it sat at `starting` and returned
+    /// 503 from `/readyz` against a server that was bound, Steam-connected and
+    /// answering A2S. In Kubernetes that configuration never passes readiness.
+    #[test]
+    fn every_shipped_profile_resolves_a_ready_pattern_its_gamemode_actually_logs() {
+        for (name, config) in shipped_profiles() {
+            for instance in config.instances() {
+                let pattern = instance.ready_pattern();
+                assert!(
+                    !pattern.is_empty(),
+                    "{name}/{}: no readiness line at all",
+                    instance.id
+                );
+
+                let published = instance.server.game.as_deref().unwrap_or_default();
+                if published.starts_with("facepunch.") {
+                    assert_eq!(
+                        pattern, "Connected to Steam",
+                        "{name}/{}: a Facepunch gamemode never logs AppleJackRP's line",
+                        instance.id
+                    );
+                } else {
+                    assert_eq!(pattern, DEFAULT_READY_PATTERN, "{name}/{}", instance.id);
+                }
+            }
+        }
+    }
+
+    /// Six AppleJackRP configs point at one profile file, so this asserts the
+    /// link resolves rather than silently reading as "no profile".
+    #[test]
+    fn a_profile_file_is_read_relative_to_the_config_that_names_it() {
+        let linked = shipped_profiles()
+            .into_iter()
+            .filter(|(name, _)| name.starts_with("applejackrp"))
+            .collect::<Vec<_>>();
+        assert!(linked.len() >= 6, "only {} linked configs", linked.len());
+
+        for (name, config) in linked {
+            let profile = config
+                .profile
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name}: profile_file did not resolve into a profile"));
+            assert_eq!(
+                profile.convar_prefix.as_deref(),
+                Some("applejack"),
+                "{name}"
+            );
+            assert!(!profile.commands.is_empty(), "{name}: no palette");
+            assert!(!profile.checks.is_empty(), "{name}: no doctor checks");
+            profile
+                .validate()
+                .unwrap_or_else(|why| panic!("{name}: {why}"));
+        }
+    }
+
+    #[test]
+    fn a_config_may_not_set_both_a_profile_and_a_profile_file() {
+        let refused = Config::parse_at(
+            "profile_file = \"nowhere.toml\"\n[profile]\nname = \"x\"\n[server]\nexecutable = \
+             \"/x\"\nproject = \"/x.sbproj\"\n",
+            std::path::Path::new("/tmp/cellar.toml"),
+        );
+        let why = refused.expect_err("refused").to_string();
+        assert!(why.contains("not both"), "{why}");
+    }
+
+    /// A `server.ready_pattern` is the narrower statement and has to win, or an
+    /// operator who overrode it for one instance would find the profile quietly
+    /// putting it back.
+    #[test]
+    fn a_server_ready_pattern_overrides_the_profile() {
+        let mut config = minimal();
+        config.profile = Some(GamemodeProfile {
+            ready_pattern: Some("from the profile".to_owned()),
+            ..GamemodeProfile::default()
+        });
+        assert_eq!(
+            config.primary().unwrap().ready_pattern(),
+            "from the profile"
+        );
+
+        config.server.as_mut().unwrap().ready_pattern = Some("from the server".to_owned());
+        assert_eq!(config.primary().unwrap().ready_pattern(), "from the server");
+    }
+
+    /// An empty string is a real answer, not an absent one: it is how an
+    /// operator says this gamemode has no readiness signal. A defaulted
+    /// `String` could not tell the two apart, which is why the field is an
+    /// `Option`.
+    #[test]
+    fn an_explicitly_empty_ready_pattern_is_not_the_fallback() {
+        let mut config = minimal();
+        config.server.as_mut().unwrap().ready_pattern = Some(String::new());
+        assert_eq!(config.primary().unwrap().ready_pattern(), "");
+    }
+
     /// Every profile that ships, parsed. Reading the files is the only way to
     /// catch a mistake in one: nothing else in the workspace loads them.
     fn shipped_profiles() -> Vec<(String, Config)> {
@@ -1570,12 +1781,22 @@ mod tests {
             if !name.ends_with(".toml") {
                 continue;
             }
-            sources.push((name, std::fs::read_to_string(&path).unwrap()));
+            sources.push((name, std::fs::read_to_string(&path).unwrap(), path));
         }
 
         sources.push((
             "deploy/cellar.toml".to_owned(),
             std::fs::read_to_string(root.join("deploy/cellar.toml")).unwrap(),
+            root.join("deploy/cellar.toml"),
+        ));
+
+        // `install.sh`, `install.ps1` and the container entrypoint all copy this
+        // one into place as an operator's starting config, and until 2026-09-01
+        // nothing in the workspace parsed it.
+        sources.push((
+            "cellar.toml.example".to_owned(),
+            std::fs::read_to_string(root.join("cellar.toml.example")).unwrap(),
+            root.join("cellar.toml.example"),
         ));
 
         // The Kubernetes manifest embeds the same profile as a ConfigMap; pull
@@ -1592,14 +1813,19 @@ mod tests {
             embedded.contains("[server]"),
             "no cellar.toml block found in deploy/kubernetes.yaml"
         );
-        sources.push(("deploy/kubernetes.yaml".to_owned(), embedded));
+        sources.push((
+            "deploy/kubernetes.yaml".to_owned(),
+            embedded,
+            root.join("deploy/kubernetes.yaml"),
+        ));
 
         assert!(sources.len() >= 9, "only {} profiles read", sources.len());
 
         sources
             .into_iter()
-            .map(|(name, text)| {
-                let config = toml::from_str(&text).unwrap_or_else(|why| panic!("{name}: {why}"));
+            .map(|(name, text, path)| {
+                let config =
+                    Config::parse_at(&text, &path).unwrap_or_else(|why| panic!("{name}: {why}"));
                 (name, config)
             })
             .collect()
