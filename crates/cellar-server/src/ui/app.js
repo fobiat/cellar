@@ -1498,18 +1498,31 @@ async function loadConfigs() {
     const profile = profiles.find((candidate) => candidate.mode === mode);
     const label = mode === "development" ? "Use Development mode" : "Use Published mode";
     const button = el("button", `action ${profile?.active ? "live" : ""}`, profile ? label : `${label} unavailable`);
-    button.disabled = !profile || profile.active;
-    button.title = profile ? `Switch to ${profile.name}` : "Install or copy the matching AppleJackRP profile beside the active config";
+    button.disabled = !profile || profile.active || Boolean(profile.refusal);
+    button.title = !profile
+      ? "Install or copy the matching AppleJackRP profile beside the active config"
+      : profile.refusal || `Switch to ${profile.name}`;
     if (profile) button.onclick = () => activateConfig(profile.name);
     modeActions.append(button);
   }
+
+  /* Refusals are shown next to the profile, not after the click.
+   *
+   * Every one of these is a fact about the file that was knowable before the
+   * operator chose it: a different web bind, a different log path, a second
+   * instance making the whole question ambiguous. Refusing afterwards taught
+   * nothing except that the attempt failed. */
   for (const profile of profiles) {
     const mode = profile.mode === "published" ? "Published" : "Development";
     const targetName = profile.game || profile.project || "local project";
+    const row = el("div", "config-row");
     const button = el("button", `chip ${profile.active ? "live" : ""}`, `${mode} · ${profile.name} · ${targetName}`);
-    button.disabled = profile.active;
+    button.disabled = profile.active || Boolean(profile.refusal);
+    button.title = profile.refusal || profile.path;
     button.onclick = () => activateConfig(profile.name);
-    target.append(button);
+    row.append(button);
+    if (profile.refusal) row.append(el("span", "muted small", profile.refusal));
+    target.append(row);
   }
 }
 

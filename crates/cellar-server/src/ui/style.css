@@ -177,6 +177,15 @@ nav.instances .instance[aria-selected="true"] {
 
 .instance-state { font-size: 12px; }
 
+/* A profile and, when it cannot be switched to, why not. */
+.config-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
 /* ---- the command palette ------------------------------------------------- */
 
 .palette {

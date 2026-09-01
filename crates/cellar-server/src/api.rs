@@ -370,7 +370,8 @@ async fn external_configs(State(state): State<Arc<AppState>>, _: ExternalApi) ->
         return error(StatusCode::SERVICE_UNAVAILABLE, "no config file is active");
     };
     let active = state.config_path.lock().ok().and_then(|path| path.clone());
-    let profiles = crate::config_manager::list(&directory, active.as_deref())
+    let running = running_shape(&state);
+    let profiles = crate::config_manager::list(&directory, active.as_deref(), Some(&running))
         .await
         .into_iter()
         .map(|profile| {
@@ -383,6 +384,9 @@ async fn external_configs(State(state): State<Arc<AppState>>, _: ExternalApi) ->
                 "active": profile.active,
                 "game": profile.game,
                 "map": profile.map,
+                // The boolean, not the reason: a refusal names host paths and
+                // listener addresses, which is exactly what this route trims.
+                "switchable": profile.refusal.is_none(),
             })
         })
         .collect::<Vec<_>>();
@@ -1013,10 +1017,25 @@ async fn configs(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         return error(StatusCode::SERVICE_UNAVAILABLE, "no config file is active");
     };
     let active = state.config_path.lock().ok().and_then(|path| path.clone());
+    let running = running_shape(&state);
     Json(serde_json::json!({
-        "profiles": crate::config_manager::list(&directory, active.as_deref()).await
+        "profiles":
+            crate::config_manager::list(&directory, active.as_deref(), Some(&running)).await
     }))
     .into_response()
+}
+
+/// What the running process is, for the switchability rules.
+fn running_shape(state: &AppState) -> crate::config_manager::Running<'_> {
+    crate::config_manager::Running {
+        web_bind: &state.web_bind,
+        web_enabled: state.web_enabled,
+        bridge_bind: state.bridge_bind(),
+        bridge_enabled: state.bridge_enabled(),
+        log_file: state.log_file(),
+        instances: state.instances.len(),
+        supervised: state.supervisor.is_some(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -1040,41 +1059,11 @@ async fn activate_config(
         Ok(config) => config,
         Err(why) => return error(StatusCode::BAD_REQUEST, why),
     };
-    if config.web.bind != state.web_bind
-        || config.web.enabled != state.web_enabled
-        || Some(config.bridge.bind.as_str()) != state.bridge_bind()
-        || config.bridge.enabled != state.bridge_enabled()
-    {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "profiles may change the supervised server, but not Cellar listener bindings",
-        );
-    }
-    let current_log = state.log_file();
-    let candidate_log = config
-        .primary_server()
-        .unwrap_or_default()
-        .engine_log_file();
-    if current_log != Some(candidate_log.as_path()) {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "profiles must use the active server log path",
-        );
-    }
-    // Profile switching describes a whole process, so with several instances
-    // declared it no longer has a meaning: the candidate names one server and
-    // the process is running two. Multi-instance largely replaces this anyway,
-    // with configs/ becoming a library of instance definitions rather than a
-    // set of whole-process modes.
-    if state.instances.len() > 1 {
-        return error(
-            StatusCode::CONFLICT,
-            format!(
-                "this process supervises {} instances, so switching the whole profile is \
-                 ambiguous. Stop and start an instance instead.",
-                state.instances.len()
-            ),
-        );
+    // The same function `/api/configs` used to disable the button, so the
+    // inline reason and the refusal cannot disagree. They were separate rules
+    // before, which is how a switch could look available and still fail.
+    if let Some(why) = crate::config_manager::switch_refusal(&config, &running_shape(&state)) {
+        return error(StatusCode::BAD_REQUEST, why);
     }
 
     let Some(candidate) = config.primary() else {
