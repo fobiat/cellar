@@ -34,24 +34,100 @@ let serviceWorker = null;
 const toastQueue = [];
 let toastShowing = false;
 
-function showToast(message) {
-  toastQueue.push(String(message));
+function showToast(message, kind) {
+  toastQueue.push({ message: String(message), kind: kind || "info" });
   if (!toastShowing) drainToasts();
 }
 
+/* How long each kind stays. An error is sticky and carries a dismiss button:
+ * an error that disappears after 4.5 seconds while the operator is reading the
+ * console is an error that never happened as far as they know. */
+const TOAST_SECONDS = { info: 4.5, success: 4.5, warn: 9, error: 0 };
+
 function drainToasts() {
   const toast = $("#toast");
-  const message = toastQueue.shift();
-  if (message === undefined) {
+  const next = toastQueue.shift();
+  if (next === undefined) {
     toastShowing = false;
     toast.hidden = true;
     return;
   }
   toastShowing = true;
-  toast.textContent = toastQueue.length ? `${message} (+${toastQueue.length} more)` : message;
+  toast.replaceChildren();
+  toast.append(el("span", null,
+    toastQueue.length ? `${next.message} (+${toastQueue.length} more)` : next.message));
   toast.hidden = false;
   clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(drainToasts, 4500);
+
+  const seconds = TOAST_SECONDS[next.kind] ?? 4.5;
+  if (seconds > 0) {
+    showToast.timer = setTimeout(drainToasts, seconds * 1000);
+    return;
+  }
+  const dismiss = el("button", "chip", "dismiss");
+  dismiss.onclick = drainToasts;
+  toast.append(dismiss);
+}
+
+/* Confirming a destructive action, as a dialog rather than window.confirm.
+ *
+ * `window.confirm` cannot say which server, cannot count who is about to be
+ * disconnected, and cannot ask for the name typed back. Some browsers also let
+ * a user suppress it permanently, which turns "really stop the production
+ * server?" into a silent yes. A native <dialog> brings the focus trap, Escape
+ * and the backdrop with it and needs no library.
+ *
+ * `typed` is the tier-2 guard: pass the string that has to be entered before
+ * Confirm becomes available. Everything else is tier 1, and tier 0 does not
+ * call this at all.
+ */
+function confirmAction({ title, body, typed }) {
+  return new Promise((resolve) => {
+    const dialog = $("#confirm-dialog");
+    const input = $("#confirm-typed");
+    const go = $("#confirm-go");
+    const cancel = $("#confirm-cancel");
+
+    $("#confirm-title").textContent = title;
+    $("#confirm-body").textContent = body || "";
+
+    input.hidden = !typed;
+    input.value = "";
+    input.placeholder = typed ? `type ${typed} to confirm` : "";
+    go.disabled = Boolean(typed);
+    input.oninput = () => { go.disabled = input.value.trim() !== typed; };
+
+    /* Resolved from the buttons and from `cancel`, never from `close`.
+     *
+     * A <form method="dialog"> closes the dialog natively, which reads as the
+     * obvious way to write this, and it is a trap: the `close` event does not
+     * fire in every engine that ships <dialog>. Measured here, in the browser
+     * this was driven in: the dialog closed, `returnValue` was `go`, and
+     * neither an `onclose` property nor an added `close` listener ran, so the
+     * promise hung forever and every confirmed stop silently did nothing.
+     *
+     * `settle` guards against a second resolution, since Escape fires `cancel`
+     * and a click fires its own handler. */
+    let settled = false;
+    const settle = (answer) => {
+      if (settled) return;
+      settled = true;
+      input.oninput = null;
+      go.onclick = null;
+      cancel.onclick = null;
+      dialog.oncancel = null;
+      if (dialog.open) dialog.close();
+      resolve(answer);
+    };
+
+    go.onclick = () => settle(true);
+    cancel.onclick = () => settle(false);
+    // Escape. The one path the browser drives rather than the page.
+    dialog.oncancel = () => settle(false);
+
+    dialog.showModal();
+    (typed ? input : go).focus();
+  });
 }
 
 /* The load-state contract every pane uses.
@@ -71,7 +147,7 @@ async function load(what, node, work) {
     return result;
   } catch (error) {
     const why = error && error.message ? error.message : String(error);
-    showToast(`${what} failed: ${why}`);
+    showToast(`${what} failed: ${why}`, "error");
     if (node) {
       node.setAttribute("data-load-error", why);
       node.replaceChildren(el("p", "notice", `Could not load ${what}: ${why}`));
@@ -222,13 +298,13 @@ function renderAlertButton() {
 
 async function enableAlerts() {
   if (!("Notification" in window)) {
-    showToast("This browser does not support notifications.");
+    showToast("This browser does not support notifications.", "warn");
     return;
   }
 
   const permission = await Notification.requestPermission();
   if (permission !== "granted") {
-    showToast("Alerts are blocked. Allow notifications in browser settings.");
+    showToast("Alerts are blocked. Allow notifications in browser settings.", "warn");
     return;
   }
 
@@ -237,7 +313,7 @@ async function enableAlerts() {
   }
   localStorage.setItem("cellar.alerts", "on");
   renderAlertButton();
-  showToast("Browser alerts enabled for server events.");
+  showToast("Browser alerts enabled for server events.", "success");
 }
 
 function notifyOperator(title, body) {
@@ -294,18 +370,50 @@ function applyRoute() {
 
 /* ---- tabs --------------------------------------------------------------- */
 
-function showTab(name) {
+/* `moveFocus` is false for the initial route and for a hash change, because
+ * stealing focus on page load is its own accessibility problem. It is true
+ * when the operator picked the tab, which is when they want to be there. */
+function showTab(name, moveFocus) {
   activeTab = name;
   writeRoute();
   document.querySelectorAll("nav.tabs button").forEach((button) => {
-    button.setAttribute("aria-selected", String(button.dataset.tab === name));
+    const selected = button.dataset.tab === name;
+    button.setAttribute("aria-selected", String(selected));
+    /* Roving tabindex: the tablist is one stop, and Left/Right move within it.
+     * Eleven separate tab stops before the content is why a keyboard user
+     * would never reach the console. */
+    button.tabIndex = selected ? 0 : -1;
   });
   document.querySelectorAll("main section").forEach((section) => {
     section.hidden = section.id !== `tab-${name}`;
   });
 
+  if (moveFocus) $(`#tab-${name}`)?.focus();
+
   const pane = TAB_LOADERS[name];
   if (pane) load(pane.what, $(pane.into), pane.run);
+}
+
+/* Left, Right, Home and End inside the tab bar, per the WAI-ARIA tabs pattern.
+ * Without it the bar is a row of eleven buttons a keyboard user tabs through
+ * one at a time to reach anything. */
+function tablistKey(event) {
+  const buttons = [...document.querySelectorAll("nav.tabs button")];
+  const here = buttons.indexOf(event.currentTarget);
+  if (here < 0) return;
+
+  const next = {
+    ArrowLeft: here - 1,
+    ArrowRight: here + 1,
+    Home: 0,
+    End: buttons.length - 1,
+  }[event.key];
+  if (next === undefined) return;
+
+  event.preventDefault();
+  const wrapped = (next + buttons.length) % buttons.length;
+  showTab(buttons[wrapped].dataset.tab);
+  buttons[wrapped].focus();
 }
 
 /* What each tab loads, where a failure goes, and what to call the thing in the
@@ -487,8 +595,8 @@ async function loadPalette() {
     for (const entry of groups.get(name)) {
       const button = el("button", "chip", entry.label);
       button.title = entry.command;
-      button.onclick = () => {
-        if (entry.confirm && !confirm(`Run ${entry.command}?`)) return;
+      button.onclick = async () => {
+        if (entry.confirm && !await confirmAction({ title: `Run ${entry.command}?` })) return;
         runCommand(entry.command);
       };
       row.append(button);
@@ -877,7 +985,6 @@ async function refreshStatus() {
   renderWebAuth(data.web_auth);
   const access = data.access || {};
   setLamp($("#stat-access"), access.invite_only ? "up" : "wait", access.invite_only ? "invite-only" : "public");
-  applyTableTools();
 }
 
 function renderAntiCheat(status) {
@@ -940,11 +1047,20 @@ const tableTools = [
   ["table-search", "tables", "table-sort"],
 ];
 
+/* Filtering and sorting are user actions, not a refresh concern.
+ *
+ * This used to be called from `refreshStatus`, on a two second interval.
+ * `body.append(row)` on a row that is already attached is a remove and an
+ * insert, which blurs anything focused inside it, and the Settings table holds
+ * live inputs: typing a convar value there lost focus twice a second. It is
+ * called from the search and sort controls now, and it still refuses to
+ * reorder a table somebody is typing into. */
 function applyTableTools() {
   for (const [inputId, bodyId, sortId] of tableTools) {
     const input = $("#" + inputId);
     const body = $("#" + bodyId);
     if (!input || !body) continue;
+    if (body.contains(document.activeElement)) continue;
     const query = input.value.trim().toLowerCase();
     const rows = [...body.children];
     for (const row of rows) row.hidden = Boolean(query) && !row.textContent.toLowerCase().includes(query);
@@ -974,8 +1090,21 @@ function stateLabel(server) {
   return `${word}, ${describeExit(server.last_exit)}`;
 }
 
+/* The state classes a lamp may hold. Named here so `setLamp` can remove the
+ * old one without knowing which it was.
+ *
+ * It used to assign `className` outright, which was correct for the `#stat-*`
+ * lamps and wrong for `#connection-state`: that element starts as
+ * `connection lamp wait`, so the first WebSocket open dropped `.connection`,
+ * the mobile rule hiding it stopped applying, and the element gained `.value`
+ * at 20px. A phone showed a large "live" label that was designed to be
+ * invisible. */
+const LAMP_STATES = ["up", "down", "wait", "warn", "live"];
+
 function setLamp(node, state, label) {
-  node.className = `value lamp ${state}`;
+  node.classList.add("lamp");
+  node.classList.remove(...LAMP_STATES.filter((other) => other !== state));
+  node.classList.add(state);
   node.textContent = label;
 }
 
@@ -1388,9 +1517,11 @@ async function loadDocuments() {
     const row = el("tr");
     const open = el("button", "chip", "open");
     open.onclick = () => openDocument(document_.key);
+    const remove = el("button", "chip", "delete");
+    remove.onclick = () => deleteDocument(document_.key);
 
     const actions = el("td");
-    actions.append(open);
+    actions.append(open, remove);
 
     row.append(
       el("td", null, text(document_.key)),
@@ -1648,7 +1779,7 @@ function watchForSilentFailures() {
     const at = Date.now();
     if (at - lastComplaint < 10000) return;
     lastComplaint = at;
-    showToast(`Something went wrong: ${why}`);
+    showToast(`Something went wrong: ${why}`, "error");
   };
   window.addEventListener("error", (event) => complain(event.message || "script error"));
   window.addEventListener("unhandledrejection", (event) => {
@@ -1692,7 +1823,7 @@ async function start() {
   if (alertsEnabled() && "serviceWorker" in navigator) {
     navigator.serviceWorker.register("/service-worker.js").then((registration) => {
       serviceWorker = registration;
-    }).catch(() => showToast("Alerts could not be restored."));
+    }).catch(() => showToast("Alerts could not be restored.", "warn"));
   }
 }
 
@@ -1725,7 +1856,11 @@ async function importSettings(apply) {
     $("#settings-import-notice").textContent = "Choose a TOML or YAML settings file first.";
     return;
   }
-  if (apply && !confirm(`Apply settings from ${file.name}?`)) return;
+  if (apply && !await confirmAction({
+    title: `Apply settings from ${file.name}?`,
+    body: "Every convar in the file is set on the running server.",
+    typed: file.name,
+  })) return;
   const response = await fetch(forInstance("/api/settings/import"), {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -1763,7 +1898,7 @@ async function scanLogs() {
   if (category) params.set("category", category);
   const response = await fetch(forInstance(`/api/logs?${params}`));
   const data = await response.json();
-  if (!response.ok) return showToast(text(data.error));
+  if (!response.ok) return showToast(text(data.error), "error");
   consoleRecords = [];
   for (const line of data.lines || []) {
     appendLine(line.level === "error" ? "error" : "", clock(line.at), line.tag, line.message, false, line.level, line.category);
@@ -1821,7 +1956,12 @@ async function loadConfigs() {
 }
 
 async function activateConfig(name) {
-  if (!confirm(`Switch to ${name}? The supervised server will restart.`)) return;
+  const going = await confirmAction({
+    title: `Switch to ${name}?`,
+    body: "The supervised server will restart, and every connected player will be disconnected.",
+    typed: name,
+  });
+  if (!going) return;
   const response = await fetch("/api/configs/activate", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -1834,7 +1974,8 @@ async function activateConfig(name) {
 
 document.addEventListener("DOMContentLoaded", async () => {
   document.querySelectorAll("nav.tabs button").forEach((button) => {
-    button.onclick = () => showTab(button.dataset.tab);
+    button.onclick = () => showTab(button.dataset.tab, true);
+    button.addEventListener("keydown", tablistKey);
   });
 
   $("#login").onsubmit = signIn;
@@ -1900,6 +2041,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   $("#diagnostics-refresh").onclick = () =>
     load("diagnostics", $("#diagnostics-checks"), () => loadDiagnostics());
+  $("#logout").onclick = signOut;
+  $("#cellar-exit").onclick = exitCellar;
   $("#run-query").onclick = runQuery;
   $("#release-build").onclick = () => runRelease("build");
   $("#release-publish").onclick = () => runRelease("publish");
@@ -1998,8 +2141,8 @@ function paletteCandidates() {
       kind: "command",
       label: command.label,
       hint: command.command,
-      run: () => {
-        if (command.confirm && !confirm(`Run ${command.command}?`)) return;
+      run: async () => {
+        if (command.confirm && !await confirmAction({ title: `Run ${command.command}?` })) return;
         showTab("dispatch");
         runCommand(command.command);
       },
@@ -2094,7 +2237,70 @@ async function control(action) {
     ? "Nobody is connected."
     : `${players} ${players === 1 ? "player is" : "players are"} connected and will be disconnected.`;
 
-  if (!confirm(`Really ${action} ${named}?\n\n${cost}`)) return;
-  await fetch(forInstance(`/api/control/${action}`), { method: "POST" });
+  const going = await confirmAction({
+    title: `Really ${action} ${named}?`,
+    body: cost,
+    // Typing the id back is the tier-2 guard, and only earned when there is
+    // more than one server to confuse.
+    typed: knownInstances.length > 1 ? selectedInstance : undefined,
+  });
+  if (!going) return;
+
+  /* Reading the response, at last. This used to await the fetch and drop it, so
+   * a refused stop and a successful one looked identical: nothing happened on
+   * screen either way until the next two second poll. */
+  const response = await fetch(forInstance(`/api/control/${action}`), { method: "POST" });
+  if (response.ok) {
+    showToast(`Asked ${named} to ${action}.`, "success");
+  } else {
+    const data = await response.json().catch(() => ({}));
+    showToast(`Could not ${action} ${named}: ${text(data.error) || response.status}`, "error");
+  }
   refreshStatus();
+}
+
+/* ---- the three endpoints that had no way in ------------------------------ */
+
+/* Ending the session. `POST /api/logout` has existed since the gate did and
+ * nothing in the UI called it, so the only way out was to close the browser
+ * and wait for the cookie to expire. */
+async function signOut() {
+  await fetch("/api/logout", { method: "POST" });
+  location.reload();
+}
+
+/* Ending the process. Tier 2, because it stops every supervised server. */
+async function exitCellar() {
+  const going = await confirmAction({
+    title: "Shut down Cellar?",
+    body: "Every supervised server is stopped and this process ends. Under a service manager "
+      + "or Kubernetes it will be restarted.",
+    typed: "shut down",
+  });
+  if (!going) return;
+  const response = await fetch("/api/control/exit", { method: "POST" });
+  showToast(
+    response.ok ? "Cellar is shutting down." : "Cellar refused the shutdown.",
+    response.ok ? "warn" : "error",
+  );
+}
+
+/* Deleting a document. Tier 1: it names the key, and a document is one row of
+ * the bridge's store rather than a server full of players. */
+async function deleteDocument(key) {
+  const going = await confirmAction({
+    title: `Delete ${key}?`,
+    body: "The gamemode writes this document back the next time it saves, unless it has "
+      + "stopped caring about it.",
+  });
+  if (!going) return;
+
+  const response = await fetch(forInstance(`/api/docs/${key}`), { method: "DELETE" });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    showToast(`Could not delete ${key}: ${text(data.error) || response.status}`, "error");
+    return;
+  }
+  showToast(`Deleted ${key}.`, "success");
+  loadDocuments();
 }

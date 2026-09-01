@@ -324,6 +324,165 @@ mod tests {
         assert!(offenders.is_empty(), "hardcoded colours: {offenders:?}");
     }
 
+    /// Every control an operator types into has to say what it is for.
+    ///
+    /// There were zero `<label>` elements. Every input relied on a
+    /// `placeholder`, which disappears on focus, so tabbing into the allowlist
+    /// box gave an empty field with no clue what belonged in it, and no
+    /// accessible name at all.
+    #[test]
+    fn every_control_has_an_accessible_name() {
+        let named: Vec<&str> = HTML
+            .split('<')
+            .filter(|tag| {
+                tag.starts_with("input") || tag.starts_with("select") || tag.starts_with("textarea")
+            })
+            // A submit button and a hidden field are not things anybody types
+            // a value into looking for a hint.
+            .filter(|tag| !tag.contains("type=\"file\"") || tag.contains("id="))
+            .filter(|tag| !tag.contains("aria-label="))
+            .collect();
+
+        assert!(named.len() >= 20, "only found {} controls", named.len());
+
+        for tag in named {
+            let Some(id) = tag
+                .split("id=\"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+            else {
+                panic!("a control with neither an id nor an aria-label: <{tag}");
+            };
+            assert!(
+                HTML.contains(&format!("for=\"{id}\"")),
+                "no label points at '{id}', so it has no accessible name"
+            );
+        }
+    }
+
+    /// The tab bar has to be a tab bar to anything that is not a mouse.
+    ///
+    /// `aria-selected` was set on bare `<button>` elements, which means nothing
+    /// without the roles around it, and there was no `tabindex` anywhere in the
+    /// page, so eleven tabs were eleven separate stops before any content.
+    #[test]
+    fn the_tab_bar_follows_the_tabs_pattern() {
+        assert!(HTML.contains(r#"<nav class="tabs" role="tablist""#));
+
+        let tabs: Vec<&str> = HTML
+            .split('<')
+            .filter(|tag| tag.starts_with("button role=\"tab\""))
+            .collect();
+        assert!(tabs.len() >= 12, "found {} tabs", tabs.len());
+
+        for tab in &tabs {
+            let name = tab
+                .split("data-tab=\"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .unwrap_or_else(|| panic!("a tab with no data-tab: <{tab}"));
+            assert!(
+                tab.contains(&format!("aria-controls=\"tab-{name}\"")),
+                "the '{name}' tab does not say which panel it controls"
+            );
+            assert!(
+                tab.contains("tabindex="),
+                "the '{name}' tab is not part of the roving tabindex"
+            );
+            assert!(
+                HTML.contains(&format!(
+                    r#"<section id="tab-{name}" role="tabpanel" aria-labelledby="tabfor-{name}""#
+                )),
+                "the '{name}' panel is not labelled by its tab"
+            );
+        }
+
+        // Left, Right, Home and End, or the bar is a mouse-only control.
+        for key in ["ArrowLeft", "ArrowRight", "Home", "End"] {
+            assert!(JS.contains(key), "the tab bar does not handle {key}");
+        }
+    }
+
+    /// A status must never be carried by colour alone.
+    ///
+    /// Every lamp was the same filled circle in a different hue, so in
+    /// greyscale, or to a red-green colour deficiency, "running" and "crashed"
+    /// were the same picture.
+    #[test]
+    fn no_status_is_carried_by_colour_alone() {
+        for state in ["up", "down", "wait", "warn", "live"] {
+            assert!(
+                CSS.contains(&format!(".{state}::before")),
+                "the '{state}' lamp has no glyph of its own"
+            );
+        }
+
+        // Two states sharing a glyph is the same defect with extra steps.
+        let glyphs: Vec<&str> = CSS
+            .lines()
+            .filter(|line| {
+                ["up", "down", "wait", "warn", "live"]
+                    .iter()
+                    .any(|state| line.starts_with(&format!(".{state}::before")))
+            })
+            .filter_map(|line| line.split("content: \"").nth(1)?.split('"').next())
+            .collect();
+        assert_eq!(glyphs.len(), 5, "found {glyphs:?}");
+        let mut unique = glyphs.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            glyphs.len(),
+            unique.len(),
+            "two lamps share a glyph: {glyphs:?}"
+        );
+    }
+
+    /// A destructive action gets a dialog that can name what it is about.
+    ///
+    /// `window.confirm` cannot say which server, cannot count who is about to
+    /// be disconnected, and can be suppressed permanently by the browser, which
+    /// turns "really stop the production server?" into a silent yes.
+    #[test]
+    fn destructive_actions_do_not_use_window_confirm() {
+        let offenders: Vec<&str> = JS
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.contains("confirm(") && !line.contains("confirmAction("))
+            .filter(|line| !line.trim_start().starts_with('*'))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "window.confirm survives at: {offenders:?}"
+        );
+
+        assert!(HTML.contains(r#"<dialog id="confirm-dialog""#));
+        assert!(
+            JS.contains("dialog.showModal()"),
+            "the dialog is in the markup and never opened"
+        );
+
+        // Measured, not assumed: the `close` event does not fire in every
+        // engine that ships <dialog>, so a confirmation that resolves from it
+        // hangs and the confirmed action silently never runs.
+        assert!(
+            !JS.contains("dialog.onclose") && !JS.contains(r#"addEventListener("close""#),
+            "the confirmation must not depend on the dialog's close event"
+        );
+    }
+
+    /// The endpoints that existed with no way to reach them.
+    #[test]
+    fn every_endpoint_the_ui_owns_has_a_control() {
+        for (route, what) in [
+            ("/api/logout", "signing out"),
+            ("/api/control/exit", "shutting Cellar down"),
+            ("method: \"DELETE\"", "deleting a document"),
+        ] {
+            assert!(JS.contains(route), "no way to reach {what} from the UI");
+        }
+    }
+
     /// The UI half of the AppleJackRP coupling, pinned.
     ///
     /// The Precinct tab was thirteen `data-command="applejack_*"` buttons in
@@ -368,6 +527,10 @@ mod tests {
             .lines()
             .map(str::trim)
             .filter(|line| line.contains("fetch(") && !line.contains("forInstance("))
+            // `control/exit` is the one control action that is about the
+            // process rather than about a server: the handler ignores the
+            // target and stops every instance. Naming one would be a lie.
+            .filter(|line| !line.contains("/api/control/exit"))
             .filter(|line| SCOPED.iter().any(|route| line.contains(route)))
             .map(str::to_owned)
             .collect();

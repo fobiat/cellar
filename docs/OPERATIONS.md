@@ -58,6 +58,29 @@ so nothing caught it. Older rows still list; they just have nothing to say.
 
 ---
 
+## The dashboard and a keyboard
+
+The web UI is operable without a mouse, which matters over a KVM, a shared
+screen, or a phone with a keyboard attached.
+
+- **Tab bar**: Left and Right move between tabs, Home and End jump to the ends,
+  and selecting a tab moves focus into its panel. The bar is one tab stop, not
+  twelve.
+- **Ctrl-K** opens the command palette: every tab, every instance and the
+  gamemode's own commands in one list.
+- **Ctrl-1** to **Ctrl-9** select an instance, when there is more than one.
+- **Skip to content** is the first focusable element on the page.
+- Status is a glyph as well as a colour, so the screen reads in greyscale and
+  to a red-green colour deficiency.
+
+**Destructive actions confirm in three tiers.** Reversible ones do not confirm
+at all. Kicking a player or running a `[[profile.command]]` marked
+`confirm = true` asks once. Stopping or restarting a server, switching profile,
+applying a settings import and shutting Cellar down ask for the name typed back,
+and the question names the server and counts who is about to be disconnected.
+
+---
+
 ## Diagnostics: the same checks, from the dashboard
 
 `GET /api/diagnostics` and the dashboard's Diagnostics tab run exactly the
