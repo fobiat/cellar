@@ -203,12 +203,17 @@ fn backups(config: &Config, report: &mut Report) {
     // database URL"), so a check for it here could never fire.
 
     for binary in ["mariadb-dump", "mariadb"] {
+        let filename = if cfg!(windows) {
+            format!("{binary}.exe")
+        } else {
+            binary.to_owned()
+        };
         let found = config
             .mariadb
             .install_dir
             .as_ref()
-            .map(|dir| dir.join("bin").join(binary))
-            .is_some_and(|path| path.exists())
+            .map(|dir| dir.join("bin").join(&filename))
+            .is_some_and(|path| path.is_file())
             || which(binary).is_some();
         if !found {
             report.check(

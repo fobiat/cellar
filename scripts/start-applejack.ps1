@@ -24,7 +24,7 @@ if ( [string]::IsNullOrWhiteSpace( $Cellar ) ) {
     $Cellar = Join-Path $env:LOCALAPPDATA 'Programs\Cellar\cellar.exe'
 }
 if ( [string]::IsNullOrWhiteSpace( $Config ) ) {
-    $Config = Join-Path $env:ProgramData 'Cellar\cellar.toml'
+    $Config = Join-Path $env:LOCALAPPDATA 'AppleJackRP\cellar.toml'
 }
 if ( [string]::IsNullOrWhiteSpace( $AppleJackRoot ) ) {
     $AppleJackRoot = Join-Path (Split-Path -Parent $script:RepoRoot) 'AppleJackRP-sandbox'
