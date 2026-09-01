@@ -904,7 +904,7 @@ pub async fn mariadb(path: &Path, action: MariadbAction) -> Result<()> {
     Ok(())
 }
 
-pub async fn doc(path: &Path, action: DocAction) -> Result<()> {
+pub async fn doc(path: &Path, instance: Option<&str>, action: DocAction) -> Result<()> {
     let config = Config::load(path)?;
     let url = config
         .database
@@ -913,7 +913,17 @@ pub async fn doc(path: &Path, action: DocAction) -> Result<()> {
         .context("CELLAR_DATABASE_URL is not set")?;
 
     let pool = cellar_store::connect(url.expose(), 2).await?;
-    let scope = config.scope();
+    // The named instance's scope. Documents are keyed on it, so reading the
+    // primary's while `--instance` says otherwise lists the wrong server's
+    // data under the right server's name.
+    let scope = match instance {
+        Some(_) => {
+            resolve_instance(&config, instance)
+                .context("no such instance in this config")?
+                .scope
+        }
+        None => config.scope(),
+    };
 
     match action {
         DocAction::Ls { prefix } => {
@@ -986,9 +996,13 @@ pub async fn doc(path: &Path, action: DocAction) -> Result<()> {
 /// socket of their own. `cellar run` owns the console; a second process opening
 /// its own channel to the same terminal is two writers on one file descriptor,
 /// and the interleaving is exactly as bad as it sounds.
-pub async fn settings(path: &Path, action: crate::SettingsAction) -> Result<()> {
+pub async fn settings(
+    path: &Path,
+    instance: Option<&str>,
+    action: crate::SettingsAction,
+) -> Result<()> {
     let config = Config::load(path)?;
-    let client = LiveServer::connect(&config).await?;
+    let client = LiveServer::connect(&config, instance).await?;
 
     match action {
         crate::SettingsAction::Dump {
@@ -1113,6 +1127,7 @@ pub async fn settings(path: &Path, action: crate::SettingsAction) -> Result<()> 
 
 pub async fn exec(
     path: &Path,
+    instance: Option<&str>,
     command: Vec<String>,
     file: Option<std::path::PathBuf>,
     json: bool,
@@ -1137,7 +1152,7 @@ pub async fn exec(
     }
 
     let config = Config::load(path)?;
-    let client = LiveServer::connect(&config).await?;
+    let client = LiveServer::connect(&config, instance).await?;
 
     let mut failed = 0usize;
 
@@ -1205,17 +1220,54 @@ fn print_changes(changes: &[cellar_core::convar::Change]) {
     }
 }
 
+/// The instance `--instance` names, or the primary when it names nothing.
+///
+/// Returns `None` for an id this config does not declare, so a caller can say
+/// so rather than fall back to the primary. A silent fallback here is the same
+/// mistake the HTTP `Target` extractor refuses to make.
+fn resolve_instance(
+    config: &Config,
+    instance: Option<&str>,
+) -> Option<cellar_core::config::Instance> {
+    match instance.filter(|value| !value.trim().is_empty()) {
+        Some(wanted) => config
+            .instances()
+            .into_iter()
+            .find(|candidate| candidate.id.as_str() == wanted.trim()),
+        None => config.primary(),
+    }
+}
+
 /// The running `cellar run`, reached through its web API.
 struct LiveServer {
     client: reqwest::Client,
     base: String,
+    /// Which supervised server these calls are about. `None` is the primary.
+    instance: Option<String>,
     /// The gamemode's convar prefix, from `[profile]`. Absent means this
     /// gamemode has no settings catalogue Cellar knows how to ask for.
     convar_prefix: Option<String>,
 }
 
 impl LiveServer {
-    async fn connect(config: &Config) -> Result<Self> {
+    async fn connect(config: &Config, instance: Option<&str>) -> Result<Self> {
+        // Refused here rather than by the server, so a typo costs one message
+        // instead of a connection, a login and a 404.
+        if let Some(wanted) = instance.filter(|value| !value.trim().is_empty())
+            && resolve_instance(config, Some(wanted)).is_none()
+        {
+            anyhow::bail!(
+                "no instance '{}' in this config. It declares: {}",
+                wanted.trim(),
+                config
+                    .instances()
+                    .iter()
+                    .map(|candidate| candidate.id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+
         if !config.web.enabled {
             anyhow::bail!(
                 "these commands talk to a running `cellar run` through its web API, and \
@@ -1252,14 +1304,19 @@ impl LiveServer {
         let server = Self {
             client,
             base,
-            convar_prefix: config
-                .primary()
+            instance: instance
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| value.trim().to_owned()),
+            // The named instance's profile, not the primary's. Two instances
+            // may run different gamemodes, and reading the wrong prefix sends
+            // one gamemode's catalogue command to the other's console.
+            convar_prefix: resolve_instance(config, instance)
                 .and_then(|instance| instance.profile.convar_prefix.clone()),
         };
 
         server
             .client
-            .get(format!("{}/api/status", server.base))
+            .get(server.url("/api/status")?)
             .send()
             .await
             .with_context(|| {
@@ -1274,10 +1331,24 @@ impl LiveServer {
         Ok(server)
     }
 
+    /// Build a route URL, adding `?instance=` when one was named.
+    ///
+    /// A query pair rather than string concatenation, so an id carrying a `&`
+    /// becomes a 404 from Cellar rather than a request that means something
+    /// else than it reads.
+    fn url(&self, path: &str) -> Result<reqwest::Url> {
+        let mut url = reqwest::Url::parse(&format!("{}{path}", self.base))
+            .with_context(|| format!("building a URL for {path}"))?;
+        if let Some(id) = &self.instance {
+            url.query_pairs_mut().append_pair("instance", id);
+        }
+        Ok(url)
+    }
+
     async fn exec(&self, command: &str) -> Result<Vec<String>> {
         let response = self
             .client
-            .post(format!("{}/api/exec", self.base))
+            .post(self.url("/api/exec")?)
             .json(&serde_json::json!({ "command": command }))
             .send()
             .await?;

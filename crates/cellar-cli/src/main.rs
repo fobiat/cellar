@@ -28,6 +28,15 @@ struct Cli {
     #[arg(long, env = "CELLAR_LOG", default_value = "info", global = true)]
     log: String,
 
+    /// Which supervised server to talk to, for a config declaring several.
+    ///
+    /// Omitted means the primary, so nothing changes for a single-server
+    /// config. A wrong id is refused by the running Cellar with the real ids
+    /// listed, rather than quietly reaching the primary: the command most
+    /// likely to be sent to the wrong server is `quit`.
+    #[arg(long, global = true)]
+    instance: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -292,14 +301,28 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Db { action } => commands::db(&cli.config, action).await,
         Command::Mariadb { action } => commands::mariadb(&cli.config, action).await,
-        Command::Doc { action } => commands::doc(&cli.config, action).await,
-        Command::Settings { action } => commands::settings(&cli.config, action).await,
+        Command::Doc { action } => {
+            commands::doc(&cli.config, cli.instance.as_deref(), action).await
+        }
+        Command::Settings { action } => {
+            commands::settings(&cli.config, cli.instance.as_deref(), action).await
+        }
         Command::Exec {
             command,
             file,
             json,
             keep_going,
-        } => commands::exec(&cli.config, command, file, json, keep_going).await,
+        } => {
+            commands::exec(
+                &cli.config,
+                cli.instance.as_deref(),
+                command,
+                file,
+                json,
+                keep_going,
+            )
+            .await
+        }
         Command::SelfUpdate { check } => commands::self_update(check).await,
         Command::HashPassword => commands::hash_password(),
         Command::Mcp { action } => commands::mcp(action).await,

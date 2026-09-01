@@ -11,6 +11,7 @@ Available on every command.
 | --- | --- | --- |
 | `-c`, `--config <PATH>` | `cellar.toml` | Path to the config file. |
 | `--log <FILTER>` | `info` | Log filter, for example `debug` or `cellar_runtime=debug`. Also `CELLAR_LOG`. |
+| `--instance <ID>` | the primary | Which supervised server to act on, for a config declaring several. Applies to `exec`, `settings` and `doc`. An id the config does not declare is refused with the real ids listed, rather than quietly reaching the primary. |
 | `-h`, `--help` | | Help for the command. `--help` is longer than `-h` where the two differ. |
 | `-V`, `--version` | | Cellar's own version. Top level only. |
 

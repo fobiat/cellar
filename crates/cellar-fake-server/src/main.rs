@@ -384,7 +384,12 @@ fn parse_args() -> Options {
             "--ignore-quit" => options.ignore_quit = true,
             "--flood" => options.flood = true,
             "--players" => options.players = args.next().and_then(|v| v.parse().ok()).unwrap_or(0),
-            "--hostname" => {
+            // `+hostname` is the engine's spelling and the one Cellar actually
+            // passes; `--hostname` is this binary's own. Both set it. It used
+            // to accept `+hostname` and discard it, which made every instance
+            // report the same name and left a two-instance test unable to tell
+            // which server it had reached.
+            "--hostname" | "+hostname" => {
                 if let Some(value) = args.next() {
                     options.hostname = value;
                 }
@@ -392,7 +397,6 @@ fn parse_args() -> Options {
             // Accept and ignore the real server's flags, so the same config can
             // point at either binary.
             "+game"
-            | "+hostname"
             | "+net_game_server_token"
             | "+port"
             | "+net_query_port"

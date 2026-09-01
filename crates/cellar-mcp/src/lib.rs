@@ -25,13 +25,28 @@ const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 /// protocol layer never receives or stores a bearer token or password.
 #[async_trait]
 pub trait CellarBackend: Send + Sync + 'static {
-    async fn status(&self) -> Result<Value, String>;
+    async fn status(&self, instance: Option<String>) -> Result<Value, String>;
     async fn logs(&self, query: LogQuery) -> Result<Value, String>;
-    async fn resources(&self) -> Result<Value, String>;
+    async fn resources(&self, instance: Option<String>) -> Result<Value, String>;
     async fn addresses(&self) -> Result<Value, String>;
     async fn versions(&self) -> Result<Value, String>;
     async fn configs(&self) -> Result<Value, String>;
-    async fn command(&self, command: String) -> Result<Value, String>;
+    async fn instances(&self) -> Result<Value, String>;
+    async fn command(&self, command: String, instance: Option<String>) -> Result<Value, String>;
+}
+
+/// The one thing every server-scoped tool takes.
+///
+/// Named the same as the query parameter it becomes, and described in a way
+/// that tells a model to call `cellar_instances` rather than guess: a model
+/// that invents an id gets a 404 listing the real ones, which is recoverable,
+/// but a model that omits it silently addresses the primary, which is not.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct InstanceSelector {
+    /// Which supervised server this is about. Omit for the primary. Call
+    /// `cellar_instances` first when a config declares more than one.
+    #[serde(default)]
+    pub instance: Option<String>,
 }
 
 /// Query parameters accepted by the searchable log tool.
@@ -49,12 +64,22 @@ pub struct LogQuery {
     /// Maximum number of matching lines, capped by Cellar's API.
     #[serde(default)]
     pub limit: Option<u32>,
+    /// Which supervised server's logs. Omit for the primary.
+    #[serde(default)]
+    pub instance: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct CommandRequest {
     /// One console command. Newlines are rejected by Cellar's existing API.
     pub command: String,
+    /// Which supervised server to type it into. Omit for the primary.
+    ///
+    /// The highest-consequence argument in this file. `quit` sent to the wrong
+    /// instance stops a server nobody asked to stop, and a wrong id is refused
+    /// where an omitted one is silently the primary.
+    #[serde(default)]
+    pub instance: Option<String>,
 }
 
 #[derive(Clone)]
@@ -87,8 +112,20 @@ impl CellarMcpServer {
         description = "Read the current Cellar status, including server state, database health, access, anti-cheat detection, and addresses",
         annotations(read_only_hint = true, destructive_hint = false)
     )]
-    async fn cellar_status(&self) -> Result<CallToolResult, McpError> {
-        self.read_tool(self.backend.status().await).await
+    async fn cellar_status(
+        &self,
+        Parameters(target): Parameters<InstanceSelector>,
+    ) -> Result<CallToolResult, McpError> {
+        self.read_tool(self.backend.status(target.instance).await)
+            .await
+    }
+
+    #[tool(
+        description = "List the supervised servers this Cellar declares, with their ids, scopes, gamemodes and whether each is running. Call this before any other tool when more than one server may exist",
+        annotations(read_only_hint = true, destructive_hint = false)
+    )]
+    async fn cellar_instances(&self) -> Result<CallToolResult, McpError> {
+        self.read_tool(self.backend.instances().await).await
     }
 
     #[tool(
@@ -106,8 +143,12 @@ impl CellarMcpServer {
         description = "Read current process, host, and network resource telemetry",
         annotations(read_only_hint = true, destructive_hint = false)
     )]
-    async fn cellar_resources(&self) -> Result<CallToolResult, McpError> {
-        self.read_tool(self.backend.resources().await).await
+    async fn cellar_resources(
+        &self,
+        Parameters(target): Parameters<InstanceSelector>,
+    ) -> Result<CallToolResult, McpError> {
+        self.read_tool(self.backend.resources(target.instance).await)
+            .await
     }
 
     #[tool(
@@ -142,8 +183,12 @@ impl CellarMcpServer {
         &self,
         Parameters(request): Parameters<CommandRequest>,
     ) -> Result<CallToolResult, McpError> {
-        self.read_tool(self.backend.command(request.command).await)
-            .await
+        self.read_tool(
+            self.backend
+                .command(request.command, request.instance)
+                .await,
+        )
+        .await
     }
 
     async fn read_tool(&self, result: Result<Value, String>) -> Result<CallToolResult, McpError> {
@@ -212,14 +257,36 @@ impl CellarApi {
         })
     }
 
+    /// Append `?instance=` when the caller named one.
+    ///
+    /// Built rather than concatenated so an id with a space or an ampersand in
+    /// it becomes a 404 naming the real ids, rather than a request that quietly
+    /// means something else.
+    fn scoped(&self, path: &str, instance: Option<String>) -> Result<reqwest::Url, String> {
+        let mut url = reqwest::Url::parse(&format!("{}{path}", self.base_url))
+            .map_err(|error| error.to_string())?;
+        if let Some(id) = instance.filter(|value| !value.trim().is_empty()) {
+            url.query_pairs_mut().append_pair("instance", id.trim());
+        }
+        Ok(url)
+    }
+
     async fn get_external(&self, path: &str) -> Result<Value, String> {
+        self.get_external_scoped(path, None).await
+    }
+
+    async fn get_external_scoped(
+        &self,
+        path: &str,
+        instance: Option<String>,
+    ) -> Result<Value, String> {
         let token = self
             .external_token
             .as_deref()
             .ok_or_else(|| "CELLAR_API_TOKEN is required for MCP read tools".to_owned())?;
         let response = self
             .client
-            .get(format!("{}{path}", self.base_url))
+            .get(self.scoped(path, instance)?)
             .header(AUTHORIZATION, format!("Bearer {token}"))
             .header("User-Agent", "cellar-mcp")
             .send()
@@ -257,7 +324,11 @@ impl CellarApi {
         Ok(cookie)
     }
 
-    async fn command_request(&self, command: String) -> Result<Value, String> {
+    async fn command_request(
+        &self,
+        command: String,
+        instance: Option<String>,
+    ) -> Result<Value, String> {
         if !self.command_enabled {
             return Err(
                 "cellar_command is disabled; set CELLAR_MCP_ENABLE_COMMAND=1 explicitly".to_owned(),
@@ -268,7 +339,7 @@ impl CellarApi {
         }
         let mut request = self
             .client
-            .post(format!("{}/api/exec", self.base_url))
+            .post(self.scoped("/api/exec", instance)?)
             .header(CONTENT_TYPE, "application/json")
             .json(&json!({"command": command}));
         if let Some(cookie) = self.ensure_operator().await? {
@@ -286,13 +357,12 @@ impl CellarApi {
 
 #[async_trait]
 impl CellarBackend for CellarApi {
-    async fn status(&self) -> Result<Value, String> {
-        self.get_external("/api/v1/status").await
+    async fn status(&self, instance: Option<String>) -> Result<Value, String> {
+        self.get_external_scoped("/api/v1/status", instance).await
     }
 
     async fn logs(&self, query: LogQuery) -> Result<Value, String> {
-        let mut url = reqwest::Url::parse(&format!("{}{}/api/v1/logs", self.base_url, ""))
-            .map_err(|error| error.to_string())?;
+        let mut url = self.scoped("/api/v1/logs", query.instance.clone())?;
         {
             let mut pairs = url.query_pairs_mut();
             if let Some(value) = query.query.filter(|value| !value.trim().is_empty()) {
@@ -323,8 +393,9 @@ impl CellarBackend for CellarApi {
         decode_json(response).await
     }
 
-    async fn resources(&self) -> Result<Value, String> {
-        self.get_external("/api/v1/resources").await
+    async fn resources(&self, instance: Option<String>) -> Result<Value, String> {
+        self.get_external_scoped("/api/v1/resources", instance)
+            .await
     }
 
     async fn addresses(&self) -> Result<Value, String> {
@@ -339,8 +410,12 @@ impl CellarBackend for CellarApi {
         self.get_external("/api/v1/configs").await
     }
 
-    async fn command(&self, command: String) -> Result<Value, String> {
-        self.command_request(command).await
+    async fn instances(&self) -> Result<Value, String> {
+        self.get_external("/api/v1/instances").await
+    }
+
+    async fn command(&self, command: String, instance: Option<String>) -> Result<Value, String> {
+        self.command_request(command, instance).await
     }
 }
 
@@ -423,18 +498,33 @@ pub async fn call_child_tool(
 mod tests {
     use super::*;
 
+    /// Records which instance each call was told to address, because the whole
+    /// risk in this file is a tool that quietly means the primary.
     #[derive(Debug, Default)]
-    struct FakeBackend;
+    struct FakeBackend {
+        addressed: std::sync::Mutex<Vec<(&'static str, Option<String>)>>,
+    }
+
+    impl FakeBackend {
+        fn note(&self, tool: &'static str, instance: Option<String>) {
+            if let Ok(mut log) = self.addressed.lock() {
+                log.push((tool, instance));
+            }
+        }
+    }
 
     #[async_trait]
     impl CellarBackend for FakeBackend {
-        async fn status(&self) -> Result<Value, String> {
+        async fn status(&self, instance: Option<String>) -> Result<Value, String> {
+            self.note("status", instance);
             Ok(json!({"state": "running"}))
         }
-        async fn logs(&self, _: LogQuery) -> Result<Value, String> {
+        async fn logs(&self, query: LogQuery) -> Result<Value, String> {
+            self.note("logs", query.instance);
             Ok(json!([]))
         }
-        async fn resources(&self) -> Result<Value, String> {
+        async fn resources(&self, instance: Option<String>) -> Result<Value, String> {
+            self.note("resources", instance);
             Ok(json!({"cpu": 10}))
         }
         async fn addresses(&self) -> Result<Value, String> {
@@ -446,9 +536,45 @@ mod tests {
         async fn configs(&self) -> Result<Value, String> {
             Ok(json!({"profiles": []}))
         }
-        async fn command(&self, _: String) -> Result<Value, String> {
+        async fn instances(&self) -> Result<Value, String> {
+            Ok(json!({"primary": "dev", "instances": []}))
+        }
+        async fn command(&self, _: String, instance: Option<String>) -> Result<Value, String> {
+            self.note("command", instance);
             Ok(json!({"ok": true}))
         }
+    }
+
+    /// A wrong id is a 404 from Cellar; an id with a `&` in it would otherwise
+    /// be a request that silently means something else.
+    #[test]
+    fn an_instance_id_is_a_query_pair_rather_than_concatenated_text() {
+        let api = CellarApi {
+            client: reqwest::Client::new(),
+            base_url: "http://127.0.0.1:8081".to_owned(),
+            external_token: None,
+            web_password: None,
+            command_enabled: false,
+            session_cookie: Arc::new(tokio::sync::Mutex::new(None)),
+        };
+
+        let url = api
+            .scoped("/api/v1/status", Some("dev&admin=1".to_owned()))
+            .unwrap();
+        assert_eq!(
+            url.query(),
+            Some("instance=dev%26admin%3D1"),
+            "an id must not be able to add a parameter"
+        );
+
+        assert_eq!(api.scoped("/api/v1/status", None).unwrap().query(), None);
+        assert_eq!(
+            api.scoped("/api/v1/status", Some("  ".to_owned()))
+                .unwrap()
+                .query(),
+            None,
+            "blank is not an instance"
+        );
     }
 
     #[test]
@@ -474,9 +600,60 @@ mod tests {
 
     #[tokio::test]
     async fn the_server_wraps_backend_json_as_structured_content() {
-        let server = CellarMcpServer::new(Arc::new(FakeBackend));
-        let result = server.cellar_status().await.unwrap();
+        let server = CellarMcpServer::new(Arc::new(FakeBackend::default()));
+        let result = server
+            .cellar_status(Parameters(InstanceSelector::default()))
+            .await
+            .unwrap();
         assert_eq!(result.is_error, Some(false));
         assert_eq!(result.structured_content, Some(json!({"state": "running"})));
+    }
+
+    /// Every server-scoped tool has to pass the instance through. A tool that
+    /// accepts the argument and drops it is worse than one that never had it:
+    /// the caller is told which server it addressed and it addressed another.
+    #[tokio::test]
+    async fn every_server_scoped_tool_passes_the_instance_through() {
+        let backend = Arc::new(FakeBackend::default());
+        let server = CellarMcpServer::new(backend.clone());
+        let wanted = Some("published".to_owned());
+
+        server
+            .cellar_status(Parameters(InstanceSelector {
+                instance: wanted.clone(),
+            }))
+            .await
+            .unwrap();
+        server
+            .cellar_resources(Parameters(InstanceSelector {
+                instance: wanted.clone(),
+            }))
+            .await
+            .unwrap();
+        server
+            .cellar_logs(Parameters(LogQuery {
+                instance: wanted.clone(),
+                ..LogQuery::default()
+            }))
+            .await
+            .unwrap();
+        server
+            .cellar_command(Parameters(CommandRequest {
+                command: "status".to_owned(),
+                instance: wanted.clone(),
+            }))
+            .await
+            .unwrap();
+
+        let addressed = backend.addressed.lock().unwrap().clone();
+        assert_eq!(
+            addressed,
+            vec![
+                ("status", wanted.clone()),
+                ("resources", wanted.clone()),
+                ("logs", wanted.clone()),
+                ("command", wanted),
+            ]
+        );
     }
 }

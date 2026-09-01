@@ -54,6 +54,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/v1/addresses", get(external_addresses))
         .route("/api/v1/versions", get(external_versions))
         .route("/api/v1/configs", get(external_configs))
+        .route("/api/v1/instances", get(external_instances))
         .route("/metrics", get(metrics))
 }
 
@@ -1761,6 +1762,30 @@ async fn instances(State(state): State<Arc<AppState>>, _: Operator) -> Response 
             "unavailable": entry.unavailable,
             "server": entry.descriptor,
             "profile": entry.descriptor.profile,
+        })).collect::<Vec<_>>(),
+    }))
+    .into_response()
+}
+
+/// What instances exist, for a machine caller choosing which to address.
+///
+/// Trimmed the way `/api/v1/configs` is: an id, whether it is running and what
+/// it is, without the host's log paths, data directories or bridge addresses.
+/// The id is the only field a caller needs, and it is the one field that is
+/// already public by design, since it appears in every `?instance=` it sends.
+async fn external_instances(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response {
+    Json(serde_json::json!({
+        "primary": state.instances.primary().map(|entry| entry.id.to_string()),
+        "instances": state.instances.iter().map(|entry| serde_json::json!({
+            "id": entry.id.to_string(),
+            "scope": entry.scope,
+            "required": entry.required,
+            "running": entry.handle.is_some(),
+            "unavailable": entry.unavailable,
+            "game": entry.descriptor.game,
+            "map": entry.descriptor.map,
+            "gamemode": entry.descriptor.profile.name,
+            "ready_pattern": entry.descriptor.ready_pattern,
         })).collect::<Vec<_>>(),
     }))
     .into_response()

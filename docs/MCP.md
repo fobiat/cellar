@@ -6,6 +6,8 @@ running Cellar instance.
 
 The server provides these tools:
 
+- `cellar_instances`: every supervised server this Cellar declares, with its
+  id, scope, gamemode and whether it is running.
 - `cellar_status`: server, database, access, anti-cheat, and address state.
 - `cellar_logs`: persistent log search by text, tag, level, and limit.
 - `cellar_resources`: process, host, and network telemetry.
@@ -13,6 +15,17 @@ The server provides these tools:
 - `cellar_versions`: installed and remote versions plus build drift.
 - `cellar_configs`: sanitized available profile names and metadata.
 - `cellar_command`: an explicitly enabled operator command path.
+
+## Naming a server
+
+`cellar_status`, `cellar_logs`, `cellar_resources` and `cellar_command` take an
+optional `instance` argument. Omitted means the primary, so a single-server
+Cellar needs nothing new.
+
+**Call `cellar_instances` first when a config may declare more than one.** A
+wrong id is refused with the real ids listed, which is recoverable. An omitted
+id silently addresses the primary, which is not, and `cellar_command` is a real
+console: `quit` sent to the wrong server stops a server nobody asked to stop.
 
 ## Expose Cellar to an MCP host
 
