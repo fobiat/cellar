@@ -322,7 +322,71 @@ const TAB_LOADERS = {
   configs: { what: "profiles", into: "#config-list", run: () => loadConfigs() },
   precinct: { what: "the gamemode palette", into: "#precinct-palette", run: () => loadPalette() },
   activity: { what: "activity", into: "#activity", run: () => loadActivity() },
+  diagnostics: { what: "diagnostics", into: "#diagnostics-checks", run: () => loadDiagnostics() },
 };
+
+/* ---- diagnostics --------------------------------------------------------- */
+
+/* The same checks `cellar doctor` runs, from the same crate.
+ *
+ * They used to live inside the CLI and print as they went, so the dashboard
+ * could not reach them and reimplementing them here would have been a second
+ * copy that drifts. They live in `cellar-diagnostics` now and this renders
+ * whatever it returns, so a check added later appears here without a change. */
+async function loadDiagnostics() {
+  const data = await api("/api/diagnostics");
+
+  $("#diagnostics-config").textContent = data.config_path || "the config file";
+
+  const failed = (data.checks || []).filter((check) => check.outcome === "fail").length;
+  $("#diagnostics-state").textContent = failed
+    ? `${failed} problem${failed === 1 ? "" : "s"}.`
+    : "Nothing to fix.";
+
+  renderChecks($("#diagnostics-checks"), data.checks || []);
+  renderChecks($("#diagnostics-runtime"), data.runtime || []);
+
+  const unparsed = $("#diagnostics-unparsed");
+  unparsed.replaceChildren();
+  const seen = (data.unparsed || []).filter((entry) => entry.lines > 0);
+  if (!seen.length) {
+    unparsed.append(el("p", "muted", "Every line so far has parsed."));
+    return;
+  }
+  for (const entry of seen) {
+    const heading = knownInstances.length > 1
+      ? `${entry.instance}: ${entry.lines} line(s)`
+      : `${entry.lines} line(s)`;
+    unparsed.append(el("h3", null, heading));
+    const block = el("pre", "log");
+    block.textContent = (entry.samples || []).join("\n");
+    unparsed.append(block);
+  }
+}
+
+/* One row per check, with the verdict as a word and not only as a colour. */
+function renderChecks(body, checks) {
+  body.replaceChildren();
+  if (!checks.length) {
+    const row = el("tr");
+    const cell = el("td", "muted", "Nothing to report.");
+    cell.colSpan = 3;
+    row.append(cell);
+    body.append(row);
+    return;
+  }
+  for (const check of checks) {
+    const row = el("tr");
+    row.append(el("td", null, check.label));
+    row.append(el("td", "muted", check.instance || "—"));
+    const result = el("td");
+    const word = { ok: "ok", fail: "FAIL", note: "note" }[check.outcome] || check.outcome;
+    result.append(el("span", check.outcome === "fail" ? "down" : "muted", `${word} `));
+    result.append(document.createTextNode(check.detail));
+    row.append(result);
+    body.append(row);
+  }
+}
 
 /* ---- activity ------------------------------------------------------------ */
 
@@ -1834,6 +1898,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   for (const control of ["#activity-source", "#activity-days"]) {
     $(control).addEventListener("change", () => load("activity", $("#activity"), () => loadActivity()));
   }
+  $("#diagnostics-refresh").onclick = () =>
+    load("diagnostics", $("#diagnostics-checks"), () => loadDiagnostics());
   $("#run-query").onclick = runQuery;
   $("#release-build").onclick = () => runRelease("build");
   $("#release-publish").onclick = () => runRelease("publish");

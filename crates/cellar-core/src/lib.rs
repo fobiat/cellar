@@ -20,6 +20,15 @@ pub mod snapshot;
 pub mod statusbar;
 pub mod theme;
 
+/// The header `/healthz` answers with, so one Cellar can recognise another.
+///
+/// A header rather than the body, because `/healthz` bodies get matched by
+/// probe configurations and the body has said `ok` since the route existed.
+/// Nothing here is a secret: the endpoint is unauthenticated on purpose, and
+/// the only claim made is "this is a Cellar", which any caller reaching it has
+/// already worked out.
+pub const HEALTH_HEADER: &str = "x-cellar";
+
 pub use config::{AuthMode, Config, ConfigError, Launcher};
 pub use event::{Event, Level, LogLine, Origin, ResourceSample, StatusBar, SteamId};
 pub use lifecycle::{BackoffPolicy, Decision, RestartPolicy, RestartTracker, State};

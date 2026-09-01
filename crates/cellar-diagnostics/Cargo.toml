@@ -1,0 +1,24 @@
+[package]
+name = "cellar-diagnostics"
+description = "Cellar's preflight checks, shared by the CLI and the dashboard."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+cellar-core = { workspace = true }
+cellar-runtime = { workspace = true }
+cellar-store = { workspace = true }
+cellar-update = { workspace = true }
+serde = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true

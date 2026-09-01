@@ -303,6 +303,7 @@ dependencies = [
  "anyhow",
  "axum",
  "cellar-core",
+ "cellar-diagnostics",
  "cellar-mariadb",
  "cellar-mcp",
  "cellar-notify",
@@ -332,6 +333,20 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "thiserror 2.0.20",
+ "toml",
+]
+
+[[package]]
+name = "cellar-diagnostics"
+version = "0.1.13"
+dependencies = [
+ "cellar-core",
+ "cellar-runtime",
+ "cellar-store",
+ "cellar-update",
+ "reqwest",
+ "serde",
+ "tokio",
  "toml",
 ]
 
@@ -413,6 +428,7 @@ dependencies = [
  "argon2",
  "axum",
  "cellar-core",
+ "cellar-diagnostics",
  "cellar-mariadb",
  "cellar-mcp",
  "cellar-runtime",

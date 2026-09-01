@@ -22,6 +22,7 @@ cellar-update = { workspace = true }
 cellar-tui = { workspace = true }
 cellar-mariadb = { workspace = true }
 cellar-mcp = { workspace = true }
+cellar-diagnostics = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

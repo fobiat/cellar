@@ -31,8 +31,18 @@ pub fn routes() -> Router<Arc<AppState>> {
 /// Deliberately not a check on the game server. A liveness probe that fails
 /// during a legitimate restart gets the pod killed mid-restart, which is the
 /// classic way to turn a recoverable fault into a crash loop.
+///
+/// The `x-cellar` header is how a second Cellar recognises the first. Without
+/// it, `doctor`'s "another Cellar is already bound" case and the refusal that
+/// stops a database restore while a server is writing were both unreachable:
+/// they sniffed this response for `"cellar"` or `"state"` and the body is `ok`.
 async fn healthz() -> Response {
-    (StatusCode::OK, "ok").into_response()
+    (
+        StatusCode::OK,
+        [(cellar_core::HEALTH_HEADER, env!("CARGO_PKG_VERSION"))],
+        "ok",
+    )
+        .into_response()
 }
 
 /// Readiness: every instance that speaks for this process is serving.

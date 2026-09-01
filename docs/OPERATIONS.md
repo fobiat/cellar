@@ -58,6 +58,31 @@ so nothing caught it. Older rows still list; they just have nothing to say.
 
 ---
 
+## Diagnostics: the same checks, from the dashboard
+
+`GET /api/diagnostics` and the dashboard's Diagnostics tab run exactly the
+checks `cellar doctor` runs, from the same crate. They are not a second
+implementation: they live in `cellar-diagnostics`, which the CLI calls too,
+because a second copy of a check is a second copy that drifts.
+
+The config is re-read from disk on every request, so an edit shows up without a
+restart. Three sections:
+
+- **Preflight**, the doctor checks. A `note` is a fact Cellar cannot judge, such
+  as a game port already being in use, which is expected when the server this
+  profile describes is the thing using it. It is not a lesser failure.
+- **Live**, what only a running process knows: each supervisor's state, its
+  restart count, its last exit, and each instance's resolved `ready_pattern`.
+- **Unrecognised lines**, the count of lines the grammar refused per instance,
+  with the last 20 verbatim. The count alone says the grammar is behind; the
+  samples say what moved.
+
+The web and bridge addresses this process holds are reported as bound by this
+Cellar rather than as a conflict, which is the one difference from the CLI's
+run of the same checks.
+
+---
+
 ## Health endpoints
 
 Served on **both** `bridge.bind` and `web.bind`, so a probe can use whichever
@@ -66,8 +91,15 @@ and vice versa.
 
 | Route | Answers |
 | --- | --- |
-| `/healthz` | `200` while the process is up. Liveness. |
+| `/healthz` | `200` while the process is up, with an `x-cellar` header naming the version. Liveness. |
 | `/readyz` | `200` once the server is actually serving, `503` before that. Readiness. |
+
+The `x-cellar` header is how one Cellar recognises another, which is what
+`doctor` uses to say "another Cellar is already bound to this address" rather
+than "something else holds it", and what makes `cellar db restore` refuse to run
+while a supervised server is writing. **Both were unreachable before
+2026-09-01**: they sniffed the body for `"cellar"` or `"state"` and the body has
+always been `ok`.
 
 `/readyz` is derived from a log line: `server.ready_pattern` if the instance
 sets one, otherwise the gamemode's `[profile]`, otherwise AppleJackRP's

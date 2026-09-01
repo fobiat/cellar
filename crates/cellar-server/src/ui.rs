@@ -468,6 +468,64 @@ mod tests {
         }
     }
 
+    /// Every verdict the diagnostics crate can return has to render as a word.
+    ///
+    /// Read from the enum rather than listed here, for the same reason the
+    /// event-kind test above is: a hand-written list only catches the variants
+    /// somebody remembered to add to it.
+    #[test]
+    fn the_script_renders_every_diagnostic_outcome() {
+        const SOURCE: &str = include_str!("../../cellar-diagnostics/src/lib.rs");
+
+        let outcomes: Vec<String> = SOURCE
+            .lines()
+            .skip_while(|line| !line.contains("pub enum Outcome"))
+            .take_while(|line| !line.starts_with('}'))
+            .filter_map(|line| {
+                let word = line.trim().trim_end_matches(',');
+                word.chars()
+                    .all(|character| character.is_ascii_alphabetic())
+                    .then(|| word.to_lowercase())
+            })
+            .filter(|word| !word.is_empty())
+            .collect();
+        assert_eq!(outcomes, ["ok", "fail", "note"], "found {outcomes:?}");
+
+        for outcome in outcomes {
+            assert!(
+                JS.contains(&format!("{outcome}:")),
+                "app.js has no word for the '{outcome}' outcome, so it would render as a colour \
+                 alone"
+            );
+        }
+    }
+
+    /// The doctor checks exist once.
+    ///
+    /// They used to live in `cellar-cli` and print as they went, which put the
+    /// dashboard one crate boundary away from reaching them. Reimplementing
+    /// them in the server was the option to refuse: a second copy of a check is
+    /// a second copy that drifts.
+    #[test]
+    fn the_server_does_not_reimplement_the_doctor_checks() {
+        const API: &str = include_str!("api.rs");
+
+        assert!(
+            API.contains("cellar_diagnostics::run("),
+            "the diagnostics route must call the shared crate"
+        );
+        for smell in [
+            "appmanifest_",
+            "no dotnet.exe",
+            "without loading the gamemode",
+        ] {
+            assert!(
+                !API.contains(smell),
+                "api.rs has grown its own copy of the '{smell}' check"
+            );
+        }
+    }
+
     /// One arriving line must cost one DOM node, not a full teardown.
     ///
     /// `appendLine` used to call `renderConsole`, which called

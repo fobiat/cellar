@@ -78,6 +78,7 @@
     <button data-tab="players">Registry</button>
     <button data-tab="database">Database</button>
     <button data-tab="activity">Activity</button>
+    <button data-tab="diagnostics">Diagnostics</button>
     <button data-tab="releases">Releases</button>
   </nav>
 
@@ -298,6 +299,53 @@
             engine privilege, so this is the only account of who used it. Retention is
             <code>database.event_retention_days</code>.
           </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Diagnostics: the same checks cellar doctor runs, plus the live ones. -->
+    <section id="tab-diagnostics" hidden>
+      <div class="panel">
+        <h2>Preflight</h2>
+        <div class="body">
+          <div class="console-tools">
+            <button class="chip" id="diagnostics-refresh" type="button">re-run checks</button>
+            <span class="muted small" id="diagnostics-state">Loading.</span>
+          </div>
+          <table>
+            <thead>
+              <tr><th>Check</th><th>Server</th><th>Result</th></tr>
+            </thead>
+            <tbody id="diagnostics-checks"></tbody>
+          </table>
+          <p class="muted small" style="margin-top:12px">
+            These are the checks <code>cellar doctor</code> runs, from the same code, re-read
+            from <span id="diagnostics-config">the config file</span> each time. A note is a
+            fact Cellar cannot judge, not a lesser failure.
+          </p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Live</h2>
+        <div class="body">
+          <table>
+            <thead>
+              <tr><th>Check</th><th>Server</th><th>Result</th></tr>
+            </thead>
+            <tbody id="diagnostics-runtime"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Unrecognised lines</h2>
+        <div class="body">
+          <p class="muted small">
+            Lines the grammar did not recognise. A rising count means an engine update moved a
+            log string and the parser needs revisiting; the samples are what moved.
+          </p>
+          <div id="diagnostics-unparsed"></div>
         </div>
       </div>
     </section>

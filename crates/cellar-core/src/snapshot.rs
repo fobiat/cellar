@@ -19,6 +19,12 @@ pub const SAMPLE_HISTORY: usize = 240;
 /// How many log lines to keep in memory for the live panes.
 pub const LOG_HISTORY: usize = 2000;
 
+/// How many unrecognised lines to keep verbatim.
+///
+/// The count alone says the grammar is behind; it does not say what moved. A
+/// handful of the actual lines is what turns "142 unparsed" into a fix.
+pub const UNPARSED_SAMPLES: usize = 20;
+
 /// A player currently on the server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Player {
@@ -84,6 +90,8 @@ pub struct Snapshot {
     /// Lines the grammar did not recognise. A rising number means an engine
     /// update moved a log string and the parser needs revisiting.
     pub unparsed_lines: u64,
+    /// The most recent lines the grammar refused, verbatim.
+    pub unparsed_samples: Vec<String>,
     pub restarts: u64,
 }
 
@@ -113,6 +121,7 @@ pub struct Tracker {
     logs: VecDeque<LogLine>,
     bridge: BridgeStats,
     unparsed_lines: u64,
+    unparsed_samples: VecDeque<String>,
     restarts: u64,
     consecutive_failures: u32,
 }
@@ -132,6 +141,7 @@ impl Tracker {
             logs: VecDeque::with_capacity(LOG_HISTORY),
             bridge: BridgeStats::default(),
             unparsed_lines: 0,
+            unparsed_samples: VecDeque::with_capacity(UNPARSED_SAMPLES),
             restarts: 0,
             consecutive_failures: 0,
         }
@@ -229,7 +239,13 @@ impl Tracker {
                 }
                 self.logs.push_back(line.clone());
             }
-            Event::Unparsed { .. } => self.unparsed_lines += 1,
+            Event::Unparsed { raw, .. } => {
+                self.unparsed_lines += 1;
+                if self.unparsed_samples.len() == UNPARSED_SAMPLES {
+                    self.unparsed_samples.pop_front();
+                }
+                self.unparsed_samples.push_back(raw.clone());
+            }
             Event::BridgeHealth { healthy, detail } => {
                 self.bridge.healthy = *healthy;
                 self.bridge.last_error = (!healthy).then(|| detail.clone());
@@ -253,6 +269,7 @@ impl Tracker {
             bridge: self.bridge.clone(),
             consecutive_failures: self.consecutive_failures,
             unparsed_lines: self.unparsed_lines,
+            unparsed_samples: self.unparsed_samples.iter().cloned().collect(),
             restarts: self.restarts.saturating_sub(0),
         }
     }
@@ -437,6 +454,31 @@ mod tests {
             );
         }
         assert_eq!(t.snapshot().unparsed_lines, 3);
+    }
+
+    #[test]
+    fn unparsed_samples_keep_the_newest_lines_and_not_the_oldest() {
+        let mut t = tracker();
+        for index in 0..(UNPARSED_SAMPLES + 5) {
+            t.apply(
+                &Event::Unparsed {
+                    raw: format!("line {index}"),
+                    origin: Origin::Console,
+                },
+                now(),
+            );
+        }
+
+        let snapshot = t.snapshot();
+        assert_eq!(snapshot.unparsed_lines as usize, UNPARSED_SAMPLES + 5);
+        assert_eq!(snapshot.unparsed_samples.len(), UNPARSED_SAMPLES);
+        // The point of the buffer is the lines that just broke, not the first
+        // ones ever seen, so the oldest must be gone.
+        assert_eq!(snapshot.unparsed_samples[0], "line 5");
+        assert_eq!(
+            snapshot.unparsed_samples[UNPARSED_SAMPLES - 1],
+            format!("line {}", UNPARSED_SAMPLES + 4)
+        );
     }
 
     #[test]

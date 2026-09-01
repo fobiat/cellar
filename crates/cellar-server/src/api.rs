@@ -41,6 +41,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/db/query", post(db_query))
         .route("/api/instances", get(instances))
         .route("/api/activity", get(activity))
+        .route("/api/diagnostics", get(diagnostics))
         .route("/api/db/backups", get(db_backups))
         .route("/api/db/backup", post(db_backup))
         .route("/api/db/restore", post(db_restore))
@@ -1828,6 +1829,137 @@ async fn activity(
     match cellar_store::ops::activity(pool, &request).await {
         Ok(entries) => Json(serde_json::json!({ "entries": entries })).into_response(),
         Err(why) => error(StatusCode::BAD_GATEWAY, why.to_string()),
+    }
+}
+
+/// Every preflight check `cellar doctor` runs, plus the ones only a live
+/// process can answer.
+///
+/// The checks are not reimplemented here. They live in `cellar-diagnostics`,
+/// which the CLI calls too, because a second copy of a check is a second copy
+/// that drifts. What this route adds is the half doctor cannot see: what the
+/// supervisors are actually doing, and how many lines the grammar has refused.
+async fn diagnostics(State(state): State<Arc<AppState>>, _: Operator) -> Response {
+    let path = state.config_path.lock().ok().and_then(|held| held.clone());
+
+    // The binds this very process holds. Without them the screen would report
+    // its own listener as a conflict, every time, forever.
+    let mut owned = vec![state.web_bind.clone()];
+    owned.extend(
+        state
+            .instances
+            .iter()
+            .filter(|entry| entry.descriptor.bridge_enabled)
+            .map(|entry| entry.descriptor.bridge_bind.clone()),
+    );
+
+    let preflight = match &path {
+        Some(path) => match cellar_core::config::Config::load(path) {
+            Ok(config) => cellar_diagnostics::run(&config, &owned).await,
+            Err(why) => one_note(
+                "config",
+                format!("{} could not be re-read: {why}", path.display()),
+            ),
+        },
+        None => one_note(
+            "config",
+            "this process was not started from a config file, so the preflight checks cannot be \
+             re-run"
+                .to_owned(),
+        ),
+    };
+
+    let mut runtime = Vec::new();
+    let mut unparsed = Vec::new();
+    for entry in state.instances.iter() {
+        let id = entry.id.to_string();
+        match &entry.handle {
+            None => runtime.push(serde_json::json!({
+                "label": "supervisor",
+                "outcome": "fail",
+                "instance": id,
+                "detail": entry.unavailable.clone().unwrap_or_else(||
+                    "declared but not supervised by this process".to_owned()),
+            })),
+            Some(handle) => {
+                let snapshot = handle.snapshot().await;
+                let Some(snapshot) = snapshot else {
+                    runtime.push(serde_json::json!({
+                        "label": "supervisor",
+                        "outcome": "note",
+                        "instance": id,
+                        "detail": "supervised, but it has not reported a state yet",
+                    }));
+                    continue;
+                };
+
+                runtime.push(serde_json::json!({
+                    "label": "supervisor",
+                    "outcome": match snapshot.state {
+                        cellar_core::lifecycle::State::Running => "ok",
+                        cellar_core::lifecycle::State::Stopped
+                        | cellar_core::lifecycle::State::Starting
+                        | cellar_core::lifecycle::State::Stopping => "note",
+                        _ => "fail",
+                    },
+                    "instance": id,
+                    "detail": match snapshot.last_exit {
+                        Some(exit) if snapshot.pid.is_none() => format!(
+                            "{}, last exit {}",
+                            snapshot.state.as_str(),
+                            match exit.code {
+                                Some(code) if exit.graceful => format!("{code}, asked for"),
+                                Some(code) => format!("{code}, unexpected"),
+                                None => "on a signal with no code".to_owned(),
+                            }
+                        ),
+                        _ => format!("{}, {} restart(s)", snapshot.state.as_str(), snapshot.restarts),
+                    },
+                }));
+
+                // The readiness line is the single most consequential string in
+                // an instance's config and the only way a wrong one shows up is
+                // a server that starts and never becomes ready.
+                runtime.push(serde_json::json!({
+                    "label": "ready_pattern",
+                    "outcome": "note",
+                    "instance": id,
+                    "detail": entry.descriptor.ready_pattern.clone(),
+                }));
+
+                unparsed.push(serde_json::json!({
+                    "instance": id,
+                    "lines": snapshot.unparsed_lines,
+                    "samples": snapshot.unparsed_samples,
+                }));
+            }
+        }
+    }
+
+    runtime.push(serde_json::json!({
+        "label": "database",
+        "outcome": if state.pool.is_some() { "ok" } else { "note" },
+        "detail": format!("{} connection", database_source(&state)),
+    }));
+
+    Json(serde_json::json!({
+        "config_path": path.map(|path| path.display().to_string()),
+        "checks": preflight.checks,
+        "runtime": runtime,
+        "unparsed": unparsed,
+    }))
+    .into_response()
+}
+
+/// A one-entry report, for when the checks could not be run at all.
+fn one_note(label: &str, detail: String) -> cellar_diagnostics::Report {
+    cellar_diagnostics::Report {
+        checks: vec![cellar_diagnostics::Check {
+            label: label.to_owned(),
+            outcome: cellar_diagnostics::Outcome::Note,
+            detail,
+            instance: None,
+        }],
     }
 }
 

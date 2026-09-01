@@ -379,4 +379,33 @@ mod contract_tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, "ok");
     }
+
+    /// One Cellar has to be able to recognise another.
+    ///
+    /// This is not decoration. `doctor`'s "another Cellar is already bound"
+    /// case and the refusal that stops `cellar db restore` running while a
+    /// supervised server writes to the database both depend on it, and both
+    /// were unreachable until 2026-09-01 because they sniffed this response
+    /// for `"cellar"` or `"state"` and the body has always been `ok`.
+    #[tokio::test]
+    async fn liveness_identifies_itself_as_a_cellar() {
+        let (app, _) = app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response
+                .headers()
+                .get(cellar_core::HEALTH_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some(env!("CARGO_PKG_VERSION")),
+        );
+    }
 }
