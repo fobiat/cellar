@@ -802,7 +802,7 @@ mod tests {
             enabled = true
             directory = "{}"
             "#,
-            directory.path().display()
+            directory.path().to_string_lossy().replace('\\', "/")
         ))
         .expect("the fixture parses");
 

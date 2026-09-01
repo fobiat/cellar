@@ -65,7 +65,12 @@ pub fn list(directory: &Path) -> Result<Vec<Dump>, std::io::Error> {
         })
         .collect();
 
-    dumps.sort_by_key(|dump| std::cmp::Reverse(dump.modified));
+    dumps.sort_by(|left, right| {
+        right
+            .modified
+            .cmp(&left.modified)
+            .then_with(|| right.path.cmp(&left.path))
+    });
     Ok(dumps)
 }
 
@@ -389,19 +394,9 @@ mod tests {
     #[test]
     fn dumps_are_listed_newest_first_and_that_is_what_prune_keeps() {
         let dir = tempfile::tempdir().unwrap();
-        for (index, name) in ["cellar-1.sql", "cellar-2.sql", "cellar-3.sql"]
-            .iter()
-            .enumerate()
-        {
+        for name in ["cellar-1.sql", "cellar-2.sql", "cellar-3.sql"] {
             let path = dir.path().join(name);
             fs::write(&path, HEADER).unwrap();
-            // Distinct mtimes, since three writes inside one filesystem tick
-            // would otherwise make the ordering arbitrary.
-            let when = SystemTime::now() + std::time::Duration::from_secs(index as u64 + 1);
-            fs::File::open(&path)
-                .unwrap()
-                .set_times(fs::FileTimes::new().set_modified(when))
-                .unwrap();
         }
 
         let listed = list(dir.path()).unwrap();

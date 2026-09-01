@@ -1144,17 +1144,10 @@ impl Config {
             })?;
         }
 
-        if self.backup.enabled {
-            if !self.database.enabled || self.database.url.is_none() {
-                return Err(ConfigError::Invalid(
-                    "backup.enabled needs database.enabled and a database URL".into(),
-                ));
-            }
-            if self.backup.retain == 0 {
-                return Err(ConfigError::Invalid(
-                    "backup.retain must be at least 1 when backups are enabled".into(),
-                ));
-            }
+        if self.backup.enabled && self.backup.retain == 0 {
+            return Err(ConfigError::Invalid(
+                "backup.retain must be at least 1 when backups are enabled".into(),
+            ));
         }
 
         if self.bridge.enabled {
@@ -2262,6 +2255,13 @@ enabled = false
             .to_string();
 
         assert!(error.contains("server.port"), "{error}");
+    }
+
+    #[test]
+    fn backups_may_be_configured_before_a_database_is_available() {
+        let mut config = minimal();
+        config.backup.enabled = true;
+        config.validate().unwrap();
     }
 
     #[test]

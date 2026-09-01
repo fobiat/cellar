@@ -175,7 +175,9 @@ impl GamemodeProfile {
             // A check is read by `cellar doctor` and its path is printed. A
             // profile that could name `/etc/shadow` and assert what it contains
             // turns a config file into an oracle over the host filesystem.
+            let file_text = check.file.to_string_lossy();
             if check.file.is_absolute()
+                || file_text.starts_with('/')
                 || check
                     .file
                     .components()

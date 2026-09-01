@@ -800,9 +800,10 @@ mod tests {
         // the first `}` in column zero. Splitting on the next `function`
         // keyword ran past the end into `renderConsole`, which legitimately
         // does redraw everything.
-        let append = JS
+        let js = JS.replace("\r\n", "\n");
+        let append = js
             .split_once("function appendLine(")
-            .and_then(|(_, rest)| rest.split_once("\n}\n"))
+            .and_then(|(_, rest)| rest.split_once("\nfunction renderConsole"))
             .map(|(body, _)| body)
             .expect("appendLine is defined");
 
@@ -820,9 +821,9 @@ mod tests {
         );
 
         // The control that existed to work around the cost, and its state.
-        assert!(!JS.contains("consoleSlow"), "slow mode should be gone");
+        assert!(!js.contains("consoleSlow"), "slow mode should be gone");
         assert!(
-            !HTML.contains("console-slow"),
+            !HTML.replace("\r\n", "\n").contains("console-slow"),
             "the slow mode button should be gone"
         );
     }
@@ -847,9 +848,10 @@ mod tests {
     /// another operator ran, which is the reason to handle them at all.
     #[test]
     fn a_command_reply_is_rendered_once() {
-        let run = JS
+        let js = JS.replace("\r\n", "\n");
+        let run = js
             .split_once("async function runCommand(")
-            .and_then(|(_, rest)| rest.split_once("\n}\n"))
+            .and_then(|(_, rest)| rest.split_once("\nfunction "))
             .map(|(body, _)| body)
             .expect("runCommand is defined");
 
@@ -858,7 +860,7 @@ mod tests {
             "runCommand renders unconditionally, so a broadcast reply lands twice"
         );
         assert!(
-            JS.contains("function commandsArriveOnTheStream("),
+            js.contains("function commandsArriveOnTheStream("),
             "nothing decides which of the two sources renders"
         );
     }
