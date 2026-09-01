@@ -189,11 +189,30 @@ pub fn format_uptime(seconds: i64) -> String {
 /// that does not exist yet.
 pub fn disk_free(path: &std::path::Path) -> Option<(u64, std::path::PathBuf)> {
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let resolved = without_verbatim_prefix(resolved);
     sysinfo::Disks::new_with_refreshed_list()
         .iter()
         .filter(|disk| resolved.starts_with(disk.mount_point()))
         .max_by_key(|disk| disk.mount_point().as_os_str().len())
         .map(|disk| (disk.available_space(), disk.mount_point().to_path_buf()))
+}
+
+/// Windows `canonicalize` answers `\\?\C:\...`, whose prefix component does not
+/// compare equal to the `C:\` sysinfo calls the mount point, so every path on
+/// the machine matched no disk and Cellar reported no free space at all.
+#[cfg(windows)]
+fn without_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
+    match path.to_str().and_then(|text| text.strip_prefix(r"\\?\")) {
+        // A verbatim UNC share is `\\?\UNC\server\share`, and dropping only the
+        // marker there would leave a path naming nothing.
+        Some(rest) if !rest.starts_with("UNC\\") => std::path::PathBuf::from(rest),
+        _ => path,
+    }
+}
+
+#[cfg(not(windows))]
+fn without_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
+    path
 }
 
 #[cfg(test)]

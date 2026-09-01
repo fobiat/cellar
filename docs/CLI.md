@@ -393,6 +393,31 @@ waited out on a timer, so it comes back as soon as the server is done with it.
 
 ---
 
+## `cellar kill`
+
+Kill a running Cellar and every process it started, immediately.
+
+```
+cellar kill
+cellar kill --yes
+```
+
+The last resort, for a server that has stopped answering its console. Nothing
+is stopped gracefully: the descendants are killed deepest first, then Cellar
+itself, so the engine's nine shutdown steps are all skipped and neither the
+convar save nor the Steam logoff happens. Reach for `cellar exec quit`, or the
+dashboard's Shut down Cellar, while either still answers.
+
+It asks for `KILL ALL` to be typed before it does anything; `--yes` skips that
+for a script. The same thing is on the dashboard under Settings, as Kill
+everything, behind the same typed confirmation. Both are process-wide and
+ignore `--instance`.
+
+Under a service manager or Kubernetes the Cellar process is restarted after
+this, the same as any other exit. Run it from a terminal and it stays down.
+
+---
+
 ## `cellar hash-password`
 
 Hash an operator password for the web UI.

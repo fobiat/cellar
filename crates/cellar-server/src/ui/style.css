@@ -555,6 +555,17 @@ button.action:disabled { opacity: 0.4; cursor: not-allowed; }
 
 button.action.danger { border-color: var(--aj-russet); color: var(--aj-russet-text); }
 button.action.danger:hover { background: color-mix(in srgb, var(--aj-russet) 16%, transparent); }
+/* Filled rather than outlined, so the one button on the page that skips every
+   shutdown step does not read as another variant of Stop. */
+button.action.critical {
+  background: var(--aj-russet);
+  border-color: var(--aj-russet);
+  color: var(--aj-ink);
+  font-weight: 700;
+}
+button.action.critical:hover {
+  background: color-mix(in srgb, var(--aj-russet) 85%, var(--aj-shadow));
+}
 
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 

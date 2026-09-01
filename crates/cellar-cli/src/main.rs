@@ -149,6 +149,18 @@ enum Command {
         keep_going: bool,
     },
 
+    /// Kill a running Cellar and every process it started, immediately.
+    ///
+    /// The last resort. Nothing is stopped gracefully, so the engine's convar
+    /// save and its Steam logoff are both skipped. Reach for `cellar exec quit`
+    /// or the dashboard's Shut down Cellar while either still answers.
+    Kill {
+        /// Skip the typed confirmation, for scripts and for a terminal that has
+        /// no one sitting at it.
+        #[arg(long)]
+        yes: bool,
+    },
+
     /// Update Cellar itself from the published releases.
     SelfUpdate {
         /// Report what is available without installing it.
@@ -341,6 +353,7 @@ async fn main() -> std::process::ExitCode {
             )
             .await
         }
+        Command::Kill { yes } => commands::kill(&cli.config, yes).await,
         Command::SelfUpdate { check } => commands::self_update(check).await,
         Command::HashPassword => commands::hash_password(),
         Command::Mcp { action } => commands::mcp(action).await,

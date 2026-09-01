@@ -600,6 +600,22 @@
           <button class="action danger" id="cellar-exit" type="button">Shut down Cellar</button>
         </div>
       </div>
+
+      <!-- Beside the graceful one for the same reason it is: an operator looks
+           for both in the same place, and neither belongs a mis-click away from
+           Restart in the masthead. -->
+      <div class="panel">
+        <h2>Kill everything</h2>
+        <div class="body">
+          <p class="muted small">
+            The last resort, for a server that has stopped answering its console. Cellar and
+            every process it started are terminated where they stand, with none of the engine's
+            nine shutdown steps: no convar save, no Steam logoff. Prefer Shut down Cellar
+            whenever it still works.
+          </p>
+          <button class="action danger critical" id="kill-cellar" type="button">Kill everything</button>
+        </div>
+      </div>
     </section>
 
     <!-- Records: the bridge's documents. -->

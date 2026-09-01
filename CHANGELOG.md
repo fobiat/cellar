@@ -4,6 +4,25 @@ All notable changes to Cellar are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **An emergency kill.** `cellar kill`, and Kill everything under Settings in
+  the dashboard, terminate every process Cellar started and then Cellar itself,
+  deepest first and with no graceful stop: none of the engine's nine shutdown
+  steps run, so neither the convar save nor the Steam logoff happens. For a
+  server that has stopped answering its console, when Stop and Shut down Cellar
+  have nothing left to talk to. Both routes ask for `KILL ALL` to be typed, both
+  are process-wide, and `POST /api/control/kill` needs the same operator session
+  as every other control route.
+
+### Fixed
+
+- **Free disk space read as nothing on Windows.** `disk_free` matched a
+  canonicalised `\\?\C:\...` path against the `C:\` sysinfo calls the mount
+  point, which never matches, so every path on the machine found no disk.
+
 ## [0.2.0] - 2026-09-01
 
 ### Added

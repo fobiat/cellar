@@ -136,6 +136,11 @@ the ids that do exist, never a silent fallback, because the request that would
 get misrouted that way is `quit`. `/api/control/exit` is process-wide and
 deliberately ignores the parameter: exiting with another instance still running
 gets that one killed rather than stopped.
+`/api/control/kill` is process-wide for the same reason and is the harder
+version of it: every descendant of Cellar is killed deepest first and then
+Cellar itself, with no graceful stop anywhere. It is registered ahead of
+`/api/control/{action}`, needs the same operator session as the rest, and is
+reached from the dashboard's Kill everything or from `cellar kill`.
 
 **On Linux each also needs its own `server.wine_prefix`.** Every Wine process in
 a prefix shares one `wineserver` that jointly holds all their sockets, and

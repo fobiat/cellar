@@ -863,6 +863,34 @@ pub async fn exec(
     Ok(())
 }
 
+/// What has to be typed before a kill goes ahead, in the CLI and in the
+/// dashboard both. One phrase, so a runbook can quote it once.
+const KILL_CONFIRMATION: &str = "KILL ALL";
+
+/// Kill a running Cellar and every process under it.
+pub async fn kill(path: &Path, yes: bool) -> Result<()> {
+    if !yes {
+        eprint!(
+            "This kills Cellar and every server it runs, with no graceful stop. \
+             Type {KILL_CONFIRMATION} to confirm: "
+        );
+        std::io::Write::flush(&mut std::io::stderr())?;
+
+        let mut typed = String::new();
+        std::io::stdin().read_line(&mut typed)?;
+        if typed.trim() != KILL_CONFIRMATION {
+            anyhow::bail!("not confirmed, so nothing was killed");
+        }
+    }
+
+    let config = Config::load(path)?;
+    // No instance. The route is process-wide, and an `?instance=` on it would
+    // read as killing one supervised server, which it has never meant.
+    LiveServer::connect(&config, None).await?.kill().await?;
+    println!("Cellar and everything it was running have been killed.");
+    Ok(())
+}
+
 fn print_changes(changes: &[cellar_core::convar::Change]) {
     if changes.is_empty() {
         println!("No changes.");
@@ -1002,6 +1030,23 @@ impl LiveServer {
             url.query_pairs_mut().append_pair("instance", id);
         }
         Ok(url)
+    }
+
+    async fn kill(&self) -> Result<()> {
+        // A transport error is not a failure here. `connect` already proved this
+        // Cellar answers, so a connection dropping now is the process going away
+        // as asked; only an answer that is not a success means it refused.
+        if let Ok(response) = self
+            .client
+            .post(self.url("/api/control/kill")?)
+            .send()
+            .await
+        {
+            response
+                .error_for_status()
+                .context("Cellar refused the kill")?;
+        }
+        Ok(())
     }
 
     async fn exec(&self, command: &str) -> Result<Vec<String>> {
