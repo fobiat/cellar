@@ -717,12 +717,12 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
     let configured_game = active_server
         .as_ref()
         .and_then(|server| server.game.clone())
-        .or_else(|| state.configured_game.clone());
+        .or_else(|| state.configured_game().map(str::to_owned));
     let configured_map = active_server
         .as_ref()
         .and_then(|server| server.map.clone())
-        .or_else(|| state.configured_map.clone());
-    let map_log = match (&state.log_file, configured_map.as_deref()) {
+        .or_else(|| state.configured_map().map(str::to_owned));
+    let map_log = match (state.log_file(), configured_map.as_deref()) {
         (Some(path), Some(map)) => tokio::fs::read_to_string(path)
             .await
             .map(|log| log.contains(map) && !log.contains("failed to load map"))
@@ -743,7 +743,7 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         });
 
     let addresses = addresses(&state).await;
-    let anti_cheat = crate::security::inspect(state.log_file.as_deref()).await;
+    let anti_cheat = crate::security::inspect(state.log_file()).await;
     let invite_only = read_access_files(&state)
         .await
         .ok()
@@ -776,7 +776,7 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         "health": {
             "map": map_log,
             "spawn_validation": spawn_validation,
-            "console": state.log_file.as_ref().is_some_and(|path| path.exists()),
+            "console": state.log_file().is_some_and(std::path::Path::exists),
         },
         "cellar": {
             "version": env!("CARGO_PKG_VERSION"),
@@ -816,27 +816,24 @@ async fn addresses(state: &AppState) -> Vec<serde_json::Value> {
     if state.web_enabled {
         result.push(address("Cellar web", &state.web_bind, &tailscale_ip, true));
     }
-    if state.bridge_enabled {
-        result.push(address(
-            "Document bridge",
-            &state.bridge_bind,
-            &tailscale_ip,
-            false,
-        ));
+    if state.bridge_enabled()
+        && let Some(bind) = state.bridge_bind()
+    {
+        result.push(address("Document bridge", bind, &tailscale_ip, false));
     }
-    let server_bind = format!("0.0.0.0:{}", state.server_port);
+    let server_bind = format!("0.0.0.0:{}", state.server_port().unwrap_or_default());
     result.push(address(
         "Game server",
         &server_bind,
         &tailscale_ip,
-        state.server_direct_connect,
+        state.server_direct_connect(),
     ));
-    let query_bind = format!("0.0.0.0:{}", state.query_port);
+    let query_bind = format!("0.0.0.0:{}", state.query_port().unwrap_or_default());
     result.push(address(
         "Game query",
         &query_bind,
         &tailscale_ip,
-        state.server_direct_connect,
+        state.server_direct_connect(),
     ));
     result
 }
@@ -959,7 +956,7 @@ async fn logs(
     _: Operator,
     Query(query): Query<LogsQuery>,
 ) -> Response {
-    let Some(path) = &state.log_file else {
+    let Some(path) = state.log_file() else {
         return Json(serde_json::json!({
             "lines": [], "matched": 0, "scanned_files": 0, "scanned_lines": 0,
             "persistent": false
@@ -1015,15 +1012,15 @@ async fn activate_config(
     };
     if config.web.bind != state.web_bind
         || config.web.enabled != state.web_enabled
-        || config.bridge.bind != state.bridge_bind
-        || config.bridge.enabled != state.bridge_enabled
+        || Some(config.bridge.bind.as_str()) != state.bridge_bind()
+        || config.bridge.enabled != state.bridge_enabled()
     {
         return error(
             StatusCode::BAD_REQUEST,
             "profiles may change the supervised server, but not Cellar listener bindings",
         );
     }
-    let current_log = state.log_file.as_deref();
+    let current_log = state.log_file();
     let candidate_log = config
         .primary_server()
         .unwrap_or_default()
@@ -1205,7 +1202,7 @@ async fn edit_gate(state: &AppState, enabled: bool, operator: &str) -> Result<()
 async fn read_access_files(
     state: &AppState,
 ) -> Result<(serde_json::Value, serde_json::Value), String> {
-    let Some(root) = &state.game_data_dir else {
+    let Some(root) = state.game_data_dir() else {
         return Ok((serde_json::json!({}), serde_json::json!({})));
     };
     let features = read_json_file(
@@ -1246,7 +1243,7 @@ async fn write_access_file(
     value: &serde_json::Value,
     operator: &str,
 ) -> Result<(), String> {
-    let Some(root) = &state.game_data_dir else {
+    let Some(root) = state.game_data_dir() else {
         return Err("the configured server has no game data directory".to_owned());
     };
     let path = root.join(name);

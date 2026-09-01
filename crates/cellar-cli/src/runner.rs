@@ -192,7 +192,7 @@ fn build_state(
     state.max_body_bytes = config.bridge.max_body_bytes;
     state.rate_limiter = RateLimiter::new(config.bridge.rate_limit_per_minute);
     state.login_limiter = cellar_server::state::LoginLimiter::new(10);
-    state.supervisor = Some(handle);
+    state.supervisor = Some(handle.clone());
     state.pool = pool;
     state.database_schema_owner = match config.database.schema_owner {
         DatabaseSchemaOwner::Gamemode => "gamemode".to_owned(),
@@ -211,22 +211,22 @@ fn build_state(
         config.update.program_release_url.clone(),
     )));
     state.release_config = config.release.clone();
-    // The primary's. The registry work gives AppState one of these per
-    // instance and this whole block moves with it.
-    state.log_file = Some(primary.server.engine_log_file());
     if let Ok(mut path) = state.config_path.lock() {
         *path = Some(config_path.to_owned());
     }
     state.web_bind = config.web.bind.clone();
     state.web_enabled = config.web.enabled;
-    state.bridge_bind = config.bridge.bind.clone();
-    state.bridge_enabled = config.bridge.enabled;
-    state.server_port = primary.server.port;
-    state.query_port = primary.server.query_port;
-    state.server_direct_connect = primary.server.direct_connect;
-    state.configured_game = primary.server.game.clone();
-    state.configured_map = primary.server.map.clone();
-    state.game_data_dir = primary.server.game_data_dir();
+    // One entry per declared instance, with the supervisor attached to the one
+    // that is actually running. Starting the rest is the next step; until then
+    // a second declared instance is visible and marked unavailable rather than
+    // silently absent.
+    let mut entries: Vec<cellar_server::registry::Entry> = config
+        .instances()
+        .iter()
+        .map(cellar_server::registry::Entry::from_instance)
+        .collect();
+    cellar_server::registry::Registry::set_handle(&mut entries, &primary.id, handle);
+    state.instances = cellar_server::registry::Registry::new(entries);
     state.version_probe = Some(cellar_update::Probe {
         project_dir: project_dir(config),
         steam_dir: config.update.steam_dir.clone(),

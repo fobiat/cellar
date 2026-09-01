@@ -219,18 +219,14 @@ pub struct AppState {
     pub update_config: cellar_core::config::UpdateConfig,
     pub program_update: std::sync::Arc<tokio::sync::RwLock<ProgramUpdateStatus>>,
     pub release_config: cellar_core::config::ReleaseConfig,
-    pub log_file: Option<PathBuf>,
-    pub configured_game: Option<String>,
-    pub configured_map: Option<String>,
-    pub game_data_dir: Option<PathBuf>,
+    /// Every supervised server this process owns.
+    ///
+    /// The per-instance fields used to be flat here, about a dozen of them, and
+    /// every route read them as if there were one server because there was.
+    pub instances: crate::registry::Registry,
     pub config_path: Mutex<Option<PathBuf>>,
     pub web_bind: String,
     pub web_enabled: bool,
-    pub bridge_bind: String,
-    pub bridge_enabled: bool,
-    pub server_port: u16,
-    pub query_port: u16,
-    pub server_direct_connect: bool,
     pub shutdown_requested: std::sync::Arc<AtomicBool>,
 
     reads: AtomicU64,
@@ -243,6 +239,58 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// The instance an unqualified request means.
+    ///
+    /// Every accessor below reads through this. The `Target` extractor replaces
+    /// them with the instance the caller actually asked for; until it exists,
+    /// one server means the primary and these read exactly what the flat fields
+    /// used to hold.
+    pub fn primary(&self) -> Option<&crate::registry::Entry> {
+        self.instances.primary()
+    }
+
+    fn primary_descriptor(&self) -> Option<&crate::registry::Descriptor> {
+        self.primary().map(|entry| &entry.descriptor)
+    }
+
+    pub fn log_file(&self) -> Option<&std::path::Path> {
+        self.primary_descriptor()
+            .and_then(|d| d.log_file.as_deref())
+    }
+
+    pub fn configured_game(&self) -> Option<&str> {
+        self.primary_descriptor().and_then(|d| d.game.as_deref())
+    }
+
+    pub fn configured_map(&self) -> Option<&str> {
+        self.primary_descriptor().and_then(|d| d.map.as_deref())
+    }
+
+    pub fn game_data_dir(&self) -> Option<&std::path::Path> {
+        self.primary_descriptor()
+            .and_then(|d| d.data_dir.as_deref())
+    }
+
+    pub fn server_port(&self) -> Option<u16> {
+        self.primary_descriptor().map(|d| d.port)
+    }
+
+    pub fn query_port(&self) -> Option<u16> {
+        self.primary_descriptor().map(|d| d.query_port)
+    }
+
+    pub fn server_direct_connect(&self) -> bool {
+        self.primary_descriptor().is_some_and(|d| d.direct_connect)
+    }
+
+    pub fn bridge_bind(&self) -> Option<&str> {
+        self.primary_descriptor().map(|d| d.bridge_bind.as_str())
+    }
+
+    pub fn bridge_enabled(&self) -> bool {
+        self.primary_descriptor().is_some_and(|d| d.bridge_enabled)
+    }
+
     pub fn new(documents: Documents, auth: Policy, scope: impl Into<String>) -> Self {
         Self {
             documents,
@@ -271,18 +319,10 @@ impl AppState {
                 ),
             )),
             release_config: Default::default(),
-            log_file: None,
-            configured_game: None,
-            configured_map: None,
-            game_data_dir: None,
+            instances: Default::default(),
             config_path: Mutex::new(None),
             web_bind: "127.0.0.1:8081".to_owned(),
             web_enabled: false,
-            bridge_bind: "127.0.0.1:8080".to_owned(),
-            bridge_enabled: false,
-            server_port: 27015,
-            query_port: 27016,
-            server_direct_connect: false,
             shutdown_requested: std::sync::Arc::new(AtomicBool::new(false)),
             reads: AtomicU64::new(0),
             writes: AtomicU64::new(0),
