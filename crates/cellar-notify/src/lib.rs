@@ -13,7 +13,7 @@ pub mod discord;
 use std::time::Duration;
 
 use cellar_core::config::NotifyConfig;
-use cellar_core::event::Event;
+use cellar_core::event::{Event, InstanceEvent};
 use cellar_core::secret::Secret;
 use tokio::sync::broadcast;
 
@@ -25,11 +25,14 @@ pub struct Notifier {
     kinds: Vec<String>,
     batch: Duration,
     hostname: String,
+    /// Whether this process supervises more than one server, which decides
+    /// whether a message names which one it is about.
+    several: bool,
 }
 
 impl Notifier {
     /// Build a notifier, or `None` when nothing is configured to receive.
-    pub fn new(config: &NotifyConfig, hostname: impl Into<String>) -> Option<Self> {
+    pub fn new(config: &NotifyConfig, hostname: impl Into<String>, several: bool) -> Option<Self> {
         if !config.enabled {
             return None;
         }
@@ -52,6 +55,7 @@ impl Notifier {
             kinds: config.kinds.clone(),
             batch: Duration::from_secs(config.batch_seconds.max(1)),
             hostname: hostname.into(),
+            several,
         })
     }
 
@@ -66,17 +70,31 @@ impl Notifier {
         self.kinds.is_empty() || self.kinds.iter().any(|k| k == event.kind())
     }
 
-    /// Consume the event stream until it closes, sending batches.
-    pub async fn run(self, mut events: broadcast::Receiver<Event>) {
-        let mut pending: Vec<Event> = Vec::new();
+    /// Consume the merged event stream until it closes, sending batches.
+    ///
+    /// **The merged stream, not the primary's.** This used to subscribe to one
+    /// handle, so on a two-instance deployment a crash on the second server
+    /// notified nobody, which is precisely the server an unattended deployment
+    /// hears about last.
+    ///
+    /// Batches are kept per instance rather than merged into one message. Two
+    /// servers restarting for unrelated reasons in the same five second window
+    /// is two things that happened, and a single embed listing both without
+    /// saying which line belongs to which is worse than two messages.
+    pub async fn run(self, mut events: broadcast::Receiver<InstanceEvent>) {
+        let mut pending: Vec<(String, Vec<Event>)> = Vec::new();
         let mut ticker = tokio::time::interval(self.batch);
 
         loop {
             tokio::select! {
                 received = events.recv() => match received {
-                    Ok(event) => {
-                        if self.wants(&event) {
-                            pending.push(event);
+                    Ok(wrapped) => {
+                        if self.wants(&wrapped.event) {
+                            let instance = wrapped.instance.to_string();
+                            match pending.iter_mut().find(|(id, _)| *id == instance) {
+                                Some((_, batch)) => batch.push(wrapped.event),
+                                None => pending.push((instance, vec![wrapped.event])),
+                            }
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(missed)) => {
@@ -85,28 +103,46 @@ impl Notifier {
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
                 _ = ticker.tick() => {
-                    if !pending.is_empty() {
-                        let batch = std::mem::take(&mut pending);
-                        self.send(&batch).await;
+                    for (instance, batch) in std::mem::take(&mut pending) {
+                        self.send(&instance, &batch).await;
                     }
                 }
             }
         }
 
-        if !pending.is_empty() {
-            self.send(&pending).await;
+        for (instance, batch) in pending {
+            self.send(&instance, &batch).await;
         }
     }
 
-    async fn send(&self, batch: &[Event]) {
+    /// How this deployment is named in a message.
+    ///
+    /// The instance id is appended only when it is worth appending. A
+    /// single-server deployment's messages must not start saying
+    /// "myserver / default" because instances exist as a concept.
+    fn label(&self, instance: &str) -> String {
+        if self.several {
+            format!("{} / {instance}", self.hostname)
+        } else {
+            self.hostname.clone()
+        }
+    }
+
+    async fn send(&self, instance: &str, batch: &[Event]) {
+        if batch.is_empty() {
+            return;
+        }
+        let label = self.label(instance);
+
         if let Some(url) = &self.discord {
-            let payload = discord::payload(batch, &self.hostname);
+            let payload = discord::payload(batch, &label);
             self.post(url, &payload).await;
         }
 
         if let Some(url) = &self.generic {
             let payload = serde_json::json!({
                 "hostname": self.hostname,
+                "instance": instance,
                 "at": chrono::Utc::now().to_rfc3339(),
                 "events": batch,
             });
@@ -160,16 +196,16 @@ mod tests {
     fn nothing_configured_means_no_notifier() {
         let mut config = config();
         config.enabled = false;
-        assert!(Notifier::new(&config, "test").is_none());
+        assert!(Notifier::new(&config, "test", false).is_none());
 
         config.enabled = true;
         config.discord_webhook = None;
-        assert!(Notifier::new(&config, "test").is_none());
+        assert!(Notifier::new(&config, "test", false).is_none());
     }
 
     #[test]
     fn high_frequency_events_are_never_sent() {
-        let notifier = Notifier::new(&config(), "test").unwrap();
+        let notifier = Notifier::new(&config(), "test", false).unwrap();
 
         let noisy = [
             Event::Resources(ResourceSample {
@@ -203,9 +239,21 @@ mod tests {
         }
     }
 
+    /// A message has to say which server it is about, and only when it must.
+    #[test]
+    fn a_message_names_the_instance_only_when_there_is_more_than_one() {
+        let one = Notifier::new(&config(), "applejack-01", false).unwrap();
+        assert_eq!(one.label("default"), "applejack-01");
+
+        // A single-server deployment's messages must not start saying
+        // "applejack-01 / default" because instances exist as a concept.
+        let several = Notifier::new(&config(), "applejack-01", true).unwrap();
+        assert_eq!(several.label("published"), "applejack-01 / published");
+    }
+
     #[test]
     fn notable_events_are_sent_by_default() {
-        let notifier = Notifier::new(&config(), "test").unwrap();
+        let notifier = Notifier::new(&config(), "test", false).unwrap();
 
         assert!(notifier.wants(&Event::PlayerJoined {
             steam_id: 1,
@@ -221,7 +269,7 @@ mod tests {
     fn an_explicit_kind_list_filters() {
         let mut config = config();
         config.kinds = vec!["process_exited".to_owned()];
-        let notifier = Notifier::new(&config, "test").unwrap();
+        let notifier = Notifier::new(&config, "test", false).unwrap();
 
         assert!(notifier.wants(&Event::ProcessExited {
             code: Some(1),

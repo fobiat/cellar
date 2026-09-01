@@ -798,6 +798,28 @@ pub struct BackupConfig {
     pub directory: Option<PathBuf>,
     pub interval_hours: u64,
     pub retain: usize,
+
+    /// Read each dump back before counting it as a backup.
+    ///
+    /// On by default, and it costs a few milliseconds. The failure it catches
+    /// is a disk that filled up partway through writing, which leaves a
+    /// plausible file of a plausible size that restores into a half-applied
+    /// database.
+    pub verify: bool,
+
+    /// A second copy, somewhere that is not this disk.
+    ///
+    /// A directory, because whatever is mounted there is the operator's
+    /// decision: a network share, another volume, a synced folder. Cellar has
+    /// no business holding credentials for an object store whose contents it
+    /// cannot check.
+    pub copy_to: Option<PathBuf>,
+
+    /// Take a dump before applying a game update.
+    ///
+    /// The one moment a rollback is most likely to be wanted and least likely
+    /// to have been planned for.
+    pub before_update: bool,
 }
 
 /// Optional project-local commands for building and publishing the game.
@@ -819,6 +841,9 @@ impl Default for BackupConfig {
             directory: None,
             interval_hours: 24,
             retain: 7,
+            verify: true,
+            copy_to: None,
+            before_update: true,
         }
     }
 }

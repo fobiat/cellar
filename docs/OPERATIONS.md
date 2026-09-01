@@ -52,6 +52,10 @@ that instance's scope, and is resolved through the registry rather than taken as
 a scope directly, so a caller cannot read another deployment's rows out of a
 shared database. Retention is `database.event_retention_days`.
 
+Retention is enforced by the `event-retention` job, above. **It was configured
+and never ran before 2026-09-01**, so a deployment older than that has every
+event it ever recorded.
+
 **Event rows written before 2026-09-01 carry only a kind and a timestamp.** The
 recorder passed no logger, account or detail, and nothing read the table back,
 so nothing caught it. Older rows still list; they just have nothing to say.
@@ -78,6 +82,41 @@ at all. Kicking a player or running a `[[profile.command]]` marked
 `confirm = true` asks once. Stopping or restarting a server, switching profile,
 applying a settings import and shutting Cellar down ask for the name typed back,
 and the question names the server and counts who is about to be disconnected.
+
+---
+
+## What runs on a timer
+
+`GET /api/jobs` and the Scheduled jobs panel on the Diagnostics tab list every
+recurring job this process runs, when it last ran, whether it worked, and when
+the next one is due. `POST /api/jobs/{name}/run` asks for one now.
+
+| Job | Every | Registered when |
+| --- | --- | --- |
+| `database-backup` | `backup.interval_hours` | `backup.enabled` and a database URL |
+| `event-retention` | 24 hours | a database, and `database.event_retention_days` above zero |
+| `game-update-check` | `update.check_interval_minutes` | `update.policy` is not `off` |
+| `program-update-check` | `update.program_check_interval_minutes` | `update.program_check` |
+
+Three of these were spawned loops with no way to see any of them.
+**`event-retention` had no loop at all**: `database.event_retention_days`
+defaulted to 90, nothing enforced it, and only the manual `cellar db prune` ever
+acted on it, so a long-running deployment's `srv_event` and `srv_command` grew
+without bound.
+
+The supervisor's tail tick and the MariaDB supervisor's are deliberately not
+jobs. They are a state machine's clock inside a `select!`: no result to report,
+and no meaning to running one now.
+
+**"Run now" answers 202, not 200.** It nudges the job's own loop rather than
+running the work inside the request, so a job cannot be running twice at once
+however many operators press the button, and it pushes the next automatic run
+out by a full interval. Two backups a second apart because somebody pressed the
+button just before the interval elapsed is not what anybody means by "run now".
+
+Only `game-update-check` and `program-update-check` run at startup. The two that
+write do not: a Cellar being restarted in a loop would otherwise take a dump per
+restart and prune the good ones out of the retention window.
 
 ---
 

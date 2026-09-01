@@ -9,7 +9,9 @@ pub mod launch;
 pub mod logfile;
 pub mod metrics;
 pub mod process;
+pub mod scheduler;
 pub mod supervisor;
 
 pub use launch::{Command, command_for, log_file_for};
+pub use scheduler::Scheduler;
 pub use supervisor::{Control, Handle, Supervisor};

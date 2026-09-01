@@ -225,6 +225,13 @@ pub struct AppState {
     /// every route read them as if there were one server because there was.
     pub instances: crate::registry::Registry,
     pub config_path: Mutex<Option<PathBuf>>,
+    /// Every recurring job this process runs, set once at startup.
+    ///
+    /// A `OnceLock` rather than a field on `new`, because the jobs need things
+    /// this state owns (the program-update status) and so cannot be built
+    /// before it. Absent in a process that has no jobs, which is any test and
+    /// any deployment with backups, updates and retention all off.
+    pub scheduler: std::sync::OnceLock<std::sync::Arc<cellar_runtime::Scheduler>>,
     pub web_bind: String,
     pub web_enabled: bool,
     pub shutdown_requested: std::sync::Arc<AtomicBool>,
@@ -321,6 +328,7 @@ impl AppState {
             release_config: Default::default(),
             instances: Default::default(),
             config_path: Mutex::new(None),
+            scheduler: std::sync::OnceLock::new(),
             web_bind: "127.0.0.1:8081".to_owned(),
             web_enabled: false,
             shutdown_requested: std::sync::Arc::new(AtomicBool::new(false)),

@@ -115,6 +115,16 @@ enabled = false
 # directory = "C:\\ProgramData\\Cellar\\backups"
 interval_hours = 24
 retain = 7
+# Read each dump back before counting it as a backup. The failure this catches
+# is a disk that filled up partway through writing: a plausible file, of a
+# plausible size, with a correct header and no end marker.
+verify = true
+# A second copy on some other disk. A network share, another volume, a synced
+# folder; whatever is mounted there is your decision.
+# copy_to = "Z:\\cellar-backups"
+# A dump immediately before a game update is applied, which is the one moment a
+# rollback is most likely to be wanted and least likely to have been planned for.
+before_update = true
 
 # Uncomment to have Cellar download, initialize and supervise its own MariaDB
 # instead of only connecting to one already running somewhere. `database.url`

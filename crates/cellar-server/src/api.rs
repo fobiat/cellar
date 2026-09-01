@@ -42,6 +42,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/instances", get(instances))
         .route("/api/activity", get(activity))
         .route("/api/diagnostics", get(diagnostics))
+        .route("/api/jobs", get(jobs))
+        .route("/api/jobs/{name}/run", post(run_job))
         .route("/api/db/backups", get(db_backups))
         .route("/api/db/backup", post(db_backup))
         .route("/api/db/restore", post(db_restore))
@@ -1961,6 +1963,60 @@ fn one_note(label: &str, detail: String) -> cellar_diagnostics::Report {
             instance: None,
         }],
     }
+}
+
+/// What runs on a timer, when it last ran, and whether it worked.
+///
+/// These were three `tokio::spawn`ed loops in `runner.rs` with no way to see
+/// any of them, and a fourth, event retention, that was configured and had no
+/// loop at all.
+async fn jobs(State(state): State<Arc<AppState>>, _: Operator) -> Response {
+    let jobs = state
+        .scheduler
+        .get()
+        .map(|scheduler| scheduler.statuses())
+        .unwrap_or_default();
+    Json(serde_json::json!({ "jobs": jobs })).into_response()
+}
+
+/// Run a job now, and push its next automatic run out by a full interval.
+///
+/// 202, not 200: this nudges the job's own loop rather than running the work
+/// inside the request, so a job cannot be running twice at once however many
+/// operators press the button, and the answer is "asked", not "done".
+async fn run_job(
+    State(state): State<Arc<AppState>>,
+    operator: Operator,
+    Path(name): Path<String>,
+) -> Response {
+    let Some(scheduler) = state.scheduler.get() else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this process runs no scheduled jobs",
+        );
+    };
+
+    if !scheduler.run_now(&name) {
+        return error(
+            StatusCode::NOT_FOUND,
+            format!(
+                "no job '{name}'. This process runs: {}",
+                scheduler
+                    .statuses()
+                    .iter()
+                    .map(|job| job.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        );
+    }
+
+    tracing::info!("{} asked for job '{name}' to run now", operator.name);
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "asked": name })),
+    )
+        .into_response()
 }
 
 async fn instances(State(state): State<Arc<AppState>>, _: Operator) -> Response {

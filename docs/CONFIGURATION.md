@@ -452,6 +452,21 @@ a backup nobody has restored is a hypothesis.
 | `directory` | unset | Where dumps go. Falls back to `mariadb.data_dir/backups`. |
 | `interval_hours` | `24` | Hours between dumps. |
 | `retain` | `7` | How many to keep. Older ones are deleted after each dump. |
+| `verify` | `true` | Read each dump back before counting it as one. |
+| `copy_to` | unset | A directory to put a second copy in, on some other disk. |
+| `before_update` | `true` | Take a dump before applying a game update. |
+
+**`verify` catches the failure that matters**, which is a disk that filled up
+partway through writing. That leaves a plausible file, of a plausible size, with
+a correct header, missing only `mariadb-dump`'s last line. Verification checks
+the size, the header and that end marker, and it runs before `retain` is allowed
+to delete an older dump to make room for the new one.
+
+`copy_to` is a directory rather than a URL because whatever is mounted there is
+your decision: a network share, another volume, a synced folder. Cellar has no
+business holding credentials for an object store whose contents it cannot check.
+It is a copy, not a move; the local dump is what `restore` and the retention
+window are about.
 
 **Only one process may own this.** Two Cellar processes with `enabled = true`
 and the same directory run two loops with the same `retain`, so each prunes the

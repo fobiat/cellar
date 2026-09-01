@@ -112,13 +112,6 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         servers.push(bind(&config.web.bind, router, "web ui").await?);
     }
 
-    if let Some(handle) = &primary_handle
-        && let Some(notifier) =
-            cellar_notify::Notifier::new(&config.notify, &primary.server.hostname)
-    {
-        tokio::spawn(notifier.run(handle.subscribe()));
-    }
-
     // One merged stream, tagged with which server each event came from.
     let merged = fan_in(
         &supervisors
@@ -126,6 +119,18 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
             .map(|(id, _, handle, _)| (id.clone(), handle.clone()))
             .collect::<Vec<_>>(),
     );
+
+    // The merged stream, not the primary's. This used to subscribe to one
+    // handle, so on a two-instance deployment a crash on the second server
+    // notified nobody, which is exactly the server an unattended deployment
+    // hears about last.
+    if let Some(notifier) = cellar_notify::Notifier::new(
+        &config.notify,
+        &primary.server.hostname,
+        supervisors.len() > 1,
+    ) {
+        tokio::spawn(notifier.run(merged.subscribe()));
+    }
 
     if let Some(pool) = &pool {
         let scopes = config
@@ -136,26 +141,17 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         tokio::spawn(record_events(pool.clone(), merged.subscribe(), scopes));
     }
 
-    if config.backup.enabled {
-        if let Some(url) = config.database.url.clone() {
-            tokio::spawn(backup_loop(config.clone(), url.expose().to_owned()));
-        } else {
-            tracing::warn!("database backups enabled but CELLAR_DATABASE_URL is unset");
-        }
+    let scheduler = build_scheduler(&config, &state, pool.clone(), primary_handle.clone());
+    if !scheduler.is_empty() {
+        let names: Vec<String> = scheduler
+            .statuses()
+            .into_iter()
+            .map(|job| job.name)
+            .collect();
+        tracing::info!("scheduled jobs: {}", names.join(", "));
+        scheduler.start();
     }
-
-    if config.update.policy != UpdatePolicy::Off
-        && let Some(handle) = primary_handle.clone()
-    {
-        tokio::spawn(watch_for_updates(config.clone(), handle));
-    }
-
-    if config.update.program_check {
-        tokio::spawn(watch_for_program_updates(
-            config.clone(),
-            state.program_update.clone(),
-        ));
-    }
+    let _ = state.scheduler.set(scheduler);
 
     let running: Vec<_> = supervisors
         .into_iter()
@@ -224,15 +220,133 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     Ok(())
 }
 
-async fn backup_loop(config: Config, database_url: String) {
-    let interval = std::time::Duration::from_secs(config.backup.interval_hours.max(1) * 3600);
-    loop {
-        tokio::time::sleep(interval).await;
-        match cellar_mariadb::backup(&database_url, &config.mariadb, &config.backup) {
-            Ok(path) => tracing::info!("database backup written to {}", path.display()),
-            Err(why) => tracing::error!("database backup failed: {why}"),
+/// Every recurring job this process runs, in one register.
+///
+/// These were three separate `tokio::spawn`ed loops that each slept and did a
+/// thing, invisible from anywhere but this file, so nothing said when a backup
+/// last ran or whether it worked. Worse, `database.event_retention_days` was
+/// configured and had **no loop at all**: the setting has done nothing since it
+/// was added, and only the manual `cellar db prune` ever acted on it.
+///
+/// The supervisor's tail tick and the MariaDB supervisor's are deliberately not
+/// here. They are a state machine's clock inside a `select!`, with no result to
+/// report and no meaning to "run now".
+fn build_scheduler(
+    config: &Config,
+    state: &Arc<AppState>,
+    pool: Option<sqlx::MySqlPool>,
+    primary: Option<Handle>,
+) -> Arc<cellar_runtime::Scheduler> {
+    use cellar_runtime::scheduler::Spec;
+    let mut scheduler = cellar_runtime::Scheduler::new();
+
+    if config.backup.enabled {
+        match config.database.url.clone() {
+            Some(url) => {
+                let url = url.expose().to_owned();
+                let mariadb = config.mariadb.clone();
+                let backup = config.backup.clone();
+                scheduler.register(
+                    Spec {
+                        name: "database-backup".to_owned(),
+                        description: "Dump the operations database, verify it, and prune old dumps"
+                            .to_owned(),
+                        interval: std::time::Duration::from_secs(
+                            config.backup.interval_hours.max(1) * 3600,
+                        ),
+                        // Never at startup. A Cellar being restarted in a loop
+                        // would otherwise take a dump per restart and prune the
+                        // good ones out of the retention window.
+                        at_startup: false,
+                    },
+                    move || {
+                        let url = url.clone();
+                        let mariadb = mariadb.clone();
+                        let backup = backup.clone();
+                        // Blocking process work, off the async threads.
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                cellar_mariadb::backup(&url, &mariadb, &backup)
+                                    .map(|path| format!("wrote {}", path.display()))
+                                    .map_err(|why| why.to_string())
+                            })
+                            .await
+                            .unwrap_or_else(|why| Err(why.to_string()))
+                        }
+                    },
+                );
+            }
+            None => tracing::warn!("database backups enabled but CELLAR_DATABASE_URL is unset"),
         }
     }
+
+    // The job that never existed. `event_retention_days` defaults to 90 and
+    // nothing has ever enforced it, so a long-running deployment's `srv_event`
+    // and `srv_command` grow without bound.
+    if let Some(pool) = pool.clone() {
+        let days = config.database.event_retention_days;
+        if days > 0 {
+            scheduler.register(
+                Spec {
+                    name: "event-retention".to_owned(),
+                    description: format!("Delete recorded events older than {days} days"),
+                    interval: std::time::Duration::from_secs(24 * 3600),
+                    at_startup: false,
+                },
+                move || {
+                    let pool = pool.clone();
+                    async move {
+                        cellar_store::ops::prune_events(&pool, days)
+                            .await
+                            .map(|deleted| format!("deleted {deleted} row(s)"))
+                            .map_err(|why| why.to_string())
+                    }
+                },
+            );
+        }
+    }
+
+    if config.update.policy != UpdatePolicy::Off
+        && let Some(handle) = primary
+    {
+        let config = config.clone();
+        scheduler.register(
+            Spec {
+                name: "game-update-check".to_owned(),
+                description: "Check for an update, and take it if the policy and the gates agree"
+                    .to_owned(),
+                interval: cellar_update::updater::interval(&config.update),
+                at_startup: true,
+            },
+            move || {
+                let config = config.clone();
+                let handle = handle.clone();
+                async move { check_for_updates(&config, &handle).await }
+            },
+        );
+    }
+
+    if config.update.program_check {
+        let url = config.update.program_release_url.clone();
+        let status = state.program_update.clone();
+        scheduler.register(
+            Spec {
+                name: "program-update-check".to_owned(),
+                description: "Check whether a newer Cellar has been released".to_owned(),
+                interval: std::time::Duration::from_secs(
+                    config.update.program_check_interval_minutes.max(5) * 60,
+                ),
+                at_startup: true,
+            },
+            move || {
+                let url = url.clone();
+                let status = status.clone();
+                async move { check_for_program_updates(&url, &status).await }
+            },
+        );
+    }
+
+    Arc::new(scheduler)
 }
 
 /// Start and wait for the locally-hosted MariaDB, when `[mariadb].managed`.
@@ -558,106 +672,149 @@ async fn record_events(
     }
 }
 
-/// Check for updates on a timer, and apply them when the policy and the gates agree.
-async fn watch_for_updates(config: Config, handle: Handle) {
+/// One update check. Was a loop with a `tokio::time::interval`; the scheduler
+/// owns the timing now, so this returns what happened instead of only logging.
+async fn check_for_updates(config: &Config, handle: &Handle) -> Result<String, String> {
     let probe = cellar_update::Probe {
-        project_dir: project_dir(&config),
+        project_dir: project_dir(config),
         steam_dir: config.update.steam_dir.clone(),
         steamcmd: config.update.steamcmd.clone(),
         check_remote: config.update.check_remote,
     };
 
-    let mut ticker = tokio::time::interval(cellar_update::updater::interval(&config.update));
+    let versions = cellar_update::version::probe(&probe).await;
+    for problem in &versions.problems {
+        tracing::debug!("version probe: {problem}");
+    }
 
-    loop {
-        ticker.tick().await;
+    let players = handle
+        .snapshot()
+        .await
+        .map(|s| s.players.len())
+        .unwrap_or(0);
+    let hour = chrono::Local::now()
+        .format("%H")
+        .to_string()
+        .parse()
+        .unwrap_or(0u8);
 
-        let versions = cellar_update::version::probe(&probe).await;
-        for problem in &versions.problems {
-            tracing::debug!("version probe: {problem}");
+    match cellar_update::updater::decide(&config.update, &versions, players, hour) {
+        cellar_update::Decision::UpToDate => Ok("up to date".to_owned()),
+        cellar_update::Decision::Available { what } => {
+            let what = what.join(", ");
+            tracing::info!("update available: {what}");
+            Ok(format!("available, not taken: {what}"))
         }
+        cellar_update::Decision::Deferred { what, why } => {
+            let what = what.join(", ");
+            tracing::info!("update deferred ({why}): {what}");
+            Ok(format!("deferred ({why}): {what}"))
+        }
+        cellar_update::Decision::Apply { what } => {
+            let what = what.join(", ");
+            tracing::warn!("taking update: {what}");
 
-        let players = handle
-            .snapshot()
-            .await
-            .map(|s| s.players.len())
-            .unwrap_or(0);
-        let hour = chrono::Local::now()
-            .format("%H")
-            .to_string()
-            .parse()
-            .unwrap_or(0u8);
+            // A snapshot first, because this is the one moment a rollback is
+            // most likely to be wanted and least likely to have been planned
+            // for. Not fatal if it fails: refusing the update would leave a
+            // deployment stuck behind on a box with a full backup disk.
+            let snapshot = snapshot_before_update(config).await;
 
-        match cellar_update::updater::decide(&config.update, &versions, players, hour) {
-            cellar_update::Decision::UpToDate => {}
-            cellar_update::Decision::Available { what } => {
-                tracing::info!("update available: {}", what.join(", "));
-            }
-            cellar_update::Decision::Deferred { what, why } => {
-                tracing::info!("update deferred ({why}): {}", what.join(", "));
-            }
-            cellar_update::Decision::Apply { what } => {
-                tracing::warn!("taking update: {}", what.join(", "));
+            // Stop before updating: the engine's files are in use while it
+            // runs, and Steam cannot replace a running binary.
+            handle.stop().await;
 
-                // Stop before updating: the engine's files are in use while it
-                // runs, and Steam cannot replace a running binary.
-                handle.stop().await;
-
-                let applied =
-                    cellar_update::updater::apply(&config.update, &probe.project_dir).await;
-                for step in &applied.steps {
-                    if step.ok {
-                        tracing::info!("{}: {}", step.name, step.detail);
-                    } else {
-                        tracing::error!("{} failed: {}", step.name, step.detail);
-                    }
+            let applied = cellar_update::updater::apply(&config.update, &probe.project_dir).await;
+            let mut failures = Vec::new();
+            for step in &applied.steps {
+                if step.ok {
+                    tracing::info!("{}: {}", step.name, step.detail);
+                } else {
+                    tracing::error!("{} failed: {}", step.name, step.detail);
+                    failures.push(step.name.clone());
                 }
+            }
 
-                // Restart either way. A half-applied update still needs a
-                // running server more than it needs to stay down.
-                handle.restart().await;
+            // Restart either way. A half-applied update still needs a running
+            // server more than it needs to stay down.
+            handle.restart().await;
+
+            if failures.is_empty() {
+                Ok(format!("applied {what}{snapshot}"))
+            } else {
+                Err(format!(
+                    "applied {what}{snapshot}, but these steps failed: {}",
+                    failures.join(", ")
+                ))
             }
         }
     }
 }
 
-async fn watch_for_program_updates(
-    config: Config,
-    status: Arc<tokio::sync::RwLock<ProgramUpdateStatus>>,
-) {
-    let interval =
-        std::time::Duration::from_secs(config.update.program_check_interval_minutes.max(5) * 60);
-    let mut ticker = tokio::time::interval(interval);
+/// A dump taken immediately before an update is applied, when one is possible.
+///
+/// Returns a suffix for the job's own outcome line rather than a `Result`: an
+/// update that could not be snapshotted is still an update that should proceed,
+/// and the operator needs to know which of the two happened.
+async fn snapshot_before_update(config: &Config) -> String {
+    if !config.backup.before_update || !config.backup.enabled {
+        return String::new();
+    }
+    let Some(url) = config.database.url.clone() else {
+        return String::new();
+    };
 
-    loop {
-        ticker.tick().await;
-        let result =
-            cellar_update::selfupdate::latest_release(&config.update.program_release_url).await;
-        let checked_at = chrono::Utc::now().to_rfc3339();
-        let mut state = status.write().await;
-        state.checked_at = Some(checked_at);
-        state.error = None;
+    let url = url.expose().to_owned();
+    let mariadb = config.mariadb.clone();
+    let backup = config.backup.clone();
+    let taken =
+        tokio::task::spawn_blocking(move || cellar_mariadb::backup(&url, &mariadb, &backup)).await;
 
-        match result {
-            Ok(release) if cellar_update::selfupdate::is_newer(&state.current, &release.tag) => {
-                let changed = state.latest.as_deref() != Some(release.tag.as_str());
-                state.latest = Some(release.tag.clone());
-                state.update_available = true;
-                if changed {
-                    tracing::info!(
-                        "Cellar program update available: {} (run `cellar self-update` to install)",
-                        release.tag
-                    );
-                }
+    match taken {
+        Ok(Ok(path)) => {
+            tracing::info!("pre-update snapshot written to {}", path.display());
+            format!(", after a snapshot to {}", path.display())
+        }
+        Ok(Err(why)) => {
+            tracing::error!("pre-update snapshot failed, taking the update anyway: {why}");
+            format!(", with no snapshot ({why})")
+        }
+        Err(why) => format!(", with no snapshot ({why})"),
+    }
+}
+
+async fn check_for_program_updates(
+    url: &str,
+    status: &Arc<tokio::sync::RwLock<ProgramUpdateStatus>>,
+) -> Result<String, String> {
+    let result = cellar_update::selfupdate::latest_release(url).await;
+    let mut state = status.write().await;
+    state.checked_at = Some(chrono::Utc::now().to_rfc3339());
+    state.error = None;
+
+    match result {
+        Ok(release) if cellar_update::selfupdate::is_newer(&state.current, &release.tag) => {
+            let changed = state.latest.as_deref() != Some(release.tag.as_str());
+            state.latest = Some(release.tag.clone());
+            state.update_available = true;
+            if changed {
+                tracing::info!(
+                    "Cellar program update available: {} (run `cellar self-update` to install)",
+                    release.tag
+                );
             }
-            Ok(release) => {
-                state.latest = Some(release.tag);
-                state.update_available = false;
-            }
-            Err(error) => {
-                state.error = Some(error.to_string());
-                tracing::warn!("Cellar program update check failed: {error}");
-            }
+            Ok(format!("{} is available", release.tag))
+        }
+        Ok(release) => {
+            let tag = release.tag.clone();
+            state.latest = Some(release.tag);
+            state.update_available = false;
+            Ok(format!("running the latest, {tag}"))
+        }
+        Err(error) => {
+            state.error = Some(error.to_string());
+            tracing::warn!("Cellar program update check failed: {error}");
+            Err(error.to_string())
         }
     }
 }
@@ -765,5 +922,46 @@ mod tests {
 
         assert_eq!(ledger.end(&id("dev")), None);
         assert_eq!(ledger.get(&id("published")), Some(200));
+    }
+
+    /// A recurring job that is not in the register is a job nobody can see.
+    ///
+    /// This file had three `tokio::spawn`ed sleep-and-do loops, none of which
+    /// reported when it last ran or whether it worked, and a fourth thing
+    /// (`event_retention_days`) that was configured and had no loop at all.
+    /// Nothing stops a fifth being added the old way except this test.
+    #[test]
+    fn no_recurring_work_is_spawned_outside_the_scheduler() {
+        const SOURCE: &str = include_str!("runner.rs");
+
+        // Only the product half of the file, so the test does not find itself.
+        // `tokio::time::interval` is unambiguous: nothing constructs one except
+        // to do a thing repeatedly. The two `loop`s that remain here are
+        // event-stream consumers, which have no schedule and no result.
+        let product = SOURCE.split("#[cfg(test)]").next().unwrap_or(SOURCE);
+
+        let offenders: Vec<&str> = product
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.contains("tokio::time::interval("))
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "these look like unregistered recurring work: {offenders:?}"
+        );
+
+        // And the register is not empty of the ones that were moved into it.
+        for name in [
+            "database-backup",
+            "event-retention",
+            "game-update-check",
+            "program-update-check",
+        ] {
+            assert!(
+                product.contains(&format!("name: \"{name}\".to_owned()")),
+                "the '{name}' job is not registered"
+            );
+        }
     }
 }

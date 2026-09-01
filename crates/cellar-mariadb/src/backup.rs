@@ -6,7 +6,7 @@
 //! in the MariaDB suite and does not appear in `ps`.
 
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,6 +31,12 @@ pub enum BackupError {
          Restoring it would run whatever it does contain against the database."
     )]
     NotADump(PathBuf),
+    #[error("{0} is {1} bytes, which is too small to be a dump of anything")]
+    Truncated(PathBuf, u64),
+    #[error("{0} has no end-of-dump marker, so mariadb-dump did not finish writing it")]
+    Unfinished(PathBuf),
+    #[error("could not copy the dump to {0}: {1}")]
+    Copy(PathBuf, String),
     #[error(
         "restore failed and the database may be half-applied, because a dump is a stream of \
          statements and the client stops at the first one that fails: {0}"
@@ -204,8 +210,72 @@ pub fn create(
         ));
     }
 
+    // Verified before it is counted as a backup, and before `prune` is allowed
+    // to delete an older one to make room for it. A dump that has never been
+    // read back is a hypothesis, and the failure this catches is the one that
+    // matters: a disk that filled up halfway through writing it, which leaves
+    // a plausible file with a plausible size and no end marker.
+    if backup.verify {
+        verify(&output)?;
+    }
+
+    if let Some(elsewhere) = &backup.copy_to {
+        copy_off_box(&output, elsewhere)?;
+    }
+
     prune(&directory, backup.retain)?;
     Ok(output)
+}
+
+/// Read a dump back far enough to know it is one and that it finished.
+///
+/// Three questions, cheapest first: is there enough of it, does it start like a
+/// dump, and does it end like one. `mariadb-dump` writes
+/// `-- Dump completed on ...` as its last line and writes nothing at all if it
+/// fails early, so the end marker is the one honest signal that the process
+/// that wrote this file ran to completion.
+pub fn verify(dump: &Path) -> Result<u64, BackupError> {
+    if !dump.exists() {
+        return Err(BackupError::NoSuchDump(dump.to_path_buf()));
+    }
+
+    let bytes = fs::metadata(dump)?.len();
+    // A dump of an empty database is still about a kilobyte of header.
+    if bytes < 512 {
+        return Err(BackupError::Truncated(dump.to_path_buf(), bytes));
+    }
+    if !looks_like_a_dump(dump)? {
+        return Err(BackupError::NotADump(dump.to_path_buf()));
+    }
+
+    let tail_from = bytes.saturating_sub(512);
+    let mut file = fs::File::open(dump)?;
+    file.seek(std::io::SeekFrom::Start(tail_from))?;
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail)?;
+    if !String::from_utf8_lossy(&tail).contains("Dump completed") {
+        return Err(BackupError::Unfinished(dump.to_path_buf()));
+    }
+
+    Ok(bytes)
+}
+
+/// Put a second copy somewhere that is not this disk.
+///
+/// A copy, not a move: the local one is what `restore` and the retention
+/// window are about. The destination is whatever the operator mounted there, a
+/// network share or another volume, because Cellar has no business holding
+/// credentials for an object store it cannot verify.
+fn copy_off_box(dump: &Path, directory: &Path) -> Result<PathBuf, BackupError> {
+    let Some(name) = dump.file_name() else {
+        return Err(BackupError::NoSuchDump(dump.to_path_buf()));
+    };
+    fs::create_dir_all(directory)
+        .map_err(|why| BackupError::Copy(directory.to_path_buf(), why.to_string()))?;
+
+    let target = directory.join(name);
+    fs::copy(dump, &target).map_err(|why| BackupError::Copy(target.clone(), why.to_string()))?;
+    Ok(target)
 }
 
 fn prune(directory: &Path, retain: usize) -> Result<(), std::io::Error> {
@@ -306,6 +376,62 @@ mod tests {
         let after = list(dir.path()).unwrap();
         assert_eq!(after.len(), 2);
         assert!(after.iter().all(|d| !d.path.ends_with("cellar-1.sql")));
+    }
+
+    /// The failure verification exists for: a disk that filled up.
+    ///
+    /// The file has the right name, a plausible size and a correct header. It
+    /// is missing only the last line, which is exactly what a truncated write
+    /// looks like and exactly what nothing else notices.
+    #[test]
+    fn a_dump_that_stops_partway_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let good = dir.path().join("cellar-1.sql");
+        fs::write(
+            &good,
+            format!(
+                "-- MariaDB dump 10.19\n{}\n-- Dump completed on 2026-09-01\n",
+                "-- padding\n".repeat(80)
+            ),
+        )
+        .unwrap();
+        assert!(verify(&good).is_ok());
+
+        let cut = dir.path().join("cellar-2.sql");
+        fs::write(
+            &cut,
+            format!(
+                "-- MariaDB dump 10.19\n{}",
+                "INSERT INTO x VALUES (1);\n".repeat(40)
+            ),
+        )
+        .unwrap();
+        assert!(matches!(verify(&cut), Err(BackupError::Unfinished(_))));
+
+        let tiny = dir.path().join("cellar-3.sql");
+        fs::write(&tiny, "-- MariaDB dump\n").unwrap();
+        assert!(matches!(verify(&tiny), Err(BackupError::Truncated(_, _))));
+
+        // Not a dump at all. Restoring this would run whatever it holds.
+        let other = dir.path().join("cellar-4.sql");
+        fs::write(&other, "x".repeat(4096)).unwrap();
+        assert!(matches!(verify(&other), Err(BackupError::NotADump(_))));
+    }
+
+    #[test]
+    fn the_off_box_copy_keeps_the_name_and_leaves_the_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let away = tempfile::tempdir().unwrap();
+
+        let dump = dir.path().join("cellar-7.sql");
+        fs::write(&dump, "-- MariaDB dump\n").unwrap();
+
+        let copied = copy_off_box(&dump, away.path()).unwrap();
+        assert!(copied.ends_with("cellar-7.sql"));
+        // A copy, not a move: the local one is what restore and the retention
+        // window are about.
+        assert!(dump.exists());
     }
 
     #[test]

@@ -453,6 +453,7 @@ async function loadDiagnostics() {
 
   renderChecks($("#diagnostics-checks"), data.checks || []);
   renderChecks($("#diagnostics-runtime"), data.runtime || []);
+  await loadJobs();
 
   const unparsed = $("#diagnostics-unparsed");
   unparsed.replaceChildren();
@@ -470,6 +471,88 @@ async function loadDiagnostics() {
     block.textContent = (entry.samples || []).join("\n");
     unparsed.append(block);
   }
+}
+
+/* What runs on a timer, when it last ran, and whether it worked.
+ *
+ * "Run now" answers 202 rather than 200 and does not wait: it nudges the job's
+ * own loop, so a job cannot be running twice at once however many operators
+ * press the button. The row shows the outcome on the next poll. */
+async function loadJobs() {
+  const data = await api("/api/jobs");
+  const body = $("#jobs");
+  body.replaceChildren();
+
+  const jobs = data.jobs || [];
+  if (!jobs.length) {
+    const row = el("tr");
+    const cell = el("td", "muted",
+      "This process runs no scheduled jobs. Backups, update checks and event retention are "
+      + "each off or unconfigured.");
+    cell.colSpan = 6;
+    row.append(cell);
+    body.append(row);
+    return;
+  }
+
+  for (const job of jobs) {
+    const row = el("tr");
+
+    const name = el("td");
+    name.append(el("div", null, job.name));
+    name.append(el("div", "muted small", job.description));
+    row.append(name);
+
+    row.append(el("td", "muted", everyLabel(job.interval_seconds)));
+    /* "never" is the load-bearing word here. A backup job that has never run
+     * looks identical to one that ran an hour ago unless the cell says so. */
+    row.append(el("td", "muted", job.last_run ? new Date(job.last_run).toLocaleString() : "never"));
+
+    const result = el("td");
+    if (job.running) {
+      result.append(el("span", "wait lamp", " running"));
+    } else if (job.last_ok === null || job.last_ok === undefined) {
+      result.append(el("span", "muted", "—"));
+    } else {
+      result.append(el("span", job.last_ok ? "up lamp" : "down lamp", " "));
+      result.append(document.createTextNode(job.last_detail || (job.last_ok ? "ok" : "failed")));
+    }
+    if (job.failures) result.append(el("div", "muted small", `${job.failures} failure(s) so far`));
+    row.append(result);
+
+    row.append(el("td", "muted", job.next_run ? new Date(job.next_run).toLocaleString() : "—"));
+
+    const action = el("td");
+    const now = el("button", "chip", "run now");
+    now.disabled = job.running;
+    now.onclick = () => runJob(job.name);
+    action.append(now);
+    row.append(action);
+
+    body.append(row);
+  }
+}
+
+/* Seconds are how the API states an interval, because a number is not
+ * ambiguous. A person reading a table wants "every 24 hours". */
+function everyLabel(seconds) {
+  if (seconds % 86400 === 0) return `${seconds / 86400}d`;
+  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
+}
+
+async function runJob(name) {
+  const response = await fetch(`/api/jobs/${encodeURIComponent(name)}/run`, { method: "POST" });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    showToast(`Could not run ${name}: ${text(data.error) || response.status}`, "error");
+    return;
+  }
+  showToast(`Asked ${name} to run.`, "success");
+  // Long enough for a quick job to have finished and short enough to feel
+  // like a response. A slow one shows as running until the next load.
+  setTimeout(() => load("jobs", $("#jobs"), () => loadJobs()), 1200);
 }
 
 /* One row per check, with the verdict as a word and not only as a colour. */
