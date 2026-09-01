@@ -149,6 +149,7 @@ mod tests {
             game: None,
             map: None,
             launcher: Launcher::Wine,
+            wine_prefix: None,
             working_dir: None,
             log_file: None,
             hostname: "AppleJackRP Dev".to_owned(),

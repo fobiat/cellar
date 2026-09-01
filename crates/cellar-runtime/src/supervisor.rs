@@ -9,7 +9,7 @@
 use std::time::{Duration, Instant};
 
 use cellar_core::ansi::LineAssembler;
-use cellar_core::config::{Config, ServerConfig};
+use cellar_core::config::{Config, Launcher, ServerConfig};
 use cellar_core::event::{Event, Origin, StatusBar};
 use cellar_core::grammar::{self, Line};
 use cellar_core::lifecycle::{Decision, RestartTracker, State};
@@ -408,7 +408,7 @@ impl Supervisor {
         let spawned = process::spawn(
             &command,
             self.server.working_dir.as_ref(),
-            &[],
+            &child_environment(&self.server),
             redacted.clone(),
         );
 
@@ -903,6 +903,27 @@ enum RunOutcome {
     ShutDown,
 }
 
+/// What Cellar adds to the child's environment.
+///
+/// One entry, and deliberately not `FACEPUNCH_ENGINE`: that was measured on
+/// 2026-09-01 to move neither `logs/` nor `data/`, from the process environment
+/// or from the Wine registry, because the engine reads it with
+/// `EnvironmentVariableTarget.User`. See `docs/ARCHITECTURE.md`.
+fn child_environment(server: &ServerConfig) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+
+    if server.launcher == Launcher::Wine
+        && let Some(prefix) = &server.wine_prefix
+    {
+        env.push((
+            "WINEPREFIX".to_owned(),
+            prefix.to_string_lossy().into_owned(),
+        ));
+    }
+
+    env
+}
+
 /// An exit status in words. `None` means the process died on a signal and
 /// reported no code at all, which is not the same as exit 0.
 fn describe_exit(code: Option<i32>) -> String {
@@ -937,6 +958,7 @@ mod tests {
                 game: None,
                 map: None,
                 launcher: Launcher::Native,
+                wine_prefix: None,
                 working_dir: None,
                 log_file: None,
                 hostname: "test".into(),
@@ -958,6 +980,40 @@ mod tests {
             backup: Default::default(),
             release: Default::default(),
         }
+    }
+
+    #[test]
+    fn wine_gets_its_prefix_and_native_does_not() {
+        let mut server = config(None).server.unwrap_or_default();
+        server.launcher = Launcher::Wine;
+        server.wine_prefix = Some(PathBuf::from("/srv/dev/wine"));
+        assert_eq!(
+            child_environment(&server),
+            vec![("WINEPREFIX".to_owned(), "/srv/dev/wine".to_owned())]
+        );
+
+        // On Windows the setting means nothing, and passing it would put a
+        // variable in the child's environment that only confuses whoever reads
+        // it there later.
+        server.launcher = Launcher::Native;
+        assert!(child_environment(&server).is_empty());
+    }
+
+    /// Measured 2026-09-01: it moves neither `logs/` nor `data/`, from the
+    /// process environment or from the Wine registry, because the engine reads
+    /// it with `EnvironmentVariableTarget.User`. Setting it would be a variable
+    /// that looks like it does something.
+    #[test]
+    fn facepunch_engine_is_not_passed_to_the_child() {
+        let mut server = config(None).server.unwrap_or_default();
+        server.launcher = Launcher::Wine;
+        server.wine_prefix = Some(PathBuf::from("/srv/dev/wine"));
+
+        assert!(
+            !child_environment(&server)
+                .iter()
+                .any(|(key, _)| key == "FACEPUNCH_ENGINE")
+        );
     }
 
     #[test]

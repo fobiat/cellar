@@ -31,6 +31,7 @@ fn config(log_file: PathBuf, extra: &[&str]) -> Config {
             game: None,
             map: None,
             launcher: Launcher::Native,
+            wine_prefix: None,
             working_dir: None,
             log_file: Some(log_file.clone()),
             hostname: "AppleJackRP Dev".to_owned(),

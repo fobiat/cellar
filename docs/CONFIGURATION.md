@@ -41,10 +41,11 @@ serialisation path, so a config dump or a crash log cannot leak one.
 | `game` | unset | Published package ident such as `fobiat.applejackrp`. |
 | `map` | unset | Map ident appended to a published game ident, such as `thieves.rpdowntown3t`. |
 | `launcher` | `wine` | `wine` or `native`. `native` on Windows. |
+| `wine_prefix` | inherited | The prefix this instance runs in, passed as `WINEPREFIX`. Concurrent instances on Linux need one each. |
 | `hostname` | `"S&box Server"` | Server name, and what the status bar shows. |
-| `working_dir` | executable's directory | Working directory for the child. |
+| `working_dir` | inherited | Working directory for the child. It does **not** decide where the engine writes; see below. |
 | `data_dir` | unset | The engine's data directory. **Required when the bridge is on**: Cellar writes `hosting.json` here. |
-| `log_file` | `<executable dir>/logs/sbox-server.log` | Where the engine writes its log. |
+| `log_file` | `<executable dir>/logs/sbox-server.log` | Where Cellar **reads** the engine's log from. |
 | `direct_connect` | `false` | Expose the real address. Off means players route through Steam's relay. |
 | `port` | `27015` | Game port. Only meaningful with `direct_connect`. |
 | `query_port` | `27016` | Steam query port. |
@@ -63,6 +64,13 @@ Two deliberate omissions:
 
 If `data_dir` is unset while the bridge is on, the gamemode never learns about
 the bridge and quietly keeps writing to local files. `cellar doctor` says so.
+
+**`log_file` is a read path, not a write path.** The engine writes
+`logs/sbox-server.log` beside its own executable and nothing Cellar passes moves
+it: not `working_dir`, and not `FACEPUNCH_ENGINE`, which was measured on
+2026-09-01 and moves neither the log nor the data directory. Point `log_file` at
+a file the engine does not write and readiness silently never fires, because the
+tailer is watching something nothing writes to.
 
 ---
 
@@ -115,6 +123,12 @@ instance with the id `default` and the scope taken from the global
 neither `server.working_dir` nor `FACEPUNCH_ENGINE` moves them. See
 [Architecture](ARCHITECTURE.md#where-the-engine-writes-two-instances-cannot-share-an-install-tree).
 `validate()` refuses two enabled instances that would collide.
+
+**On Linux each also needs its own `server.wine_prefix`.** Every Wine process in
+a prefix shares one `wineserver` that jointly holds all their sockets, and
+`wineserver -k` is prefix-scoped, so with one prefix neither instance can be
+dealt with without reaching the other. A prefix needs the Windows .NET 10
+runtime installed into it; `cellar doctor` checks for it.
 
 ---
 

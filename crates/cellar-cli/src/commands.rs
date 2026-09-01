@@ -374,6 +374,27 @@ fn check_one_server(
             &name("wine"),
             wine.unwrap_or_else(|| "not on PATH; the Windows-only server cannot start".to_owned()),
         );
+
+        if let Some(prefix) = &server.wine_prefix {
+            // A prefix is not just a directory: the server needs the Windows
+            // .NET 10 runtime inside it, and wine happily creates an empty one
+            // on first use, so a missing runtime looks like a working prefix
+            // right up until the server refuses to start.
+            let runtime = prefix.join("drive_c/Program Files/dotnet/dotnet.exe");
+            check(
+                runtime.exists(),
+                &name("server.wine_prefix"),
+                if runtime.exists() {
+                    format!("{} has a .NET runtime", prefix.display())
+                } else {
+                    format!(
+                        "{} has no dotnet.exe. The server needs the Windows .NET 10 runtime in \
+                         its own prefix; see docs/INSTALLATION.md.",
+                        prefix.display()
+                    )
+                },
+            );
+        }
     }
 
     if bridge_enabled {

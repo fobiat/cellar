@@ -253,6 +253,20 @@ pub struct ServerConfig {
     #[serde(default)]
     pub launcher: Launcher,
 
+    /// The Wine prefix this instance runs in, passed as `WINEPREFIX`.
+    ///
+    /// Concurrent instances on Linux need one each. Every Wine process in a
+    /// prefix shares a single `wineserver` which jointly holds their sockets,
+    /// and `wineserver -k` is prefix-scoped, so one prefix means one instance
+    /// cannot be dealt with without reaching the other. Unset inherits
+    /// whatever `WINEPREFIX` Cellar itself was started with, which is right for
+    /// a single-server host and wrong the moment there are two.
+    ///
+    /// A prefix is not free to create: the server needs the Windows .NET 10
+    /// runtime installed into it. `docs/INSTALLATION.md` has the one command.
+    #[serde(default)]
+    pub wine_prefix: Option<PathBuf>,
+
     /// Working directory for the child.
     ///
     /// It does **not** decide where the engine writes. Measured 2026-09-01:
@@ -314,6 +328,7 @@ impl Default for ServerConfig {
             game: None,
             map: None,
             launcher: Launcher::default(),
+            wine_prefix: None,
             working_dir: None,
             log_file: None,
             hostname: default_hostname(),
@@ -1172,6 +1187,9 @@ impl Config {
                     .server
                     .direct_connect
                     .then_some(instance.server.port),
+                wine_prefix: (instance.server.launcher == Launcher::Wine)
+                    .then_some(instance.server.wine_prefix)
+                    .flatten(),
                 scope: instance.scope,
                 id: instance.id.as_str().to_owned(),
             })
@@ -1196,6 +1214,9 @@ struct Exclusive {
     /// `Some` only under `direct_connect`. Without it the engine reaches
     /// players through Steam's relay and the port is not a shared resource.
     direct_port: Option<u16>,
+    /// `Some` only under the Wine launcher, where the prefix is a real shared
+    /// resource rather than an unused setting.
+    wine_prefix: Option<PathBuf>,
 }
 
 fn refuse_shared_resources(instances: &[Exclusive]) -> Result<(), ConfigError> {
@@ -1264,6 +1285,18 @@ fn refuse_shared_resources(instances: &[Exclusive]) -> Result<(), ConfigError> {
                     &one_port.to_string(),
                     "direct_connect publishes the real address, so the port is a real socket and \
                      the second bind would fail.",
+                ));
+            }
+
+            if let (Some(one_prefix), Some(other_prefix)) = (&one.wine_prefix, &other.wine_prefix)
+                && one_prefix == other_prefix
+            {
+                return Err(clash(
+                    "the wine prefix",
+                    &one_prefix.display().to_string(),
+                    "Every wine process in a prefix shares one wineserver holding all their \
+                     sockets, and wineserver -k is prefix-scoped, so neither instance could be \
+                     dealt with without reaching the other. Give each its own server.wine_prefix.",
                 ));
             }
         }
@@ -1371,6 +1404,7 @@ mod tests {
                 game: None,
                 map: None,
                 launcher: Launcher::Wine,
+                wine_prefix: None,
                 working_dir: None,
                 log_file: None,
                 hostname: default_hostname(),
@@ -1582,6 +1616,7 @@ mod tests {
                 8000 + u16::from(id.as_bytes().first().copied().unwrap_or(b'a'))
             )),
             direct_port: None,
+            wine_prefix: None,
         }
     }
 
@@ -1777,6 +1812,46 @@ enabled = false
         let error = config.validate().unwrap_err().to_string();
         assert!(error.contains("the log file"), "{error}");
         assert!(error.contains("counted twice"), "{error}");
+    }
+
+    #[test]
+    fn two_wine_instances_may_not_share_a_prefix() {
+        let mut one = instance("a");
+        let mut other = instance("b");
+        one.wine_prefix = Some(PathBuf::from("/srv/wine"));
+        other.wine_prefix = Some(PathBuf::from("/srv/wine"));
+
+        let error = refuse_shared_resources(&[one, other])
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("wine prefix"), "{error}");
+        assert!(error.contains("wineserver"), "{error}");
+    }
+
+    #[test]
+    fn a_native_instance_has_no_prefix_to_collide_over() {
+        // The field exists on every server config, and on Windows it means
+        // nothing. Comparing it there would refuse a working two-instance
+        // Windows config for a setting neither instance uses.
+        let config = parse(
+            r#"
+            [instances.dev.server]
+            executable = "C:/srv/dev/sbox-server.exe"
+            project = "C:/srv/dev/a.sbproj"
+            launcher = "native"
+            wine_prefix = "C:/wine"
+
+            [instances.published.server]
+            executable = "C:/srv/published/sbox-server.exe"
+            game = "fobiat.applejackrp"
+            launcher = "native"
+            wine_prefix = "C:/wine"
+        "#,
+        )
+        .unwrap();
+
+        config.validate().unwrap();
     }
 
     #[test]
