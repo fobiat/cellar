@@ -35,12 +35,24 @@ async fn healthz() -> Response {
     (StatusCode::OK, "ok").into_response()
 }
 
-/// Readiness: the game server is actually serving.
+/// Readiness: every instance that speaks for this process is serving.
 ///
 /// Returns 503 while starting, backing off or crash-looping, which is what stops
 /// a rollout from sending players at a server that has not loaded its map.
+///
+/// **Every `required` instance, never any of them.** A development instance
+/// that cannot start on a host with no editor must not fail readiness for a
+/// healthy production server, and equally a production server that is down must
+/// not be papered over by a development one that is up. `required = false` is
+/// how an instance opts out of speaking here at all.
 async fn readyz(State(state): State<Arc<AppState>>) -> Response {
-    let Some(supervisor) = &state.supervisor else {
+    let required: Vec<_> = state
+        .instances
+        .iter()
+        .filter(|entry| entry.required)
+        .collect();
+
+    if required.is_empty() {
         // A bridge-only process has no game server to speak for. It is ready
         // when its database is, because that is all it does.
         return match &state.pool {
@@ -52,26 +64,36 @@ async fn readyz(State(state): State<Arc<AppState>>) -> Response {
             },
             None => (StatusCode::OK, "ready").into_response(),
         };
-    };
+    }
 
-    let Some(snapshot) = supervisor.snapshot().await else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the supervisor is not answering",
-        )
-            .into_response();
-    };
+    let mut players = 0;
+    let mut not_serving = Vec::new();
 
-    if snapshot.state.is_ready() {
-        (
-            StatusCode::OK,
-            format!("running, {} player(s)", snapshot.players.len()),
-        )
-            .into_response()
+    for entry in required {
+        let Some(supervisor) = &entry.handle else {
+            not_serving.push(format!(
+                "{}: {}",
+                entry.id,
+                entry.unavailable.as_deref().unwrap_or("not supervised")
+            ));
+            continue;
+        };
+
+        match supervisor.snapshot().await {
+            Some(snapshot) if snapshot.state.is_ready() => players += snapshot.players.len(),
+            Some(snapshot) => {
+                not_serving.push(format!("{}: {}", entry.id, snapshot.state.as_str()))
+            }
+            None => not_serving.push(format!("{}: the supervisor is not answering", entry.id)),
+        }
+    }
+
+    if not_serving.is_empty() {
+        (StatusCode::OK, format!("running, {players} player(s)")).into_response()
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            format!("not serving: {}", snapshot.state.as_str()),
+            format!("not serving: {}", not_serving.join("; ")),
         )
             .into_response()
     }

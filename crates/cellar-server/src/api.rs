@@ -303,12 +303,17 @@ fn prometheus_label(value: &str) -> String {
         .replace('"', "\\\"")
 }
 
-async fn external_status(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response {
+async fn external_status(
+    State(state): State<Arc<AppState>>,
+    _: ExternalApi,
+    target: Target,
+) -> Response {
     status(
         State(state),
         Operator {
             name: "api".to_owned(),
         },
+        target,
     )
     .await
 }
@@ -692,8 +697,8 @@ fn error(status: StatusCode, message: impl Into<String>) -> Response {
 }
 
 /// Everything the dashboard header needs, in one call.
-async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
-    let snapshot = match &state.supervisor {
+async fn status(State(state): State<Arc<AppState>>, _: Operator, target: Target) -> Response {
+    let snapshot = match &target.handle {
         Some(supervisor) => supervisor.snapshot().await,
         None => None,
     };
@@ -711,20 +716,12 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         path.as_ref()
             .and_then(|path| crate::config_manager::load(path).ok())
     });
-    // The primary instance's, matching what `server` below describes. The
-    // registry work replaces this with a lookup by the requested instance.
-    let active_server = active_config
-        .as_ref()
-        .and_then(cellar_core::config::Config::primary_server);
-    let configured_game = active_server
-        .as_ref()
-        .and_then(|server| server.game.clone())
-        .or_else(|| state.configured_game().map(str::to_owned));
-    let configured_map = active_server
-        .as_ref()
-        .and_then(|server| server.map.clone())
-        .or_else(|| state.configured_map().map(str::to_owned));
-    let map_log = match (state.log_file(), configured_map.as_deref()) {
+    let configured_game = target.descriptor.game.clone();
+    let configured_map = target.descriptor.map.clone();
+    let map_log = match (
+        target.descriptor.log_file.as_deref(),
+        configured_map.as_deref(),
+    ) {
         (Some(path), Some(map)) => tokio::fs::read_to_string(path)
             .await
             .map(|log| log.contains(map) && !log.contains("failed to load map"))
@@ -745,21 +742,16 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         });
 
     let addresses = addresses(&state).await;
-    let anti_cheat = crate::security::inspect(state.log_file()).await;
+    let anti_cheat = crate::security::inspect(target.descriptor.log_file.as_deref()).await;
     let invite_only = read_access_files(&state)
         .await
         .ok()
         .map(|(features, _)| feature_enabled(&features, "admin.inviteonly"));
-    let mode = active_server
-        .as_ref()
-        .map(|server| {
-            if server.is_published() {
-                "published"
-            } else {
-                "development"
-            }
-        })
-        .unwrap_or("unknown");
+    let mode = if target.descriptor.game.is_some() {
+        "published"
+    } else {
+        "development"
+    };
     let restart_policy = active_config
         .as_ref()
         .map(|config| match config.supervisor.restart {
@@ -778,7 +770,7 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         "health": {
             "map": map_log,
             "spawn_validation": spawn_validation,
-            "console": state.log_file().is_some_and(std::path::Path::exists),
+            "console": target.descriptor.log_file.as_deref().is_some_and(std::path::Path::exists),
         },
         "cellar": {
             "version": env!("CARGO_PKG_VERSION"),
@@ -786,7 +778,8 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         },
         "game": configured_game,
         "mode": mode,
-        "scope": state.scope,
+        "instance": target.id.to_string(),
+        "scope": target.scope,
         "supervisor": {
             "restart_policy": restart_policy,
             "auto_restart_on_crash": matches!(restart_policy, "always" | "on_failure"),
@@ -1033,13 +1026,32 @@ async fn activate_config(
             "profiles must use the active server log path",
         );
     }
+    // Profile switching describes a whole process, so with several instances
+    // declared it no longer has a meaning: the candidate names one server and
+    // the process is running two. Multi-instance largely replaces this anyway,
+    // with configs/ becoming a library of instance definitions rather than a
+    // set of whole-process modes.
+    if state.instances.len() > 1 {
+        return error(
+            StatusCode::CONFLICT,
+            format!(
+                "this process supervises {} instances, so switching the whole profile is \
+                 ambiguous. Stop and start an instance instead.",
+                state.instances.len()
+            ),
+        );
+    }
+
+    let Some(candidate) = config.primary() else {
+        return error(StatusCode::BAD_REQUEST, "that profile declares no server");
+    };
     let Some(supervisor) = &state.supervisor else {
         return error(
             StatusCode::SERVICE_UNAVAILABLE,
             "no server is being supervised",
         );
     };
-    if let Err(why) = supervisor.switch_config(config).await {
+    if let Err(why) = supervisor.switch_config(candidate).await {
         return error(StatusCode::BAD_GATEWAY, why);
     }
     if let Ok(mut active) = state.config_path.lock() {

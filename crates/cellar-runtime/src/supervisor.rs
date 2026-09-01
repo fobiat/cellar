@@ -9,7 +9,7 @@
 use std::time::{Duration, Instant};
 
 use cellar_core::ansi::LineAssembler;
-use cellar_core::config::{Config, Launcher, ServerConfig};
+use cellar_core::config::{Instance, Launcher, ServerConfig};
 use cellar_core::event::{Event, Origin, StatusBar};
 use cellar_core::grammar::{self, Line};
 use cellar_core::lifecycle::{Decision, RestartTracker, State};
@@ -96,7 +96,7 @@ pub enum Control {
     Shutdown { reply: oneshot::Sender<()> },
     /// Replace the server profile and restart it without rebinding Cellar.
     SwitchConfig {
-        config: Box<Config>,
+        instance: Box<Instance>,
         reply: oneshot::Sender<Result<(), String>>,
     },
     /// Read the current state.
@@ -159,11 +159,11 @@ impl Handle {
         }
     }
 
-    pub async fn switch_config(&self, config: Config) -> Result<(), String> {
+    pub async fn switch_config(&self, instance: Instance) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
         self.control
             .send(Control::SwitchConfig {
-                config: Box::new(config),
+                instance: Box::new(instance),
                 reply,
             })
             .await
@@ -175,14 +175,13 @@ impl Handle {
 
 /// Owns the child process and everything watching it.
 pub struct Supervisor {
-    config: Config,
-    /// The primary instance's server settings, resolved once.
+    /// The one instance this supervisor owns, with every default resolved.
     ///
-    /// A field rather than a lookup because `SwitchConfig` can replace the
-    /// config mid-run and every read must see the same answer as the spawn
-    /// that is currently running. The registry work replaces this with the
-    /// whole `Instance` and `new` starts taking one.
-    server: ServerConfig,
+    /// Not the whole `Config`: a supervisor has no business reading the web
+    /// binding or the backup schedule, and holding the process-wide config was
+    /// how it came to read the primary's server settings whichever instance it
+    /// was actually running.
+    instance: Instance,
     tracker: Tracker,
     restarts: RestartTracker,
     sampler: Sampler,
@@ -195,12 +194,11 @@ pub struct Supervisor {
 
 impl Supervisor {
     /// Build a supervisor and the handle for talking to it.
-    pub fn new(config: Config) -> (Self, Handle, mpsc::Receiver<Control>) {
+    pub fn new(instance: Instance) -> (Self, Handle, mpsc::Receiver<Control>) {
         let (events, _) = broadcast::channel(1024);
         let (control_tx, control_rx) = mpsc::channel(64);
 
-        let server = config.primary_server().unwrap_or_default();
-        let tracker = Tracker::new(server.hostname.clone(), 0);
+        let tracker = Tracker::new(instance.server.hostname.clone(), 0);
 
         let handle = Handle {
             control: control_tx,
@@ -209,8 +207,7 @@ impl Supervisor {
 
         (
             Self {
-                config,
-                server,
+                instance,
                 tracker,
                 restarts: RestartTracker::new(),
                 sampler: Sampler::new(),
@@ -225,21 +222,15 @@ impl Supervisor {
 
     /// Adopt a new profile, rolling back if it cannot be prepared.
     ///
-    /// One place, because the config and the resolved server settings have to
-    /// move together and three call sites each doing it by hand is three
-    /// chances for them to drift apart.
-    fn switch_to(&mut self, config: Config) -> Result<(), String> {
-        let previous_config = std::mem::replace(&mut self.config, config);
-        let previous_server = std::mem::replace(
-            &mut self.server,
-            self.config.primary_server().unwrap_or_default(),
-        );
+    /// One place, because three call sites each rolling back by hand is three
+    /// chances for a half-applied switch.
+    fn switch_to(&mut self, instance: Instance) -> Result<(), String> {
+        let previous = std::mem::replace(&mut self.instance, instance);
 
         match self.prepare_hosting() {
             Ok(_) => Ok(()),
             Err(why) => {
-                self.config = previous_config;
-                self.server = previous_server;
+                self.instance = previous;
                 Err(why)
             }
         }
@@ -257,10 +248,10 @@ impl Supervisor {
     /// fatal: a server without a bridge is a server on local files, which is the
     /// gamemode's own default.
     pub fn prepare_hosting(&self) -> Result<String, String> {
-        let document = hosting::document_for(&self.config.bridge);
+        let document = hosting::document_for(&self.instance.bridge);
 
-        let Some(path) = hosting::document_path(&self.server) else {
-            if self.config.bridge.enabled {
+        let Some(path) = hosting::document_path(&self.instance.server) else {
+            if self.instance.bridge.enabled {
                 return Err(
                     "bridge.enabled but server.data_dir is unset, so hosting.json cannot be \
                      written and the gamemode will keep using local files. Point data_dir at the \
@@ -298,7 +289,7 @@ impl Supervisor {
                     tracing::error!(
                         "the server has restarted {} times inside the crash-loop window; giving \
                          up rather than hiding the fault and burning the Steam registration",
-                        self.config.supervisor.backoff.crash_loop_threshold,
+                        self.instance.supervisor.backoff.crash_loop_threshold,
                     );
                     self.tracker.set_state(State::CrashLooping);
                     if self.rest(&mut control).await == Resting::Done {
@@ -342,8 +333,8 @@ impl Supervisor {
                                 Some(Control::Exec { reply, .. }) => {
                                     let _ = reply.send(Err("the server is not running".to_owned()));
                                 }
-                                Some(Control::SwitchConfig { config, reply }) => {
-                                    let result = self.switch_to(*config);
+                                Some(Control::SwitchConfig { instance, reply }) => {
+                                    let result = self.switch_to(*instance);
                                     let _ = reply.send(result);
                                 }
                                 None => return,
@@ -381,8 +372,8 @@ impl Supervisor {
                 Some(Control::Exec { reply, .. }) => {
                     let _ = reply.send(Err("the server is not running".to_owned()));
                 }
-                Some(Control::SwitchConfig { config, reply }) => {
-                    let result = self.switch_to(*config);
+                Some(Control::SwitchConfig { instance, reply }) => {
+                    let result = self.switch_to(*instance);
                     let _ = reply.send(result);
                 }
                 Some(Control::Shutdown { reply }) => {
@@ -395,20 +386,20 @@ impl Supervisor {
     }
 
     async fn run_once(&mut self, control: &mut mpsc::Receiver<Control>) -> RunOutcome {
-        let needs_local_http = self.config.bridge.enabled;
-        let command = launch::command_for(&self.server, needs_local_http);
-        let redacted = command.redacted(self.server.gslt.as_ref());
+        let needs_local_http = self.instance.bridge.enabled;
+        let command = launch::command_for(&self.instance.server, needs_local_http);
+        let redacted = command.redacted(self.instance.server.gslt.as_ref());
 
         // Armed before the child starts, so the follow position is this run's
         // first byte. Arming after would race the engine's boot lines, and the
         // engine writes several before anything else happens.
-        let mut tailer = Tailer::new(launch::log_file_for(&self.server));
+        let mut tailer = Tailer::new(launch::log_file_for(&self.instance.server));
         tailer.poll();
 
         let spawned = process::spawn(
             &command,
-            self.server.working_dir.as_ref(),
-            &child_environment(&self.server),
+            self.instance.server.working_dir.as_ref(),
+            &child_environment(&self.instance.server),
             redacted.clone(),
         );
 
@@ -426,8 +417,8 @@ impl Supervisor {
                     false,
                     Duration::ZERO,
                     now,
-                    self.config.supervisor.restart,
-                    self.config.supervisor.backoff,
+                    self.instance.supervisor.restart,
+                    self.instance.supervisor.backoff,
                 ) {
                     Decision::RestartAfter(delay) => RunOutcome::RestartAfter(delay),
                     Decision::Stop => RunOutcome::Stopped,
@@ -444,7 +435,7 @@ impl Supervisor {
         });
 
         let mut assembler = LineAssembler::new();
-        let ready_pattern = self.server.ready_pattern.clone();
+        let ready_pattern = self.instance.server.ready_pattern.clone();
 
         // Only one channel produces events, or every line is counted twice.
         //
@@ -465,12 +456,12 @@ impl Supervisor {
 
         let mut tail_tick = tokio::time::interval(Duration::from_millis(250));
         let mut sample_tick = tokio::time::interval(Duration::from_secs(
-            self.config.supervisor.sample_interval_seconds.max(1),
+            self.instance.supervisor.sample_interval_seconds.max(1),
         ));
         let mut exit_tick = tokio::time::interval(Duration::from_millis(250));
 
         let run_started = Instant::now();
-        let start_deadline = match self.config.supervisor.start_timeout_seconds {
+        let start_deadline = match self.instance.supervisor.start_timeout_seconds {
             0 => None,
             seconds => Some(Duration::from_secs(seconds)),
         };
@@ -601,8 +592,8 @@ impl Supervisor {
                                 }
                             }
                         }
-                        Some(Control::SwitchConfig { config, reply }) => {
-                            if let Err(why) = self.switch_to(*config) {
+                        Some(Control::SwitchConfig { instance, reply }) => {
+                            if let Err(why) = self.switch_to(*instance) {
                                 let _ = reply.send(Err(why));
                             } else {
                                 restart_requested = true;
@@ -704,8 +695,8 @@ impl Supervisor {
             requested_stop,
             run_started.elapsed(),
             self.started.elapsed().as_secs(),
-            self.config.supervisor.restart,
-            self.config.supervisor.backoff,
+            self.instance.supervisor.restart,
+            self.instance.supervisor.backoff,
         ) {
             Decision::RestartAfter(delay) => RunOutcome::RestartAfter(delay),
             Decision::Stop => RunOutcome::Stopped,
@@ -745,10 +736,11 @@ impl Supervisor {
         }
         tracing::info!(
             "sent `quit`; giving the engine {}s to run its nine shutdown steps",
-            self.config.supervisor.graceful_timeout_seconds.max(1),
+            self.instance.supervisor.graceful_timeout_seconds.max(1),
         );
 
-        let deadline = Duration::from_secs(self.config.supervisor.graceful_timeout_seconds.max(1));
+        let deadline =
+            Duration::from_secs(self.instance.supervisor.graceful_timeout_seconds.max(1));
         let waited = tokio::time::timeout(deadline, async {
             loop {
                 match child.try_wait() {
@@ -888,7 +880,9 @@ impl Supervisor {
         if let Event::ServerReady { hostname, .. } = &event {
             tracing::info!(
                 "the server is ready and accepting players as '{}'",
-                hostname.as_deref().unwrap_or(&self.server.hostname),
+                hostname
+                    .as_deref()
+                    .unwrap_or(&self.instance.server.hostname),
             );
         }
         self.publish(event);
@@ -949,42 +943,29 @@ mod tests {
 
     use super::*;
 
-    fn config(data_dir: Option<PathBuf>) -> Config {
-        Config {
-            instances: Default::default(),
-            server: Some(ServerConfig {
+    fn instance(data_dir: Option<PathBuf>) -> Instance {
+        Instance {
+            id: cellar_core::config::InstanceId::new("test").unwrap_or_else(|_| unreachable!()),
+            scope: "test".to_owned(),
+            enabled: true,
+            required: true,
+            server: ServerConfig {
                 executable: PathBuf::from("/bin/true"),
                 project: PathBuf::from("/tmp/a.sbproj"),
-                game: None,
-                map: None,
                 launcher: Launcher::Native,
-                wine_prefix: None,
-                working_dir: None,
-                log_file: None,
                 hostname: "test".into(),
-                gslt: None,
-                direct_connect: false,
-                port: 27015,
-                query_port: 27016,
                 ready_pattern: "Lobby created".into(),
-                extra_args: Vec::new(),
                 data_dir,
-            }),
+                ..ServerConfig::default()
+            },
             supervisor: Default::default(),
             bridge: Default::default(),
-            database: Default::default(),
-            web: Default::default(),
-            notify: Default::default(),
-            update: Default::default(),
-            mariadb: Default::default(),
-            backup: Default::default(),
-            release: Default::default(),
         }
     }
 
     #[test]
     fn wine_gets_its_prefix_and_native_does_not() {
-        let mut server = config(None).server.unwrap_or_default();
+        let mut server = instance(None).server;
         server.launcher = Launcher::Wine;
         server.wine_prefix = Some(PathBuf::from("/srv/dev/wine"));
         assert_eq!(
@@ -1005,7 +986,7 @@ mod tests {
     /// that looks like it does something.
     #[test]
     fn facepunch_engine_is_not_passed_to_the_child() {
-        let mut server = config(None).server.unwrap_or_default();
+        let mut server = instance(None).server;
         server.launcher = Launcher::Wine;
         server.wine_prefix = Some(PathBuf::from("/srv/dev/wine"));
 
@@ -1019,11 +1000,11 @@ mod tests {
     #[test]
     fn hosting_json_is_written_next_to_the_other_documents() {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = config(Some(dir.path().to_path_buf()));
-        config.bridge.enabled = true;
-        config.bridge.public_url = "http://127.0.0.1:8080".into();
+        let mut instance = instance(Some(dir.path().to_path_buf()));
+        instance.bridge.enabled = true;
+        instance.bridge.public_url = "http://127.0.0.1:8080".into();
 
-        let (supervisor, _handle, _control) = Supervisor::new(config);
+        let (supervisor, _handle, _control) = Supervisor::new(instance);
         let message = supervisor.prepare_hosting().unwrap();
         assert!(message.contains("hosted"), "{message}");
 
@@ -1035,17 +1016,17 @@ mod tests {
     /// gamemode on local files, which is the quiet failure worth refusing.
     #[test]
     fn a_bridge_without_a_data_dir_says_so_instead_of_going_quiet() {
-        let mut config = config(None);
-        config.bridge.enabled = true;
+        let mut instance = instance(None);
+        instance.bridge.enabled = true;
 
-        let (supervisor, _handle, _control) = Supervisor::new(config);
+        let (supervisor, _handle, _control) = Supervisor::new(instance);
         let error = supervisor.prepare_hosting().unwrap_err();
         assert!(error.contains("data_dir"), "{error}");
     }
 
     #[test]
     fn no_bridge_and_no_data_dir_is_simply_fine() {
-        let (supervisor, _handle, _control) = Supervisor::new(config(None));
+        let (supervisor, _handle, _control) = Supervisor::new(instance(None));
         assert!(supervisor.prepare_hosting().is_ok());
     }
 }

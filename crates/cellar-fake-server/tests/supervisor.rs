@@ -15,28 +15,25 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use cellar_core::config::{Config, Launcher, ServerConfig};
+use cellar_core::config::{Instance, InstanceId, Launcher, ServerConfig};
 use cellar_core::event::Event;
 use cellar_runtime::Supervisor;
 use tokio::sync::broadcast;
 
 const FAKE_SERVER: &str = env!("CARGO_BIN_EXE_cellar-fake-server");
 
-fn config(log_file: PathBuf, extra: &[&str]) -> Config {
-    Config {
-        instances: Default::default(),
-        server: Some(ServerConfig {
+fn config(log_file: PathBuf, extra: &[&str]) -> Instance {
+    Instance {
+        id: InstanceId::new("test").unwrap(),
+        scope: "test".to_owned(),
+        enabled: true,
+        required: true,
+        server: ServerConfig {
             executable: PathBuf::from(FAKE_SERVER),
             project: PathBuf::from("/tmp/applejackrp.sbproj"),
-            game: None,
-            map: None,
             launcher: Launcher::Native,
-            wine_prefix: None,
-            working_dir: None,
             log_file: Some(log_file.clone()),
             hostname: "AppleJackRP Dev".to_owned(),
-            gslt: None,
-            direct_connect: false,
             port: 27015,
             query_port: 27016,
             ready_pattern: cellar_core::grammar::DEFAULT_READY_PATTERN.to_owned(),
@@ -45,17 +42,10 @@ fn config(log_file: PathBuf, extra: &[&str]) -> Config {
                 args.extend(extra.iter().map(|s| (*s).to_owned()));
                 args
             },
-            data_dir: None,
-        }),
+            ..ServerConfig::default()
+        },
         supervisor: Default::default(),
         bridge: Default::default(),
-        database: Default::default(),
-        web: Default::default(),
-        notify: Default::default(),
-        update: Default::default(),
-        mariadb: Default::default(),
-        backup: Default::default(),
-        release: Default::default(),
     }
 }
 

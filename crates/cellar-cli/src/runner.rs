@@ -21,16 +21,6 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     let config =
         Config::load(config_path).with_context(|| format!("reading {}", config_path.display()))?;
 
-    let (supervisor, handle, control) = Supervisor::new(config.clone());
-
-    match supervisor.prepare_hosting() {
-        Ok(message) => tracing::info!("hosting.json: {message}"),
-        // Not fatal: without it the gamemode keeps its own default, which is
-        // local files. Loud, because a bridge nobody is using is the quiet
-        // failure this whole feature exists to avoid.
-        Err(why) => tracing::error!("hosting.json: {why}"),
-    }
-
     // Started before the database connects, and given a moment to come up:
     // connecting while `mariadbd` is still initializing would just be the
     // first of a string of retries. `database.url` is unchanged either way,
@@ -42,12 +32,71 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         .primary()
         .context("no server is configured; `cellar doctor` says which table is missing")?;
 
+    // One supervisor per enabled instance. A disabled one still reaches the
+    // registry, marked unavailable with its reason, so the dashboard shows a
+    // declared server rather than nothing at all.
+    let mut supervisors = Vec::new();
+    let mut entries: Vec<cellar_server::registry::Entry> = Vec::new();
+
+    for instance in config.instances() {
+        let mut entry = cellar_server::registry::Entry::from_instance(&instance);
+        if !instance.enabled {
+            tracing::info!(
+                "instance '{}' is declared but not enabled here",
+                instance.id
+            );
+            entries.push(entry);
+            continue;
+        }
+
+        // Probed before spawning, because the alternative is what it used to
+        // do: back off and retry into a missing binary five times and then
+        // report a crash loop, which reads as a broken server rather than a
+        // wrong path. `doctor` says the same thing, but nothing makes an
+        // operator run it first.
+        if let Some(why) = unavailable_reason(&instance) {
+            tracing::warn!("instance '{}' will not be started: {why}", instance.id);
+            entry.unavailable = Some(why);
+            entries.push(entry);
+            continue;
+        }
+
+        let id = instance.id.clone();
+        let (supervisor, handle, control) = Supervisor::new(instance);
+
+        match supervisor.prepare_hosting() {
+            Ok(message) => tracing::info!("{id}: hosting.json: {message}"),
+            // Not fatal: without it the gamemode keeps its own default, which
+            // is local files. Loud, because a bridge nobody is using is the
+            // quiet failure this whole feature exists to avoid.
+            Err(why) => tracing::error!("{id}: hosting.json: {why}"),
+        }
+
+        entry.handle = Some(handle.clone());
+        entry.unavailable = None;
+        entries.push(entry);
+        supervisors.push((id, supervisor, handle, control));
+    }
+
+    // The primary is whichever instance actually started, not whichever the
+    // config nominates. They differ exactly when the first one could not start,
+    // and that is the case where an operator most needs the dashboard up.
+    let registry = cellar_server::registry::Registry::new(entries);
+    let primary_handle = registry.primary().and_then(|entry| entry.handle.clone());
+
+    if primary_handle.is_none() {
+        tracing::error!(
+            "no instance started. Cellar is still serving so you can see why; `cellar doctor` \
+             says the same thing without starting anything."
+        );
+    }
+
     let state = build_state(
         config_path,
         &config,
-        &primary,
+        registry,
         pool.clone(),
-        handle.clone(),
+        primary_handle.clone(),
         mariadb.clone(),
     )?;
 
@@ -63,12 +112,20 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         servers.push(bind(&config.web.bind, router, "web ui").await?);
     }
 
-    if let Some(notifier) = cellar_notify::Notifier::new(&config.notify, &primary.server.hostname) {
+    if let Some(handle) = &primary_handle
+        && let Some(notifier) =
+            cellar_notify::Notifier::new(&config.notify, &primary.server.hostname)
+    {
         tokio::spawn(notifier.run(handle.subscribe()));
     }
 
     // One merged stream, tagged with which server each event came from.
-    let merged = fan_in(&[(primary.id.clone(), handle.clone())]);
+    let merged = fan_in(
+        &supervisors
+            .iter()
+            .map(|(id, _, handle, _)| (id.clone(), handle.clone()))
+            .collect::<Vec<_>>(),
+    );
 
     if let Some(pool) = &pool {
         let scopes = config
@@ -87,8 +144,10 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         }
     }
 
-    if config.update.policy != UpdatePolicy::Off {
-        tokio::spawn(watch_for_updates(config.clone(), handle.clone()));
+    if config.update.policy != UpdatePolicy::Off
+        && let Some(handle) = primary_handle.clone()
+    {
+        tokio::spawn(watch_for_updates(config.clone(), handle));
     }
 
     if config.update.program_check {
@@ -98,10 +157,20 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         ));
     }
 
-    let supervising = tokio::spawn(supervisor.run(control));
+    let running: Vec<_> = supervisors
+        .into_iter()
+        .map(|(id, supervisor, handle, control)| {
+            (id, handle, tokio::spawn(supervisor.run(control)))
+        })
+        .collect();
 
     if with_tui {
-        cellar_tui::run(handle.clone()).await?;
+        // The TUI is a single-server htop with a command line, and that is a
+        // good thing for it to be. It follows the primary.
+        let handle = primary_handle
+            .clone()
+            .context("no instance started, so there is nothing for the TUI to follow")?;
+        cellar_tui::run(handle).await?;
     } else {
         wait_for_shutdown(state.shutdown_requested.clone()).await;
         tracing::info!("stopping the server gracefully");
@@ -112,9 +181,33 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     // rather than stop, because a stopped server leaves the supervisor resting
     // and still answering, which is what the dashboard wants and not what an
     // exiting process does.
-    handle.shutdown().await;
-
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(60), supervising).await;
+    // One shared budget over every instance, not sixty seconds each. With two
+    // servers the sequential version blows the Kubernetes grace period and the
+    // pod is SIGKILLed mid-logoff, which is exactly the shutdown the engine has
+    // no handler for.
+    let budget = std::time::Duration::from_secs(60);
+    let _ = tokio::time::timeout(budget, async {
+        // Asked concurrently. Each `quit` waits out its own engine's nine
+        // shutdown steps, and doing that in sequence is what turns one grace
+        // period into N of them.
+        let asks: Vec<_> = running
+            .iter()
+            .map(|(id, handle, _)| {
+                let (id, handle) = (id.clone(), handle.clone());
+                tokio::spawn(async move {
+                    tracing::info!("stopping instance '{id}'");
+                    handle.shutdown().await;
+                })
+            })
+            .collect();
+        for ask in asks {
+            let _ = ask.await;
+        }
+        for (_, _, task) in running {
+            let _ = task.await;
+        }
+    })
+    .await;
 
     for server in servers {
         server.abort();
@@ -176,9 +269,9 @@ async fn start_mariadb(config: &Config) -> Result<Option<cellar_mariadb::Handle>
 fn build_state(
     config_path: &Path,
     config: &Config,
-    primary: &cellar_core::config::Instance,
+    instances: cellar_server::registry::Registry,
     pool: Option<sqlx::MySqlPool>,
-    handle: Handle,
+    handle: Option<Handle>,
     mariadb: Option<cellar_mariadb::Handle>,
 ) -> Result<Arc<AppState>> {
     let documents = match &pool {
@@ -196,7 +289,7 @@ fn build_state(
     state.max_body_bytes = config.bridge.max_body_bytes;
     state.rate_limiter = RateLimiter::new(config.bridge.rate_limit_per_minute);
     state.login_limiter = cellar_server::state::LoginLimiter::new(10);
-    state.supervisor = Some(handle.clone());
+    state.supervisor = handle;
     state.pool = pool;
     state.database_schema_owner = match config.database.schema_owner {
         DatabaseSchemaOwner::Gamemode => "gamemode".to_owned(),
@@ -220,17 +313,7 @@ fn build_state(
     }
     state.web_bind = config.web.bind.clone();
     state.web_enabled = config.web.enabled;
-    // One entry per declared instance, with the supervisor attached to the one
-    // that is actually running. Starting the rest is the next step; until then
-    // a second declared instance is visible and marked unavailable rather than
-    // silently absent.
-    let mut entries: Vec<cellar_server::registry::Entry> = config
-        .instances()
-        .iter()
-        .map(cellar_server::registry::Entry::from_instance)
-        .collect();
-    cellar_server::registry::Registry::set_handle(&mut entries, &primary.id, handle);
-    state.instances = cellar_server::registry::Registry::new(entries);
+    state.instances = instances;
     state.version_probe = Some(cellar_update::Probe {
         project_dir: project_dir(config),
         steam_dir: config.update.steam_dir.clone(),
@@ -296,6 +379,31 @@ async fn bind(
             tracing::error!("http server stopped: {error}");
         }
     }))
+}
+
+/// Why an instance cannot be started here, if it cannot.
+///
+/// Deliberately narrow: only conditions that are certain and cheap to check.
+/// Anything that might be true by the time the server actually needs it belongs
+/// in `doctor`, not here, because refusing to start a server that would have
+/// worked is worse than starting one that fails.
+fn unavailable_reason(instance: &cellar_core::config::Instance) -> Option<String> {
+    let executable = &instance.server.executable;
+    if !executable.exists() {
+        return Some(format!("{} does not exist", executable.display()));
+    }
+
+    if instance.server.launcher == cellar_core::Launcher::Wine
+        && let Some(prefix) = &instance.server.wine_prefix
+        && !prefix.exists()
+    {
+        return Some(format!(
+            "the wine prefix {} does not exist",
+            prefix.display()
+        ));
+    }
+
+    None
 }
 
 /// Merge every instance's event stream into one, tagged by instance.
