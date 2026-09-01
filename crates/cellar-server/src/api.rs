@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use cellar_core::lifecycle::RestartPolicy;
 
+use crate::registry::Target;
 use crate::session::{ExternalApi, Operator};
 use crate::state::AppState;
 
@@ -38,6 +39,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/db/info", get(db_info))
         .route("/api/db/table/{table}", get(db_browse))
         .route("/api/db/query", post(db_query))
+        .route("/api/instances", get(instances))
         .route("/api/db/backups", get(db_backups))
         .route("/api/db/backup", post(db_backup))
         .route("/api/db/restore", post(db_restore))
@@ -1305,13 +1307,11 @@ struct ExecResponse {
 async fn exec(
     State(state): State<Arc<AppState>>,
     operator: Operator,
+    target: Target,
     Json(request): Json<ExecRequest>,
 ) -> Response {
-    let Some(supervisor) = &state.supervisor else {
-        return error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "no server is being supervised",
-        );
+    let Some(supervisor) = &target.handle else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, unavailable(&target));
     };
 
     let command = request.command.trim().to_owned();
@@ -1353,13 +1353,31 @@ async fn exec(
 async fn control(
     State(state): State<Arc<AppState>>,
     operator: Operator,
+    target: Target,
     Path(action): Path<String>,
 ) -> Response {
-    let Some(supervisor) = &state.supervisor else {
-        return error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "no server is being supervised",
+    // `exit` is process-wide and ignores the target deliberately. Exiting with
+    // another instance still running gets that one SIGKILLed by whatever
+    // supervises Cellar, which is exactly the shutdown the engine has no
+    // handler for.
+    if action == "exit" {
+        tracing::info!(
+            "{} asked Cellar to exit after stopping every instance",
+            operator.name
         );
+        for entry in state.instances.iter() {
+            if let Some(supervisor) = &entry.handle {
+                supervisor.stop().await;
+            }
+        }
+        state
+            .shutdown_requested
+            .store(true, std::sync::atomic::Ordering::Release);
+        return Json(serde_json::json!({ "ok": true, "action": "exit" })).into_response();
+    }
+
+    let Some(supervisor) = &target.handle else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, unavailable(&target));
     };
 
     match action.as_str() {
@@ -1367,17 +1385,6 @@ async fn control(
             tracing::info!("{} asked for a graceful stop", operator.name);
             supervisor.stop().await;
             Json(serde_json::json!({ "ok": true, "action": "stop" })).into_response()
-        }
-        "exit" => {
-            tracing::info!(
-                "{} asked Cellar to exit after a graceful stop",
-                operator.name
-            );
-            supervisor.stop().await;
-            state
-                .shutdown_requested
-                .store(true, std::sync::atomic::Ordering::Release);
-            Json(serde_json::json!({ "ok": true, "action": "exit" })).into_response()
         }
         "restart" => {
             tracing::info!("{} asked for a restart", operator.name);
@@ -1669,6 +1676,31 @@ async fn db_restore(
         }
         Err(why) => error(StatusCode::BAD_GATEWAY, why.to_string()),
     }
+}
+
+/// Why an instance cannot be talked to, in the words the config gave.
+fn unavailable(target: &Target) -> String {
+    target
+        .unavailable
+        .clone()
+        .unwrap_or_else(|| format!("instance '{}' is not being supervised", target.id))
+}
+
+/// Every instance this process knows about, running or not.
+async fn instances(State(state): State<Arc<AppState>>, _: Operator) -> Response {
+    let primary = state.instances.primary().map(|entry| entry.id.to_string());
+    Json(serde_json::json!({
+        "primary": primary,
+        "instances": state.instances.iter().map(|entry| serde_json::json!({
+            "id": entry.id.to_string(),
+            "scope": entry.scope,
+            "required": entry.required,
+            "running": entry.handle.is_some(),
+            "unavailable": entry.unavailable,
+            "server": entry.descriptor,
+        })).collect::<Vec<_>>(),
+    }))
+    .into_response()
 }
 
 fn database_source(state: &AppState) -> &'static str {

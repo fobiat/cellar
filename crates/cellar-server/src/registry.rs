@@ -142,6 +142,79 @@ impl Default for Registry {
     }
 }
 
+/// The instance a request is about.
+///
+/// `?instance=<id>`, defaulting to the primary, rather than a path prefix. The
+/// reason is compatibility: `cellar-mcp` calls six routes, the CLI's live-server
+/// commands call two more, and `app.js` calls about twenty-five. A prefix means
+/// changing all of them to gain nothing a parameter does not already give, and
+/// Cellar's authorization is a per-handler extractor rather than a path policy,
+/// so nothing depends on the instance being in the path.
+///
+/// An unknown id is a 404 naming the ids that do exist. It is never a silent
+/// fallback to the primary, because the request that gets misrouted that way is
+/// `quit`.
+pub struct Target(pub Entry);
+
+impl std::ops::Deref for Target {
+    type Target = Entry;
+
+    fn deref(&self) -> &Entry {
+        &self.0
+    }
+}
+
+impl<S> axum::extract::FromRequestParts<S> for Target
+where
+    S: Send + Sync,
+    Arc<crate::state::AppState>: axum::extract::FromRef<S>,
+{
+    type Rejection = (axum::http::StatusCode, String);
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        use axum::extract::FromRef;
+        let state = Arc::<crate::state::AppState>::from_ref(state);
+
+        let requested = parts.uri.query().and_then(|query| {
+            query.split('&').find_map(|pair| {
+                let (key, value) = pair.split_once('=')?;
+                (key == "instance").then(|| value.to_owned())
+            })
+        });
+
+        match requested {
+            Some(id) => state
+                .instances
+                .get(&id)
+                .cloned()
+                .map(Target)
+                .ok_or_else(|| {
+                    (
+                        axum::http::StatusCode::NOT_FOUND,
+                        format!(
+                            "no instance '{id}'. This config declares: {}",
+                            state.instances.ids().join(", ")
+                        ),
+                    )
+                }),
+            None => state
+                .instances
+                .primary()
+                .cloned()
+                .map(Target)
+                .ok_or_else(|| {
+                    (
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        "no server is being supervised".to_owned(),
+                    )
+                }),
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

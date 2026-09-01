@@ -124,6 +124,14 @@ neither `server.working_dir` nor `FACEPUNCH_ENGINE` moves them. See
 [Architecture](ARCHITECTURE.md#where-the-engine-writes-two-instances-cannot-share-an-install-tree).
 `validate()` refuses two enabled instances that would collide.
 
+**Addressing one instance over HTTP:** `?instance=<id>` on the existing routes,
+defaulting to the primary, which is the first enabled instance in id order.
+`GET /api/instances` lists what a config declares. An unknown id is a 404 naming
+the ids that do exist, never a silent fallback, because the request that would
+get misrouted that way is `quit`. `/api/control/exit` is process-wide and
+deliberately ignores the parameter: exiting with another instance still running
+gets that one killed rather than stopped.
+
 **On Linux each also needs its own `server.wine_prefix`.** Every Wine process in
 a prefix shares one `wineserver` that jointly holds all their sockets, and
 `wineserver -k` is prefix-scoped, so with one prefix neither instance can be
