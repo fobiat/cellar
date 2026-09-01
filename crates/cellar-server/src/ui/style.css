@@ -215,7 +215,7 @@ nav.instances .instance:focus-visible {
 .palette {
   position: fixed;
   inset: 0;
-  background: color-mix(in srgb, var(--aj-ink) 72%, transparent);
+  background: color-mix(in srgb, var(--aj-shadow) 72%, transparent);
   display: flex;
   justify-content: center;
   align-items: flex-start;
@@ -459,7 +459,21 @@ td.wide { max-width: 460px; overflow-wrap: anywhere; }
 .line.leave .msg { color: var(--aj-frost); }
 .line.echo  .msg { color: var(--aj-azure); }
 
-.console-palette { display: flex; flex-wrap: wrap; gap: 5px 10px; margin: 7px 0 2px; }
+/* The colour key sits on the console's own ground, not on the card's.
+ *
+ * It was on `raised`, where `log-trace` and `log-error` fell to 4.2:1, while
+ * the same colours clear AA in the console itself. A key drawn on a different
+ * ground from the thing it keys is also just wrong: the swatch stops matching
+ * the line it stands for. */
+.console-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  margin: 7px 0 2px;
+  padding: 6px 8px;
+  background: var(--aj-ink);
+  border-radius: 3px;
+}
 .palette-key { color: var(--aj-text-muted); font-size: 10px; letter-spacing: .04em; }
 .palette-key::before { content: "●"; margin-right: 4px; }
 .palette-key.level-trace { color: var(--aj-log-trace); }
@@ -531,7 +545,7 @@ button.action.danger:hover { background: color-mix(in srgb, var(--aj-russet) 16%
 /* ---- sparkline ---------------------------------------------------------- */
 
 .spark { width: 100%; height: 64px; display: block; }
-.spark.large { height: 154px; color: var(--aj-azure); background: color-mix(in srgb, var(--aj-ink) 70%, transparent); }
+.spark.large { height: 154px; color: var(--aj-azure); background: color-mix(in srgb, var(--aj-ink) 70%, var(--aj-shell)); }
 .chart-grid { stroke: color-mix(in srgb, var(--aj-frost) 25%, transparent); stroke-width: 1; }
 .chart-label { fill: var(--aj-text-muted); font-size: 8px; }
 .chart-process { stroke: var(--aj-azure); }
@@ -609,7 +623,7 @@ dialog.confirm {
   width: min(460px, 92vw);
 }
 
-dialog.confirm::backdrop { background: color-mix(in srgb, var(--aj-ink) 72%, transparent); }
+dialog.confirm::backdrop { background: color-mix(in srgb, var(--aj-shadow) 72%, transparent); }
 dialog.confirm h2 { margin: 0 0 8px; font-size: 15px; }
 dialog.confirm p { margin: 0 0 14px; white-space: pre-line; }
 
@@ -623,6 +637,15 @@ dialog.confirm input {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* Narrower than the tool-row selects, because this belongs in the masthead
+   beside the buttons rather than in a form. */
+.theme-select {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 6px 8px;
+  font-size: 11px;
 }
 
 .muted { color: var(--aj-text-muted); }
@@ -640,7 +663,7 @@ dialog.confirm input {
   background: var(--aj-shell);
   border: 1px solid var(--aj-azure);
   border-radius: 4px;
-  box-shadow: 0 8px 28px color-mix(in srgb, var(--aj-ink) 60%, transparent);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--aj-shadow) 60%, transparent);
   z-index: 20;
 }
 
@@ -648,6 +671,12 @@ dialog.confirm input {
   body { font-size: 13px; }
   .masthead { gap: 9px; padding: 11px 12px; }
   .masthead .header-meta { display: none; }
+  /* The wordmark was flex-squashed to zero width once the theme select and
+     Sign out joined the row, which pushed the masthead to three lines and
+     140px tall. The star stays; it is the mark, and the page title carries
+     the name. */
+  .masthead .wordmark { display: none; }
+  .masthead .theme-select { padding: 6px; }
   .masthead .action { padding: 7px 9px; }
   .wordmark { letter-spacing: 0.2em; }
   .connection { display: none; }
@@ -692,6 +721,12 @@ dialog.confirm input {
   }
 }
 
-/* The page commits to its dark ground in both schemes: an operations console
- * that repaints itself white because a phone is in light mode is a console
- * nobody can read outdoors at night, which is when it gets read. */
+/* The page still defaults to its dark ground whatever the system says: an
+ * operations console that repaints itself white because a phone is in light
+ * mode is a console nobody can read outdoors at night, which is when it gets
+ * read. The difference from before is that light is now a choice an operator
+ * can make and Cellar remembers, rather than a broken theme nobody could reach.
+ *
+ * `index.html` ships `data-theme="dark"` and `app.js` replaces it from
+ * localStorage before first paint. "system" removes the attribute, which is
+ * what lets `prefers-color-scheme` in the generated palette take over. */

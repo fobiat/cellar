@@ -75,8 +75,26 @@ token!(
     "#47713C",
     "Lawful, safe, success"
 );
-token!(INK, "ink", "#0E0F11", "#0E0F11", "Deepest ground");
-token!(SHELL, "shell", "#191B1E", "#F4F3F1", "Panel background");
+// The light theme was dead for exactly one reason: `ink` carried the dark value
+// in both themes, so the page painted `#201F1D` body text on a `#0E0F11` ground
+// at 1.15:1. It is a light ground now, and depth runs the other way in the light
+// theme: the page is the tinted one and cards are white, which is the ordinary
+// shape and the one that keeps every token above 4.5:1.
+token!(INK, "ink", "#0E0F11", "#F4F3F1", "Deepest ground");
+token!(SHELL, "shell", "#191B1E", "#FAF9F8", "Panel background");
+
+// The scrim behind a modal, and the colour a shadow is mixed from. Split out of
+// `ink` when `ink` stopped being dark in both themes: a backdrop that lightens
+// the page it covers is not a backdrop, so this stays dark either way. Not the
+// same value twice, because a full-strength black veil over a light page reads
+// as a rendering fault rather than as depth.
+token!(
+    SHADOW,
+    "shadow",
+    "#0E0F11",
+    "#2A2724",
+    "Modal scrim and shadows"
+);
 token!(RAISED, "raised", "#212327", "#FFFFFF", "Card background");
 token!(TEXT, "text", "#F2F2F0", "#201F1D", "Primary text");
 token!(
@@ -90,7 +108,9 @@ token!(
     LOG_TRACE,
     "log-trace",
     "#7C8496",
-    "#697386",
+    // Darkened from #697386, which was 4.31:1 on the light console ground and
+    // the only log token that missed AA there.
+    "#5C6579",
     "Trace and low-signal output"
 );
 token!(LOG_DEBUG, "log-debug", "#9CC4D4", "#457588", "Debug output");
@@ -167,6 +187,7 @@ pub const TOKENS: &[Token] = &[
     RUSSET_TEXT,
     ORCHARD,
     INK,
+    SHADOW,
     SHELL,
     RAISED,
     TEXT,
@@ -300,53 +321,75 @@ mod tests {
         (high + 0.05) / (low + 0.05)
     }
 
-    /// Every ground the dark theme draws words on. `style.css:14` is `INK`,
+    /// Every ground either theme draws words on. `style.css:14` is `INK`,
     /// panels and headers are `SHELL`, cards are `RAISED`.
-    const DARK_GROUNDS: &[Token] = &[INK, SHELL, RAISED];
+    const GROUNDS: &[Token] = &[INK, SHELL, RAISED];
 
+    /// Both halves of every token, so the light theme is held to the same bar.
+    ///
+    /// It was not, and that is how it stayed broken: `ink` carried the dark
+    /// value in both themes and no test looked at the light one, so the light
+    /// theme rendered body text at 1.15:1 and shipped that way for months.
     #[test]
-    fn body_text_tokens_meet_wcag_aa_on_every_ground() {
+    fn body_text_tokens_meet_wcag_aa_on_every_ground_in_both_themes() {
         // RUSSET and AZURE_HOVER are absent deliberately: they are borders and
         // fills, where WCAG asks 3:1. RUSSET_TEXT exists so destructive wording
         // has a value that clears 4.5:1 on a card as well as on the shell.
         for token in [TEXT, TEXT_MUTED, RUSSET_TEXT, AZURE, FROST, ORCHARD] {
-            for ground in DARK_GROUNDS {
-                let ratio = contrast(token.dark, ground.dark);
-                assert!(
-                    ratio >= 4.5,
-                    "{} on {} is {ratio:.2}:1, below AA",
-                    token.name,
-                    ground.name
-                );
+            for ground in GROUNDS {
+                for (theme, ink, on) in [
+                    ("dark", token.dark, ground.dark),
+                    ("light", token.light, ground.light),
+                ] {
+                    let ratio = contrast(ink, on);
+                    assert!(
+                        ratio >= 4.5,
+                        "{} on {} in {theme} is {ratio:.2}:1, below AA",
+                        token.name,
+                        ground.name
+                    );
+                }
             }
         }
     }
 
     #[test]
-    fn log_category_tokens_are_legible_in_the_console() {
-        // The console is the only place these are drawn, and it is INK
-        // (`style.css:292`). At 12.5px they are normal-size text, so 4.5:1.
+    fn log_category_tokens_are_legible_in_the_console_in_both_themes() {
+        // The console is the only place these are drawn, and it is INK. Its
+        // colour key shares that ground for the same reason: it was on the
+        // card's `raised` ground, where trace and error fell to 4.2:1, and a
+        // key drawn on a different ground from the thing it keys is wrong
+        // anyway. At 12.5px they are normal-size text, so 4.5:1.
         for token in TOKENS.iter().filter(|t| t.name.starts_with("log-")) {
-            let ratio = contrast(token.dark, INK.dark);
+            for (theme, ink, ground) in [
+                ("dark", token.dark, INK.dark),
+                ("light", token.light, INK.light),
+            ] {
+                let ratio = contrast(ink, ground);
+                assert!(
+                    ratio >= 4.5,
+                    "{} on ink in {theme} is {ratio:.2}:1, below AA",
+                    token.name
+                );
+            }
+        }
+    }
+
+    /// A scrim that lightens the page it covers is not a scrim.
+    #[test]
+    fn the_shadow_token_is_dark_in_both_themes() {
+        for value in [SHADOW.dark, SHADOW.light] {
+            let ratio = contrast(value, "#FFFFFF");
             assert!(
-                ratio >= 4.5,
-                "{} on ink is {ratio:.2}:1, below AA",
-                token.name
+                ratio >= 7.0,
+                "the scrim is {ratio:.2}:1 against white, which is not a scrim"
             );
         }
     }
 
     #[test]
     fn no_token_is_accidentally_identical_across_themes() {
-        // INK is the known-broken light value: it renders #201F1D body text on
-        // a #0E0F11 ground at 1.15:1, which is the whole of the dead light
-        // theme. Fixing it repaints every light-mode screen, so it belongs with
-        // the rest of that work rather than here. Remove this entry then.
-        const DELIBERATE: &[&str] = &["ink"];
         for token in TOKENS {
-            if DELIBERATE.contains(&token.name) {
-                continue;
-            }
             assert_ne!(
                 token.dark, token.light,
                 "{} has one value doing two jobs",

@@ -41,6 +41,17 @@ pub struct Row {
 /// Everything the screen draws.
 pub struct App {
     pub snapshot: Option<Snapshot>,
+    /// What this screen is about, when it is not the only thing running.
+    ///
+    /// The TUI follows the primary instance and always has. On a one-server
+    /// deployment that is the whole truth and naming it would be noise; on a
+    /// two-server one it silently showed one of them with nothing on screen
+    /// saying which, so a `quit` typed here went somewhere the operator had not
+    /// chosen.
+    pub instance: Option<String>,
+    /// The gamemode's own name, when its profile gives one. The masthead said
+    /// APPLEJACK to every gamemode before profiles existed.
+    pub gamemode: Option<String>,
     pub rows: VecDeque<Row>,
     pub cpu: VecDeque<u64>,
     pub memory: VecDeque<u64>,
@@ -62,6 +73,8 @@ impl App {
     pub fn new() -> Self {
         Self {
             snapshot: None,
+            instance: None,
+            gamemode: None,
             rows: VecDeque::with_capacity(SCROLLBACK),
             cpu: VecDeque::with_capacity(240),
             memory: VecDeque::with_capacity(240),
@@ -253,7 +266,16 @@ fn now() -> String {
 /// The terminal is restored on every exit path, including a panic: a manager
 /// that leaves the terminal in raw mode after a crash makes the next command
 /// unreadable, which is the moment somebody most needs to type one.
-pub async fn run(handle: Handle) -> io::Result<()> {
+/// Drive the terminal dashboard for one supervised server.
+///
+/// `instance` is `None` for a deployment with one server, where naming it would
+/// be noise, and `Some(id)` when there are several and the screen has to say
+/// which one it is about.
+pub async fn run(
+    handle: Handle,
+    instance: Option<String>,
+    gamemode: Option<String>,
+) -> io::Result<()> {
     enable_raw_mode()?;
     let mut out = io::stdout();
     crossterm::execute!(out, EnterAlternateScreen)?;
@@ -265,7 +287,13 @@ pub async fn run(handle: Handle) -> io::Result<()> {
         previous(info);
     }));
 
-    let result = drive(&handle, Terminal::new(CrosstermBackend::new(io::stdout()))?).await;
+    let result = drive(
+        &handle,
+        instance,
+        gamemode,
+        Terminal::new(CrosstermBackend::new(io::stdout()))?,
+    )
+    .await;
 
     disable_raw_mode()?;
     crossterm::execute!(io::stdout(), LeaveAlternateScreen)?;
@@ -274,9 +302,13 @@ pub async fn run(handle: Handle) -> io::Result<()> {
 
 async fn drive<B: ratatui::backend::Backend>(
     handle: &Handle,
+    instance: Option<String>,
+    gamemode: Option<String>,
     mut terminal: Terminal<B>,
 ) -> io::Result<()> {
     let mut app = App::new();
+    app.instance = instance;
+    app.gamemode = gamemode;
     let mut events = handle.subscribe();
     let mut ticker = tokio::time::interval(Duration::from_millis(200));
 

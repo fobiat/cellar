@@ -69,6 +69,64 @@ function drainToasts() {
   toast.append(dismiss);
 }
 
+/* An empty pane has to say why it is empty.
+ *
+ * A blank table and a table whose fetch silently returned nothing look the
+ * same, and during an incident the second is what an operator will assume. The
+ * text is the point: "no documents" says nothing, "the gamemode has not written
+ * any yet" says where to look next. */
+function emptyRow(body, columns, why) {
+  const row = el("tr");
+  const cell = el("td", "muted", why);
+  cell.colSpan = columns;
+  row.append(cell);
+  body.append(row);
+}
+
+/* ---- theme --------------------------------------------------------------- */
+
+/* Dark by default, whatever the system says.
+ *
+ * An operations console that repaints itself white because a phone is in light
+ * mode is a console nobody can read outdoors at night, which is when it gets
+ * read. So `prefers-color-scheme` is not the default here; it is the third
+ * option, chosen deliberately.
+ *
+ * The light theme was dead until 2026-09-01 for one reason: the `ink` token
+ * carried the dark value in both themes, so light mode painted #201F1D body
+ * text on a #0E0F11 ground at 1.15:1. Two tokens moved and the palette test
+ * now holds both halves to WCAG AA, so this option leads somewhere. */
+function applyTheme(choice) {
+  if (choice === "system") {
+    // Removing the attribute is what lets the generated palette's
+    // `prefers-color-scheme` block take over.
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    document.documentElement.setAttribute("data-theme", choice);
+  }
+  try {
+    localStorage.setItem("cellar-theme", choice);
+  } catch {
+    // Private browsing, or storage denied. The choice still applies to this
+    // page; it just will not survive a reload.
+  }
+}
+
+function restoreTheme() {
+  let choice = "dark";
+  try {
+    choice = localStorage.getItem("cellar-theme") || "dark";
+  } catch {
+    // Same as above.
+  }
+  applyTheme(choice);
+  const select = $("#theme");
+  if (select) {
+    select.value = choice;
+    select.onchange = () => applyTheme(select.value);
+  }
+}
+
 /* Confirming a destructive action, as a dialog rather than window.confirm.
  *
  * `window.confirm` cannot say which server, cannot count who is about to be
@@ -1600,6 +1658,15 @@ async function loadDocuments() {
     return;
   }
 
+  if (!documents.length) {
+    emptyRow(body, 4, prefix
+      ? `No document key starts with '${prefix}'.`
+      : "No documents. The gamemode writes these through the bridge as players "
+        + "play, so an empty list on a server that has had players means the bridge "
+        + "is not being reached.");
+    return;
+  }
+
   for (const document_ of documents) {
     const row = el("tr");
     const open = el("button", "chip", "open");
@@ -1629,6 +1696,10 @@ async function openDocument(key) {
 
   const history = $("#doc-history");
   history.replaceChildren();
+  if (!(data.revisions || []).length) {
+    emptyRow(history, 3, "No revisions kept for this document.");
+    return;
+  }
   for (const revision of data.revisions) {
     const row = el("tr");
     row.append(
@@ -1648,7 +1719,16 @@ async function loadTables() {
 
   const response = await fetch("/api/db/tables");
   const tables = await response.json();
-  if (!Array.isArray(tables)) return;
+  if (!Array.isArray(tables)) {
+    list.append(el("p", "muted", text(tables.error) || "The database did not answer."));
+    return;
+  }
+  if (!tables.length) {
+    list.append(el("p", "muted",
+      "No tables. The grant this connection uses decides what is visible, so an empty "
+      + "list can mean an empty schema or a grant that cannot see it."));
+    return;
+  }
 
   for (const table of tables) {
     const button = el("button", "chip", `${table.name} · ${table.rows}`);
@@ -2008,6 +2088,11 @@ async function loadConfigs() {
     return;
   }
   const profiles = data.profiles || [];
+  if (!profiles.length) {
+    target.append(el("p", "muted",
+      "No sibling profiles. Cellar looks for other cellar.toml files beside the active "
+      + "one; with a single config there is nothing to switch between."));
+  }
   const modeActions = $("#config-mode-actions");
   modeActions.replaceChildren();
   for (const mode of ["development", "published"]) {
@@ -2104,6 +2189,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     button.addEventListener("keydown", tablistKey);
   });
 
+  restoreTheme();
   $("#login").onsubmit = signIn;
 
   document.addEventListener("keydown", globalKeys);

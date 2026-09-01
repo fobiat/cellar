@@ -48,6 +48,12 @@
     <button class="action" id="notification-toggle" type="button">Enable alerts</button>
     <button class="action" id="restart">Restart</button>
     <button class="action danger" id="stop">Stop</button>
+    <label class="sr-only" for="theme">Colour theme</label>
+    <select id="theme" class="theme-select">
+      <option value="dark">Dark</option>
+      <option value="light">Light</option>
+      <option value="system">System</option>
+    </select>
     <button class="action" id="logout" type="button">Sign out</button>
   </header>
 
@@ -215,7 +221,7 @@
            hardcoded to AppleJackRP before the profile existed. -->
       <div class="panel">
         <h2 id="gamemode-title">Gamemode</h2>
-        <div class="body">
+        <div class="body scroll">
           <table>
             <tbody id="gamemode"></tbody>
           </table>
@@ -307,12 +313,14 @@
             <button class="chip" id="activity-refresh" type="button">refresh</button>
           </div>
           <p class="muted small" id="activity-state">Loading.</p>
+          <div class="scroll">
           <table>
             <thead>
               <tr><th>When</th><th>Source</th><th>Who</th><th>What</th><th>Outcome</th></tr>
             </thead>
             <tbody id="activity"></tbody>
           </table>
+          </div>
           <p class="muted small" style="margin-top:12px">
             Every console command Cellar has ever run is here, with who ran it and what
             came back, alongside the server's own lifecycle record. The console runs at full
@@ -332,12 +340,14 @@
             <button class="chip" id="diagnostics-refresh" type="button">re-run checks</button>
             <span class="muted small" id="diagnostics-state">Loading.</span>
           </div>
+          <div class="scroll">
           <table>
             <thead>
               <tr><th>Check</th><th>Server</th><th>Result</th></tr>
             </thead>
             <tbody id="diagnostics-checks"></tbody>
           </table>
+          </div>
           <p class="muted small" style="margin-top:12px">
             These are the checks <code>cellar doctor</code> runs, from the same code, re-read
             from <span id="diagnostics-config">the config file</span> each time. A note is a
@@ -348,7 +358,7 @@
 
       <div class="panel">
         <h2>Live</h2>
-        <div class="body">
+        <div class="body scroll">
           <table>
             <thead>
               <tr><th>Check</th><th>Server</th><th>Result</th></tr>

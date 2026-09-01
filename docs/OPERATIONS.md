@@ -85,6 +85,30 @@ and the question names the server and counts who is about to be disconnected.
 
 ---
 
+## Colour, and reading the screen
+
+The dashboard defaults to its dark ground whatever the system asks for. An
+operations console that repaints itself white because a phone is in light mode
+is a console nobody can read outdoors at night, which is when it gets read. The
+theme control in the masthead offers Dark, Light and System, and the choice is
+remembered in the browser.
+
+**The light theme did not work before 2026-09-01, for exactly one reason.** The
+`ink` token carried the dark value in both themes, so light mode painted
+`#201F1D` body text on a `#0E0F11` ground at 1.15:1. Two token values moved
+(`ink` and `shell` became light grounds, `log-trace` darkened by one step) and
+`cellar-core::theme`'s contrast tests now hold **both** halves of every token to
+WCAG AA on all three grounds. They only ever checked the dark half, which is how
+a theme stayed broken while its tests passed.
+
+`shadow` is a separate token from `ink` for the same reason: a modal scrim that
+lightens the page it covers is not a scrim, so it stays dark in both themes.
+
+Status is a glyph as well as a colour throughout, so the screen reads in
+greyscale and to a red-green colour deficiency.
+
+---
+
 ## What runs on a timer
 
 `GET /api/jobs` and the Scheduled jobs panel on the Diagnostics tab list every

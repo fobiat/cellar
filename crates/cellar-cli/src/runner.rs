@@ -186,11 +186,20 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
 
     if with_tui {
         // The TUI is a single-server htop with a command line, and that is a
-        // good thing for it to be. It follows the primary.
+        // good thing for it to be. It follows the primary, and now says so when
+        // there is more than one server it could have followed.
         let handle = primary_handle
             .clone()
             .context("no instance started, so there is nothing for the TUI to follow")?;
-        cellar_tui::run(handle).await?;
+        let followed = state.instances.primary();
+        cellar_tui::run(
+            handle,
+            (running.len() > 1)
+                .then(|| followed.map(|entry| entry.id.to_string()))
+                .flatten(),
+            followed.and_then(|entry| entry.descriptor.profile.name.clone()),
+        )
+        .await?;
     } else {
         wait_for_shutdown(state.shutdown_requested.clone()).await;
         tracing::info!("stopping the server gracefully");

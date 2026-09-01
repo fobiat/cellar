@@ -49,20 +49,38 @@ fn panel(title: &str) -> Block<'_> {
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
+    // The gamemode's own name, not a hardcoded one. This said APPLEJACK to
+    // every gamemode until profiles existed.
+    let wordmark = app
+        .gamemode
+        .clone()
+        .unwrap_or_else(|| "CELLAR".to_owned())
+        .to_uppercase();
+
     let mut spans = vec![
         Span::styled("★ ", theme::accent()),
         Span::styled(
-            "APPLEJACK ",
+            format!("{wordmark} "),
             Style::default()
                 .fg(theme::text())
                 .add_modifier(Modifier::BOLD),
         ),
     ];
 
+    // Which server this screen is about, when there is more than one it could
+    // have been. A `quit` typed at the prompt goes here, so this is the most
+    // load-bearing three words on the screen.
+    if let Some(instance) = &app.instance {
+        spans.push(Span::styled(
+            format!("[{instance}] "),
+            Style::default().fg(theme::azure()),
+        ));
+    }
+
     match &app.snapshot {
         Some(snapshot) => {
             spans.push(Span::styled(
-                format!("● {} ", snapshot.state.as_str()),
+                format!("● {} ", state_label(snapshot)),
                 Style::default().fg(theme::state_colour(snapshot.state)),
             ));
             spans.push(Span::styled(
@@ -111,6 +129,25 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         Paragraph::new(Line::from(spans)).block(panel("dispatch")),
         area,
     );
+}
+
+/// A state with no process reads as an absence unless it says how the last run
+/// ended, which is the same argument the web dashboard's `stateLabel` makes.
+/// Exit 0 after a stop and exit 137 after an out-of-memory kill are the same
+/// word otherwise.
+fn state_label(snapshot: &cellar_core::snapshot::Snapshot) -> String {
+    let word = snapshot.state.as_str();
+    let Some(exit) = snapshot.last_exit else {
+        return word.to_owned();
+    };
+    if snapshot.state.has_process() {
+        return word.to_owned();
+    }
+    match exit.code {
+        Some(0) if exit.graceful => format!("{word}, cleanly"),
+        Some(code) => format!("{word}, code {code}"),
+        None => format!("{word}, killed by a signal"),
+    }
 }
 
 fn draw_load(frame: &mut Frame, area: Rect, app: &App) {
@@ -273,8 +310,56 @@ mod tests {
     #[test]
     fn it_draws_before_the_first_snapshot_arrives() {
         let screen = render(&App::new(), 100, 30);
-        assert!(screen.contains("APPLEJACK"));
+        // Not APPLEJACK. This screen said one gamemode's name to every gamemode
+        // until profiles existed, and with no profile it is Cellar's own.
+        assert!(screen.contains("CELLAR"));
         assert!(screen.contains("connecting"));
+    }
+
+    #[test]
+    fn the_masthead_names_the_gamemode_and_the_server_it_is_about() {
+        let mut app = App::new();
+        app.gamemode = Some("AppleJackRP".to_owned());
+        // Set only when there is more than one server it could have followed.
+        // A `quit` typed at the prompt goes to this one.
+        app.instance = Some("published".to_owned());
+
+        let screen = render(&app, 100, 30);
+        assert!(screen.contains("APPLEJACKRP"), "{screen}");
+        assert!(screen.contains("[published]"), "{screen}");
+    }
+
+    /// "stopped" on its own is an absence rather than an answer.
+    ///
+    /// The same argument the web dashboard's `stateLabel` makes: exit 0 after a
+    /// stop and exit 137 after an out-of-memory kill are the same word without
+    /// this.
+    #[test]
+    fn a_stopped_server_says_how_the_last_run_ended() {
+        let mut tracker = cellar_core::snapshot::Tracker::new("test", 32);
+        let now = chrono::Utc::now();
+        tracker.apply(
+            &cellar_core::Event::ProcessStarted {
+                pid: 1,
+                command: "x".into(),
+            },
+            now,
+        );
+        tracker.apply(
+            &cellar_core::Event::ProcessExited {
+                code: Some(137),
+                graceful: false,
+            },
+            now,
+        );
+        // The supervisor sets the state; the tracker only folds the exit into
+        // `last_exit`, which is the pair this label reads.
+        tracker.set_state(cellar_core::State::Stopped);
+
+        let mut app = App::new();
+        app.snapshot = Some(tracker.snapshot());
+        let screen = render(&app, 120, 30);
+        assert!(screen.contains("code 137"), "{screen}");
     }
 
     #[test]
