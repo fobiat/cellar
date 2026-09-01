@@ -69,6 +69,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A theme control offering Dark, Light and System, with the choice remembered.
 
+- **A Backups screen, on Settings.** The schedule, where dumps land and how
+  much room is left there, whether each dump read back, the backup job's own
+  last verdict, and a restore button per dump behind a typed confirmation. The
+  restore path was written in Phase 1 with no way to reach it from the
+  dashboard, which is the wrong shape for the one operation that gets looked
+  for under pressure. An empty list says which of the three reasons it is:
+  no database configured, none scheduled, or none taken yet.
+
 - **Which server this is, above the console it belongs to.** A collapsible
   header carrying the mode, gamemode, map, players, uptime, restart policy,
   document scope and the join address with a copy button. Not a tab: a screen
@@ -185,6 +193,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   build commit on the left. Dropped the "server control" tagline.
 
 ### Fixed
+
+- **A restore accepted a dump the backup code would have refused.** `create`
+  reads each dump back before counting it; `restore` checked only that the
+  first bytes looked like a dump header. So an unfinished dump was refused
+  when it was written and accepted when it was put back. Driven against a real
+  MariaDB, restoring a dump truncated to 3000 bytes dropped the table,
+  reinserted part of it, died on a sliced statement and reported that the
+  database might be half-applied, which it was. Restore runs the same
+  verification now, before any client starts, and the dashboard disables the
+  button with the reason on the row.
+
+- **A passwordless database URL could be read but never backed up.** `sqlx`
+  connects with `mysql://root@host/db` and the dump refused it, so Cellar would
+  run happily against a local database and only say it could not back it up
+  when a backup ran. The credentials are also percent-decoded now: a password
+  containing `@` has to be written `%40` for the URL to parse, and the encoded
+  text was being handed to `mariadb-dump` as the password.
+
+- **`el("td", null, someButton)` rendered the string
+  `[object HTMLButtonElement]`.** The helper assigned its third argument as
+  text, so the Access allowlist's revoke button was that text on every row. It
+  takes a node now, which closes the class rather than the call sites.
 
 - **Both charts stretched their own coordinate space.** They carried a fixed
   `viewBox` and `preserveAspectRatio="none"`, so a 320-unit box painted across

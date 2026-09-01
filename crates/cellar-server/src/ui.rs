@@ -483,6 +483,11 @@ mod tests {
             ("/api/logout", "signing out"),
             ("/api/control/exit", "shutting Cellar down"),
             ("method: \"DELETE\"", "deleting a document"),
+            // Written in Phase 1 with no button. A restore is looked for
+            // under pressure, and a command nobody has run is a command
+            // nobody finds at 3am.
+            ("/api/db/restore", "restoring a backup"),
+            ("/api/db/backups", "listing the backups"),
         ] {
             assert!(JS.contains(route), "no way to reach {what} from the UI");
         }

@@ -397,11 +397,35 @@ and the order is the point:
 
 ## Backups
 
-What actually matters is `aj_document`. Everything with an `srv_` prefix is
-operational and regenerable.
+Cellar takes these itself, on a timer, and can put one back:
 
 ```sh
-mysqldump cellar aj_document aj_document_revision > characters.sql
+cellar db backup      # dump now, verify it, prune to backup.retain
+cellar db backups     # what is on disk, newest first
+cellar db restore     # the newest dump, or name one
+```
+
+The dashboard has the same three on Settings, Backups, with the schedule, the
+free space where dumps land, and whether each dump read back. A dump that has
+no end-of-dump marker cannot be restored from either: `mariadb-dump` writes
+that marker last, so its absence means the process that wrote the file did not
+finish, and a half-written dump applied to a live database leaves it
+half-applied.
+
+A dump is the whole database `CELLAR_DATABASE_URL` names. That holds the
+gamemode's tables and Cellar's `srv_` ones together, so it is not only
+operational data, and it does not cover the engine's data directory, the
+install tree, or anything the gamemode keeps outside that database.
+
+Restoring stops every supervised server first and does not start them again.
+The gamemode writes through the bridge continuously, so a write landing
+mid-restore lands in a table that is about to be dropped.
+
+What actually matters inside it is `aj_document`. Everything with an `srv_`
+prefix is operational and regenerable, so a narrower dump is also reasonable:
+
+```sh
+mariadb-dump cellar aj_document aj_document_revision > characters.sql
 ```
 
 Or per document, which is easier to reason about:

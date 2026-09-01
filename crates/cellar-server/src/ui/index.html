@@ -558,6 +558,33 @@
         </div>
       </div>
 
+      <!-- The dumps, and whether anything is taking them. A backup nobody has
+           restored is a hypothesis, so restore is a button here rather than a
+           command an operator finds under pressure. -->
+      <div class="panel">
+        <h2>Backups</h2>
+        <div class="body">
+          <div class="metric-grid" id="backup-policy"></div>
+          <div class="scroll">
+            <table>
+              <thead><tr><th>When</th><th>Size</th><th>Verified</th><th></th></tr></thead>
+              <tbody id="backups"></tbody>
+            </table>
+          </div>
+          <p class="notice" id="backup-notice"></p>
+          <div class="row">
+            <button class="action" id="backup-now" type="button">Back up now</button>
+          </div>
+          <p class="muted small" style="margin-top:12px" id="backup-scope">
+            A dump is the whole database <code>CELLAR_DATABASE_URL</code> names, which holds the
+            gamemode's tables and Cellar's own <code>srv_</code> ones together. It does not cover
+            the engine's data directory, the install tree, or anything the gamemode keeps outside
+            that database. Verified means the dump was read back and ends the way
+            <code>mariadb-dump</code> ends one.
+          </p>
+        </div>
+      </div>
+
       <!-- POST /api/control/exit has existed and been unreachable from the UI.
            It stops every supervised server and ends the Cellar process, so it
            belongs at the bottom of Settings behind a typed confirmation, not

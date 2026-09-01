@@ -1630,7 +1630,14 @@ fn backup_directory(state: &AppState) -> Option<std::path::PathBuf> {
     })
 }
 
+/// The dumps, and the policy that produced them.
+///
+/// The listing alone cannot answer the two questions somebody opening this
+/// asks: is anything taking these, and is the newest one real. The schedule
+/// comes from the config, and `verify` is the same read-back `backup::create`
+/// does before it counts a dump, which is what separates a file from a backup.
 async fn db_backups(State(state): State<Arc<AppState>>, _: Operator) -> Response {
+    let backup = &state.backup_config;
     let Some(directory) = backup_directory(&state) else {
         return error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1639,14 +1646,31 @@ async fn db_backups(State(state): State<Arc<AppState>>, _: Operator) -> Response
     };
 
     let dumps = cellar_mariadb::backup::list(&directory).unwrap_or_default();
+    let free = cellar_runtime::metrics::disk_free(&directory);
     Json(serde_json::json!({
         "directory": directory,
-        "dumps": dumps.iter().map(|dump| serde_json::json!({
-            "path": dump.path,
-            "name": dump.path.file_name().map(|n| n.to_string_lossy()),
-            "bytes": dump.bytes,
-            "modified": chrono::DateTime::<chrono::Utc>::from(dump.modified),
-        })).collect::<Vec<_>>(),
+        "database_configured": state.database_url.is_some(),
+        "policy": {
+            "enabled": backup.enabled,
+            "interval_hours": backup.interval_hours,
+            "retain": backup.retain,
+            "verify": backup.verify,
+            "copy_to": backup.copy_to,
+            "before_update": backup.before_update,
+        },
+        "free_bytes": free.as_ref().map(|(bytes, _)| *bytes),
+        "mount": free.as_ref().map(|(_, mount)| mount.clone()),
+        "dumps": dumps.iter().map(|dump| {
+            let verified = cellar_mariadb::backup::verify(&dump.path);
+            serde_json::json!({
+                "path": dump.path,
+                "name": dump.path.file_name().map(|n| n.to_string_lossy()),
+                "bytes": dump.bytes,
+                "modified": chrono::DateTime::<chrono::Utc>::from(dump.modified),
+                "verified": verified.is_ok(),
+                "why": verified.err().map(|why| why.to_string()),
+            })
+        }).collect::<Vec<_>>(),
     }))
     .into_response()
 }

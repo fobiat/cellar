@@ -6,10 +6,18 @@
  */
 
 const $ = (selector) => document.querySelector(selector);
-const el = (tag, className, text) => {
+/* The third argument is text, or a node to put inside.
+ *
+ * It used to be text only, and `el("td", null, someButton)` therefore rendered
+ * the string "[object HTMLButtonElement]" into the cell. It reads correctly,
+ * it throws nothing, and the Access allowlist shipped with a revoke button
+ * spelled out that way. Accepting a node here closes the whole class rather
+ * than the two call sites that were caught. */
+const el = (tag, className, content) => {
   const node = document.createElement(tag);
   if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
+  if (content instanceof Node) node.append(content);
+  else if (content !== undefined) node.textContent = content;
   return node;
 };
 
@@ -570,7 +578,11 @@ function tablistKey(event) {
 const TAB_LOADERS = {
   records: { what: "documents", into: "#documents", run: () => loadDocuments() },
   database: { what: "the database", into: "#tables", run: () => loadDatabase() },
-  settings: { what: "Cellar's version", into: "#cellar-update", run: () => loadCellarUpdate() },
+  settings: {
+    what: "Cellar's version",
+    into: "#cellar-update",
+    run: async () => { await loadCellarUpdate(); await loadBackups(); },
+  },
   monitoring: { what: "status", into: null, run: () => refreshStatus() },
   dispatch: {
     what: "the gamemode palette",
@@ -1064,6 +1076,145 @@ async function loadCellarUpdate() {
   );
   if (program.checked_at) add("checked", text(program.checked_at));
   if (program.error) add("check", `error: ${text(program.error)}`);
+}
+
+/* ---- backups ------------------------------------------------------------- */
+
+/* What has been taken, whether it is real, and how to put one back.
+ *
+ * The restore path has existed since Phase 1 with no button, which is the
+ * shape that matters: a restore is looked for under pressure, and a command
+ * nobody has run is a command nobody will find at 3am. */
+async function loadBackups() {
+  const rows = $("#backups");
+  const policy = $("#backup-policy");
+  rows.replaceChildren();
+  policy.replaceChildren();
+
+  const response = await fetch("/api/db/backups");
+  const data = await response.json();
+
+  if (!response.ok) {
+    $("#backup-notice").textContent = text(data.error);
+    emptyRow(rows, 4, "No backup directory, so there is nothing to list.");
+    return;
+  }
+  $("#backup-notice").textContent = "";
+
+  const fact = (label, value) => {
+    const cell = el("div");
+    cell.append(el("span", "muted small", label), el("strong", null, text(value)));
+    policy.append(cell);
+  };
+
+  const settings = data.policy || {};
+  fact("schedule", settings.enabled
+    ? `every ${settings.interval_hours}h, keep ${settings.retain}`
+    : "off");
+  fact("directory", data.directory);
+  fact("free here", data.free_bytes === null || data.free_bytes === undefined
+    ? "unknown"
+    : `${formatBytes(data.free_bytes)}${data.mount ? ` on ${data.mount}` : ""}`);
+  fact("read back", settings.verify ? "each dump, before it counts" : "no");
+  fact("second copy", settings.copy_to || "none");
+  fact("before an update", settings.before_update ? "yes" : "no");
+
+  /* The job's own verdict, on the screen the backups are on.
+   *
+   * Pressing "back up now" and seeing no new row is exactly when the reason
+   * is wanted, and it was two screens away in the job register: measured
+   * here, a passwordless URL failed the dump and the only tell on this
+   * screen was that nothing appeared. */
+  const job = (await api("/api/jobs").catch(() => null))?.jobs
+    ?.find((entry) => entry.name === "database-backup");
+  if (job) {
+    const cell = el("div");
+    const when = job.last_run ? new Date(job.last_run).toLocaleString() : "never run";
+    cell.append(el("span", "muted small", "last attempt"));
+    cell.append(el("strong", `lamp ${job.last_ok === null ? "wait" : job.last_ok ? "up" : "down"}`,
+      job.last_ok === false ? `failed: ${text(job.last_detail)}` : when));
+    policy.append(cell);
+  }
+
+  const dumps = data.dumps || [];
+  if (!dumps.length) {
+    /* Three different reasons for an empty list, and they need three
+     * different actions. The one that used to be invisible is a configured
+     * schedule with no database URL, which only ever appeared in a log line. */
+    emptyRow(rows, 4, !data.database_configured
+      ? "No dumps: no database is configured, so there is nothing to dump. "
+        + "Set CELLAR_DATABASE_URL."
+      : settings.enabled
+        ? "No dumps yet. The first one is due within the interval above, or press Back up now."
+        : "No dumps, and none are scheduled: backup.enabled is off.");
+    return;
+  }
+
+  for (const dump of dumps) {
+    const row = el("tr");
+    const restore = el("button", "chip", "restore");
+    /* Disabled with the reason on the row rather than enabled and refused
+     * after the click. `restore` refuses an unfinished dump itself, so this
+     * is the same answer given before the operator has typed the name back. */
+    if (dump.verified) {
+      restore.onclick = () => restoreBackup(dump);
+    } else {
+      restore.disabled = true;
+      restore.title = text(dump.why || "this dump did not read back");
+    }
+
+    const verified = el("span", `lamp ${dump.verified ? "up" : "down"}`,
+      dump.verified ? "verified" : text(dump.why || "unreadable"));
+
+    row.append(
+      el("td", null, new Date(dump.modified).toLocaleString()),
+      el("td", null, formatBytes(dump.bytes)),
+      el("td", null, verified),
+      el("td", null, restore),
+    );
+    rows.append(row);
+  }
+}
+
+/* Through the scheduler, not through `POST /api/db/backup`.
+ *
+ * The job owns the timer and the retention pass, so asking the job to run is
+ * what makes "back up now" and the scheduled backup the same operation. Two
+ * of them at once would race `prune` against the dump it is about to count. */
+async function backupNow() {
+  await runJob("database-backup");
+  setTimeout(() => load("backups", $("#backups"), () => loadBackups()), 2500);
+}
+
+/* Tier three: the name typed back. This drops every table in the database and
+ * stops the servers to do it, and it is the one action here that cannot be
+ * undone by doing it again. */
+async function restoreBackup(dump) {
+  const going = await confirmAction({
+    title: `Restore ${dump.name}?`,
+    body: "Every supervised server stops first, every table in the database is replaced, and "
+      + "nothing is started again afterwards. Whoever restores a database should look at it "
+      + "before players reach it.",
+    typed: dump.name,
+  });
+  if (!going) return;
+
+  try {
+    const result = await api("/api/db/restore", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: dump.name }),
+    });
+    showToast(
+      `Restored ${formatBytes(result.bytes)} into ${text(result.database)}. ${text(result.detail)}`,
+      "success",
+    );
+    appendLine("reply", now(), "cellar", `restored ${dump.name}`, false, "warning", "storage");
+  } catch (error) {
+    showToast(`Restore failed: ${error.message}`, "error");
+  }
+  loadBackups();
+  refreshStatus();
 }
 
 async function loadReleases() {
@@ -2634,6 +2785,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("#diagnostics-refresh").onclick = () =>
     load("diagnostics", $("#diagnostics-checks"), () => loadDiagnostics());
   $("#logout").onclick = signOut;
+  $("#backup-now").onclick = backupNow;
   $("#cellar-exit").onclick = exitCellar;
   $("#run-query").onclick = runQuery;
   $("#release-build").onclick = () => runRelease("build");
