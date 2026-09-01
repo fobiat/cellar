@@ -102,6 +102,18 @@ async function api(path, options) {
 let selectedInstance = null;
 let knownInstances = [];
 let lastStatus = null;
+let commandHistory = [];
+let historyCursor = 0;
+
+/* What Tab completes from: the gamemode's own palette, plus what has been
+ * typed here before. Cellar keeps no list of a gamemode's commands, which is
+ * the point of the profile. */
+function completions() {
+  const current = knownInstances.find((entry) => entry.id === selectedInstance) || knownInstances[0];
+  const fromProfile = ((current && current.profile && current.profile.command) || [])
+    .map((entry) => entry.command);
+  return [...new Set([...fromProfile, ...commandHistory])].sort();
+}
 
 function instanceId() {
   return selectedInstance;
@@ -1098,11 +1110,76 @@ async function runCommand(command) {
 
 /* ---- live events -------------------------------------------------------- */
 
+/* What the console knows about its own completeness.
+ *
+ * A console that silently skips lines and still looks complete is worse than
+ * one that says it lost some. `missedEvents` counts what the broadcast channel
+ * told us it dropped; `backfilled` counts what was recovered from the log file
+ * after a reconnect; `lastSeen` is the high-water mark the recovery asks from. */
+let missedEvents = 0;
+let backfilledLines = 0;
+let lastSeen = null;
+let hasConnectedOnce = false;
+
+function noteSeen(at) {
+  if (!at) return;
+  if (!lastSeen || at > lastSeen) lastSeen = at;
+}
+
+function renderIntegrity() {
+  const node = $("#console-integrity");
+  if (!node) return;
+  if (!missedEvents && !backfilledLines) {
+    node.textContent = "No gaps.";
+    node.classList.remove("down");
+    return;
+  }
+  const parts = [];
+  if (missedEvents) parts.push(`${missedEvents} event(s) dropped by this browser`);
+  if (backfilledLines) parts.push(`${backfilledLines} line(s) recovered from the log`);
+  node.textContent = parts.join(", ") + ".";
+  node.classList.toggle("down", missedEvents > backfilledLines);
+}
+
+/* Fill the hole a dropped socket left, from the log file.
+ *
+ * The engine's log is the persistent record, so a reconnect can recover what
+ * the stream missed rather than resuming mid-gap and looking complete. Only
+ * lines strictly after the last one already shown, so nothing is doubled. */
+async function backfillSince(mark) {
+  if (!mark) {
+    /* Nothing to ask from, so the gap cannot be filled. Saying so beats a
+     * console that reconnects and looks complete. */
+    appendLine("error", now(), "cellar", "--- reconnected, but there is no mark to recover from ---");
+    return;
+  }
+  const params = new URLSearchParams({ since: mark, limit: "500" });
+  const data = await api(forInstance(`/api/logs?${params}`));
+  const lines = data.lines || [];
+  if (!lines.length) return;
+
+  appendLine("echo", now(), "cellar", `--- recovering ${lines.length} line(s) missed while disconnected ---`);
+  for (const line of lines) {
+    appendLine(line.level === "error" ? "error" : "", clock(line.at), text(line.tag), text(line.message), false, line.level, text(line.category) || "other");
+    noteSeen(line.at);
+  }
+  backfilledLines += lines.length;
+  renderIntegrity();
+}
+
 function connect() {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
   socket = new WebSocket(`${protocol}://${location.host}${forInstance("/api/events")}`);
 
-  socket.onopen = () => setLamp($("#connection-state"), "up", "live");
+  socket.onopen = () => {
+    setLamp($("#connection-state"), "up", "live");
+    /* Only after a reconnect. On the first connection there is no gap: the
+     * initial log load already covers everything before now. */
+    if (hasConnectedOnce) {
+      load("the missed lines", null, () => backfillSince(lastSeen));
+    }
+    hasConnectedOnce = true;
+  };
   socket.onerror = () => setLamp($("#connection-state"), "down", "error");
 
   socket.onmessage = (message) => {
@@ -1114,6 +1191,7 @@ function connect() {
          * diverged: the JavaScript one still tested for `applejack` after the
          * Rust one started asking the gamemode profile. */
         appendLine(event.level === "error" ? "error" : "", clock(event.at), text(event.logger), text(event.message), true, event.level, text(event.category) || "other");
+        noteSeen(event.at);
         break;
       case "player_joined":
         appendLine("join", now(), "join", `${text(event.name)} [${event.steam_id}]`);
@@ -1171,8 +1249,12 @@ function connect() {
         break;
       /* A gap, marked as a gap. The alternative is a console that silently
        * skips lines and looks complete. */
+      /* A gap, marked as a gap, and counted. The alternative is a console that
+       * silently skips lines and looks complete. */
       case "lagged":
-        appendLine("error", now(), "cellar", `${event.missed} event(s) missed: this browser fell behind`);
+        appendLine("error", now(), "cellar", `--- ${event.missed} event(s) missed: this browser fell behind ---`);
+        missedEvents += Number(event.missed) || 0;
+        renderIntegrity();
         break;
       default:
         break;
@@ -1183,6 +1265,7 @@ function connect() {
   // without saying so is worse than one that is obviously offline.
   socket.onclose = () => {
     setLamp($("#connection-state"), "down", "reconnecting");
+    appendLine("error", now(), "cellar", "--- disconnected: lines from here are recovered on reconnect ---");
     setTimeout(connect, 3000);
   };
 }
@@ -1561,7 +1644,14 @@ async function loadLogs() {
   const response = await fetch(forInstance("/api/logs?limit=250"));
   if (!response.ok) return;
   const data = await response.json();
-  for (const line of data.lines || []) appendLine(line.level === "error" ? "error" : "", clock(line.at), line.tag, line.message, false, line.level, line.category);
+  for (const line of data.lines || []) {
+    appendLine(line.level === "error" ? "error" : "", clock(line.at), line.tag, line.message, false, line.level, line.category);
+    /* Seeds the high-water mark. Without this a reconnect on a quiet server
+     * has nothing to ask from, because only live log events had been marking
+     * it, and a server that has not spoken since the page opened has sent
+     * none. The gap was then reported and never filled. */
+    noteSeen(line.at);
+  }
   $("#console-state").textContent = `${data.lines?.length || 0} recent lines · ${data.scanned_files || 0} persistent log file(s)`;
 }
 
@@ -1611,7 +1701,14 @@ async function scanLogs() {
   const data = await response.json();
   if (!response.ok) return showToast(text(data.error));
   consoleRecords = [];
-  for (const line of data.lines || []) appendLine(line.level === "error" ? "error" : "", clock(line.at), line.tag, line.message, false, line.level, line.category);
+  for (const line of data.lines || []) {
+    appendLine(line.level === "error" ? "error" : "", clock(line.at), line.tag, line.message, false, line.level, line.category);
+    /* Seeds the high-water mark. Without this a reconnect on a quiet server
+     * has nothing to ask from, because only live log events had been marking
+     * it, and a server that has not spoken since the page opened has sent
+     * none. The gap was then reported and never filled. */
+    noteSeen(line.at);
+  }
   $("#console-state").textContent = `${data.matched} matches across ${data.scanned_files} persistent log file(s), ${data.scanned_lines} lines scanned`;
 }
 
@@ -1685,10 +1782,43 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (event.target === $("#palette")) closePalette();
   });
 
+  /* History and completion.
+   *
+   * A console with no history is a console where a mistyped long command is
+   * retyped from scratch, and completion comes from the gamemode's own profile
+   * rather than a list Cellar maintains, so it is right for a gamemode nobody
+   * anticipated. */
   $("#command").addEventListener("keydown", (event) => {
+    const input = $("#command");
     if (event.key === "Enter") {
-      runCommand($("#command").value);
-      $("#command").value = "";
+      const command = input.value;
+      if (command.trim()) {
+        commandHistory = commandHistory.filter((entry) => entry !== command);
+        commandHistory.push(command);
+        if (commandHistory.length > 100) commandHistory.shift();
+        localStorage.setItem("cellar.console.history", JSON.stringify(commandHistory));
+      }
+      historyCursor = commandHistory.length;
+      runCommand(command);
+      input.value = "";
+      return;
+    }
+    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      if (!commandHistory.length) return;
+      event.preventDefault();
+      historyCursor += event.key === "ArrowUp" ? -1 : 1;
+      historyCursor = Math.max(0, Math.min(commandHistory.length, historyCursor));
+      input.value = commandHistory[historyCursor] || "";
+      input.setSelectionRange(input.value.length, input.value.length);
+      return;
+    }
+    if (event.key === "Tab") {
+      const prefix = input.value.trim();
+      if (!prefix) return;
+      const match = completions().find((candidate) => candidate.startsWith(prefix) && candidate !== prefix);
+      if (!match) return;
+      event.preventDefault();
+      input.value = match;
     }
   });
 
@@ -1737,6 +1867,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   };
   $("#console-scan").onclick = scanLogs;
   $("#console-clear").onclick = () => { consoleRecords = []; renderConsole(); };
+  try {
+    commandHistory = JSON.parse(localStorage.getItem("cellar.console.history") || "[]");
+  } catch {
+    commandHistory = [];
+  }
+  historyCursor = commandHistory.length;
   $("#console-filter").value = localStorage.getItem("cellar.console.filter") || "";
   $("#console-level").value = localStorage.getItem("cellar.console.level") || "";
   $("#console-view").value = localStorage.getItem("cellar.console.view") || "all";

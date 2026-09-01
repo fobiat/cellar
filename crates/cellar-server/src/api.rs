@@ -981,6 +981,9 @@ struct LogsQuery {
     level_min: Option<cellar_core::event::Level>,
     #[serde(default)]
     category: Option<String>,
+    /// RFC 3339. Only lines after this, for a browser filling a stream gap.
+    #[serde(default)]
+    since: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Scan current and rotated engine logs. The files are the persistent source,
@@ -1007,6 +1010,7 @@ async fn logs(
             level: query.level,
             level_min: query.level_min,
             category: query.category.filter(|value| !value.trim().is_empty()),
+            since: query.since,
             limit: query.limit.unwrap_or(250).clamp(1, 5000),
         },
     )

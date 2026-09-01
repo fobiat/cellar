@@ -24,6 +24,12 @@ pub struct Query {
     /// the search disagree about the same control.
     pub level_min: Option<Level>,
     pub category: Option<String>,
+    /// Only lines strictly after this instant.
+    ///
+    /// What the browser uses to fill the hole a dropped websocket leaves. The
+    /// log file is the persistent record, so a reconnect can recover exactly
+    /// what the stream missed instead of resuming mid-gap and looking complete.
+    pub since: Option<DateTime<Utc>>,
     pub limit: usize,
 }
 
@@ -158,6 +164,11 @@ fn matches(query: &Query, record: &Record) -> bool {
     {
         return false;
     }
+    if let Some(since) = query.since
+        && record.at <= since
+    {
+        return false;
+    }
     query.text.as_deref().is_none_or(|text| {
         let text = text.to_ascii_lowercase();
         record.message.to_ascii_lowercase().contains(&text)
@@ -182,6 +193,29 @@ mod tests {
             raw: "Lobby created".to_owned(),
             file: "sbox-server.log".to_owned(),
         }
+    }
+
+    /// The reconnect backfill's whole correctness condition: strictly after,
+    /// so the line the browser already has is not shown twice.
+    #[test]
+    fn since_is_exclusive_of_the_instant_it_names() {
+        let record = record_at(Level::Info);
+        let at = record.at;
+
+        assert!(!matches(
+            &Query {
+                since: Some(at),
+                ..Default::default()
+            },
+            &record
+        ));
+        assert!(matches(
+            &Query {
+                since: Some(at - chrono::Duration::milliseconds(1)),
+                ..Default::default()
+            },
+            &record
+        ));
     }
 
     #[test]
