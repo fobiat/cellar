@@ -229,6 +229,7 @@ pub struct ActivityEntry {
     pub reply: Option<String>,
     /// Whether a command succeeded. Absent for events, which have no verdict.
     pub ok: Option<bool>,
+    #[serde(with = "cellar_core::event::steam_id_wire::option")]
     pub steam_id: Option<u64>,
     pub session_id: Option<u64>,
     /// Which supervised server. Absent for a row whose session predates scopes
@@ -390,6 +391,7 @@ pub async fn activity(
 /// A player as the roster and the web UI show them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerRecord {
+    #[serde(with = "cellar_core::event::steam_id_wire")]
     pub steam_id: u64,
     pub last_name: String,
     pub first_seen: DateTime<Utc>,

@@ -77,17 +77,14 @@
 
   <nav class="tabs" role="tablist" aria-label="sections">
     <button role="tab" id="tabfor-dispatch" data-tab="dispatch" aria-controls="tab-dispatch" aria-selected="true" tabindex="0">Dispatch</button>
+    <button role="tab" id="tabfor-players" data-tab="players" aria-controls="tab-players" aria-selected="false" tabindex="-1">Players</button>
+    <button role="tab" id="tabfor-config" data-tab="config" aria-controls="tab-config" aria-selected="false" tabindex="-1">Config</button>
     <button role="tab" id="tabfor-monitoring" data-tab="monitoring" aria-controls="tab-monitoring" aria-selected="false" tabindex="-1">Monitoring</button>
-    <button role="tab" id="tabfor-configs" data-tab="configs" aria-controls="tab-configs" aria-selected="false" tabindex="-1">Configs</button>
-    <button role="tab" id="tabfor-roster" data-tab="roster" aria-controls="tab-roster" aria-selected="false" tabindex="-1">Roster</button>
-    <button role="tab" id="tabfor-access" data-tab="access" aria-controls="tab-access" aria-selected="false" tabindex="-1">Access</button>
-    <button role="tab" id="tabfor-settings" data-tab="settings" aria-controls="tab-settings" aria-selected="false" tabindex="-1">Settings</button>
     <button role="tab" id="tabfor-records" data-tab="records" aria-controls="tab-records" aria-selected="false" tabindex="-1">Records</button>
-    <button role="tab" id="tabfor-players" data-tab="players" aria-controls="tab-players" aria-selected="false" tabindex="-1">Registry</button>
     <button role="tab" id="tabfor-database" data-tab="database" aria-controls="tab-database" aria-selected="false" tabindex="-1">Database</button>
     <button role="tab" id="tabfor-activity" data-tab="activity" aria-controls="tab-activity" aria-selected="false" tabindex="-1">Activity</button>
     <button role="tab" id="tabfor-diagnostics" data-tab="diagnostics" aria-controls="tab-diagnostics" aria-selected="false" tabindex="-1">Diagnostics</button>
-    <button role="tab" id="tabfor-releases" data-tab="releases" aria-controls="tab-releases" aria-selected="false" tabindex="-1">Releases</button>
+    <button role="tab" id="tabfor-settings" data-tab="settings" aria-controls="tab-settings" aria-selected="false" tabindex="-1">Settings</button>
   </nav>
 
   <main id="main" tabindex="-1">
@@ -220,74 +217,195 @@
       </div>
     </section>
 
-    <section id="tab-configs" role="tabpanel" aria-labelledby="tabfor-configs" tabindex="-1" hidden>
-      <div class="panel">
-        <h2>Config manager</h2>
-        <div class="body">
-          <p class="muted small">Development mode runs the local AppleJackRP project, syncs the latest checkout, and uses the watcher when one is running. Published mode runs the configured <code>sbox.game</code> package. Switching mode restarts the supervised server.</p>
-          <div class="row" id="config-mode-actions"></div>
-          <div class="row" id="config-list"><p class="muted small">Loading profiles…</p></div>
-          <p class="notice" id="config-notice"></p>
-        </div>
-      </div>
+    <!-- Config: what this server is set to run, what it is set to do, and how
+         its build gets made. Three tabs before this, and the middle one was
+         living in Settings, which is where Cellar's own settings are. -->
+    <section id="tab-config" role="tabpanel" aria-labelledby="tabfor-config" tabindex="-1" hidden>
+      <nav class="subtabs" role="tablist" aria-label="configuration sections">
+        <button class="subtab" role="tab" id="subfor-config-profile" data-of="config" data-sub="profile" aria-controls="sub-config-profile" aria-selected="true" tabindex="0">Profile</button>
+        <button class="subtab" role="tab" id="subfor-config-convars" data-of="config" data-sub="convars" aria-controls="sub-config-convars" aria-selected="false" tabindex="-1">Convars</button>
+        <button class="subtab" role="tab" id="subfor-config-build" data-of="config" data-sub="build" aria-controls="sub-config-build" aria-selected="false" tabindex="-1">Build</button>
+      </nav>
 
-      <!-- What this gamemode told Cellar about itself. Every one of these was
-           hardcoded to AppleJackRP before the profile existed. -->
-      <div class="panel">
-        <h2 id="gamemode-title">Gamemode</h2>
-        <div class="body scroll">
-          <table>
-            <tbody id="gamemode"></tbody>
-          </table>
-          <p class="muted small" style="margin-top:12px">
-            From <code>[profile]</code> or <code>profile_file</code> in the config, and from the
-            project's own <code>.sbproj</code>. A gamemode Cellar has never heard of gets its
-            readiness line, its command palette, its doctor checks and its map list by writing
-            twenty lines of TOML.
-          </p>
-        </div>
-      </div>
-    </section>
-
-    <!-- Roster: who is on the server now. -->
-    <section id="tab-roster" role="tabpanel" aria-labelledby="tabfor-roster" tabindex="-1" hidden>
-      <div class="panel">
-        <h2>Connected now</h2>
-        <div class="body scroll">
-          <div class="table-tools"><label class="sr-only" for="roster-search">Search the roster</label><input type="search" id="roster-search" placeholder="search roster…"><label class="sr-only" for="roster-sort">Sort the roster</label><select id="roster-sort"><option value="0">sort name</option><option value="1">sort Steam ID</option></select></div>
-          <table>
-            <thead><tr><th>Name</th><th>Steam ID</th><th>Connected</th><th></th></tr></thead>
-            <tbody id="roster"></tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
-    <!-- Access: AppleJack's invite-only gate and join allowlist. -->
-    <section id="tab-access" role="tabpanel" aria-labelledby="tabfor-access" tabindex="-1" hidden>
-      <div class="grid-2">
+      <div id="sub-config-profile" role="tabpanel" aria-labelledby="subfor-config-profile" tabindex="-1">
         <div class="panel">
-          <h2>Invite gate</h2>
+          <h2>Config manager</h2>
           <div class="body">
-            <p id="access-gate" class="value lamp wait">Checking…</p>
-            <button class="action" id="access-toggle">Toggle gate</button>
-            <p class="muted small">Keep this on unless you intentionally want an open server.</p>
+            <p class="muted small">Development mode runs the local AppleJackRP project, syncs the latest checkout, and uses the watcher when one is running. Published mode runs the configured <code>sbox.game</code> package. Switching mode restarts the supervised server.</p>
+            <div class="row" id="config-mode-actions"></div>
+            <div class="row" id="config-list"><p class="muted small">Loading profiles…</p></div>
+            <p class="notice" id="config-notice"></p>
           </div>
         </div>
+
+        <!-- What this gamemode told Cellar about itself. Every one of these was
+             hardcoded to AppleJackRP before the profile existed. -->
         <div class="panel">
-          <h2>Add account</h2>
+          <h2 id="gamemode-title">Gamemode</h2>
+          <div class="body scroll">
+            <table>
+              <tbody id="gamemode"></tbody>
+            </table>
+            <p class="muted small" style="margin-top:12px">
+              From <code>[profile]</code> or <code>profile_file</code> in the config, and from the
+              project's own <code>.sbproj</code>. A gamemode Cellar has never heard of gets its
+              readiness line, its command palette, its doctor checks and its map list by writing
+              twenty lines of TOML.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div id="sub-config-convars" role="tabpanel" aria-labelledby="subfor-config-convars" tabindex="-1" hidden>
+        <div class="panel">
+          <h2>Features</h2>
+          <div class="body scroll">
+            <div class="table-tools"><label class="sr-only" for="feature-search">Search features</label><input type="search" id="feature-search" placeholder="search features…"><label class="sr-only" for="feature-sort">Sort features</label><select id="feature-sort"><option value="0">sort name</option><option value="1">sort state</option></select></div>
+            <table>
+              <thead><tr><th>Feature</th><th>State</th><th>Class</th><th></th></tr></thead>
+              <tbody id="features"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Settings</h2>
+          <div class="body scroll">
+            <div class="table-tools"><label class="sr-only" for="setting-search">Search settings</label><input type="search" id="setting-search" placeholder="search settings…"><label class="sr-only" for="setting-sort">Sort settings</label><select id="setting-sort"><option value="0">sort name</option><option value="1">sort value</option></select></div>
+            <table>
+              <thead><tr><th>Setting</th><th>Value</th><th>Default</th><th>Bounds</th><th></th></tr></thead>
+              <tbody id="settings"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Export and import</h2>
           <div class="body">
             <div class="row">
-              <label class="sr-only" for="access-steam-id">SteamID64 to allow</label><input id="access-steam-id" inputmode="numeric" placeholder="SteamID64">
-              <button class="action" id="access-add">Invite</button>
+              <button class="chip" onclick="exportSettings('toml', false)">whole config, TOML</button>
+              <button class="chip" onclick="exportSettings('yaml', false)">whole config, YAML</button>
+              <button class="chip" onclick="exportSettings('toml', true)">overrides only, TOML</button>
+              <button class="chip" onclick="exportSettings('yaml', true)">overrides only, YAML</button>
+              <button class="action" onclick="loadSettings()">Refresh</button>
             </div>
-            <p class="notice" id="access-notice"></p>
+            <div class="row import-tools">
+              <label class="sr-only" for="settings-import-file">Settings file to import</label><input type="file" id="settings-import-file" accept=".toml,.yaml,.yml,text/plain">
+              <button class="chip" id="settings-import-preview" type="button">Preview import</button>
+              <button class="action" id="settings-import-apply" type="button">Apply import</button>
+            </div>
+            <p class="notice" id="settings-import-notice"></p>
+            <div id="settings-import-plan" class="small"></div>
+            <p class="muted small" style="margin-top:10px">
+              Overrides only is the shape worth committing: a whole dump is mostly defaults.
+              Apply a file elsewhere with <code>cellar settings apply &lt;file&gt;</code>.
+            </p>
+            <pre id="export" class="small" style="max-height:240px;overflow:auto"></pre>
           </div>
         </div>
       </div>
-      <div class="panel">
-        <h2>Allowed accounts</h2>
-        <div class="body scroll"><div class="table-tools"><label class="sr-only" for="access-search">Search the allowlist</label><input type="search" id="access-search" placeholder="search Steam ID…"></div><table><thead><tr><th>Steam ID</th><th></th></tr></thead><tbody id="access-list"></tbody></table></div>
+
+      <div id="sub-config-build" role="tabpanel" aria-labelledby="subfor-config-build" tabindex="-1" hidden>
+        <div class="grid-2">
+          <div class="panel">
+            <h2>Installed</h2>
+            <div class="body scroll">
+              <table>
+                <tbody id="versions"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel">
+            <h2>Build and publish</h2>
+            <div class="body">
+              <p id="update-state" class="muted">Checking…</p>
+              <ul id="update-what" class="small"></ul>
+              <div class="row">
+                <button class="action" id="release-build">Build checkout</button>
+                <button class="action" id="release-publish">Publish package</button>
+              </div>
+              <p class="notice" id="release-notice"></p>
+              <p class="muted small">
+                The updater never restarts a populated server. Policy, the maintenance
+                window and the only-when-empty gate all live in <code>cellar.toml</code>.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Changelog</h2>
+          <div class="body" id="changelog"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Players: who is on now, who has ever been, and who is allowed.
+         Three tabs before this, which meant an operator deciding whether to
+         kick somebody could not see that they had forty hours here. -->
+    <section id="tab-players" role="tabpanel" aria-labelledby="tabfor-players" tabindex="-1" hidden>
+      <nav class="subtabs" role="tablist" aria-label="player sections">
+        <button class="subtab" role="tab" id="subfor-players-connected" data-of="players" data-sub="connected" aria-controls="sub-players-connected" aria-selected="true" tabindex="0">Connected</button>
+        <button class="subtab" role="tab" id="subfor-players-history" data-of="players" data-sub="history" aria-controls="sub-players-history" aria-selected="false" tabindex="-1">History</button>
+        <button class="subtab" role="tab" id="subfor-players-access" data-of="players" data-sub="access" aria-controls="sub-players-access" aria-selected="false" tabindex="-1">Access</button>
+      </nav>
+
+      <div id="sub-players-connected" role="tabpanel" aria-labelledby="subfor-players-connected" tabindex="-1">
+        <div class="panel">
+          <h2>Connected now</h2>
+          <div class="body scroll">
+            <div class="table-tools"><label class="sr-only" for="roster-search">Search the roster</label><input type="search" id="roster-search" placeholder="search roster…"><label class="sr-only" for="roster-sort">Sort the roster</label><select id="roster-sort"><option value="0">sort name</option><option value="1">sort Steam ID</option><option value="3">sort playtime</option></select></div>
+            <table>
+              <thead><tr><th>Name</th><th>Steam ID</th><th>Connected</th><th>Playtime</th><th>Visits</th><th></th></tr></thead>
+              <tbody id="roster"></tbody>
+            </table>
+            <p class="muted small" style="margin-top:12px">
+              Playtime and visits come from the recorded history, joined on the Steam ID. They
+              are dashes when the operations database is off, which is not the same as a first
+              visit.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div id="sub-players-history" role="tabpanel" aria-labelledby="subfor-players-history" tabindex="-1" hidden>
+        <div class="panel">
+          <h2>Everyone who has played here</h2>
+          <div class="body scroll">
+            <div class="table-tools"><label class="sr-only" for="player-search">Search players</label><input type="search" id="player-search" placeholder="search name or Steam ID…"><label class="sr-only" for="player-sort">Sort players</label><select id="player-sort"><option value="0">sort name</option><option value="2">sort playtime</option><option value="4">sort last seen</option></select></div>
+            <table>
+              <thead><tr><th>Name</th><th>Steam ID</th><th>Playtime</th><th>Visits</th><th>Last seen</th></tr></thead>
+              <tbody id="players"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div id="sub-players-access" role="tabpanel" aria-labelledby="subfor-players-access" tabindex="-1" hidden>
+        <div class="grid-2">
+          <div class="panel">
+            <h2>Invite gate</h2>
+            <div class="body">
+              <p id="access-gate" class="value lamp wait">Checking…</p>
+              <button class="action" id="access-toggle">Toggle gate</button>
+              <p class="muted small">Keep this on unless you intentionally want an open server.</p>
+            </div>
+          </div>
+          <div class="panel">
+            <h2>Add account</h2>
+            <div class="body">
+              <div class="row">
+                <label class="sr-only" for="access-steam-id">SteamID64 to allow</label><input id="access-steam-id" inputmode="numeric" placeholder="SteamID64">
+                <button class="action" id="access-add">Invite</button>
+              </div>
+              <p class="notice" id="access-notice"></p>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Allowed accounts</h2>
+          <div class="body scroll"><div class="table-tools"><label class="sr-only" for="access-search">Search the allowlist</label><input type="search" id="access-search" placeholder="search Steam ID…"></div><table><thead><tr><th>Steam ID</th><th></th></tr></thead><tbody id="access-list"></tbody></table></div>
+        </div>
       </div>
     </section>
 
@@ -394,7 +512,9 @@
       </div>
     </section>
 
-    <!-- Ordinance: what the server is set to. -->
+    <!-- Settings: Cellar's own, not the running server's. The convar tables
+         that used to live here are configuration of the game and moved to
+         Config; what is left is the process an operator signs in to. -->
     <section id="tab-settings" role="tabpanel" aria-labelledby="tabfor-settings" tabindex="-1" hidden>
       <div class="panel">
         <h2>Web UI access</h2>
@@ -402,50 +522,21 @@
           <p id="web-auth-reminder" class="notice">Checking authentication posture…</p>
         </div>
       </div>
-      <div class="panel">
-        <h2>Features</h2>
-        <div class="body scroll">
-          <div class="table-tools"><label class="sr-only" for="feature-search">Search features</label><input type="search" id="feature-search" placeholder="search features…"><label class="sr-only" for="feature-sort">Sort features</label><select id="feature-sort"><option value="0">sort name</option><option value="1">sort state</option></select></div>
-          <table>
-            <thead><tr><th>Feature</th><th>State</th><th>Class</th><th></th></tr></thead>
-            <tbody id="features"></tbody>
-          </table>
-        </div>
-      </div>
 
+      <!-- Cellar's own version. It sat in a table beside the gamemode's build
+           and the engine's, which are three different things that update for
+           three different reasons. -->
       <div class="panel">
-        <h2>Export and import</h2>
-        <div class="body">
-          <div class="row">
-            <button class="chip" onclick="exportSettings('toml', false)">whole config, TOML</button>
-            <button class="chip" onclick="exportSettings('yaml', false)">whole config, YAML</button>
-            <button class="chip" onclick="exportSettings('toml', true)">overrides only, TOML</button>
-            <button class="chip" onclick="exportSettings('yaml', true)">overrides only, YAML</button>
-            <button class="action" onclick="loadSettings()">Refresh</button>
-          </div>
-          <div class="row import-tools">
-            <label class="sr-only" for="settings-import-file">Settings file to import</label><input type="file" id="settings-import-file" accept=".toml,.yaml,.yml,text/plain">
-            <button class="chip" id="settings-import-preview" type="button">Preview import</button>
-            <button class="action" id="settings-import-apply" type="button">Apply import</button>
-          </div>
-          <p class="notice" id="settings-import-notice"></p>
-          <div id="settings-import-plan" class="small"></div>
-          <p class="muted small" style="margin-top:10px">
-            Overrides only is the shape worth committing: a whole dump is mostly defaults.
-            Apply a file elsewhere with <code>cellar settings apply &lt;file&gt;</code>.
+        <h2>Cellar updates</h2>
+        <div class="body scroll">
+          <table>
+            <tbody id="cellar-update"></tbody>
+          </table>
+          <p class="muted small" style="margin-top:12px">
+            Cellar's own release, checked against the published one. The game's build and the
+            engine's are on <a href="#/config/build">Config, Build</a>, because they update for
+            different reasons and on different schedules.
           </p>
-          <pre id="export" class="small" style="max-height:240px;overflow:auto"></pre>
-        </div>
-      </div>
-
-      <div class="panel">
-        <h2>Settings</h2>
-        <div class="body scroll">
-          <div class="table-tools"><label class="sr-only" for="setting-search">Search settings</label><input type="search" id="setting-search" placeholder="search settings…"><label class="sr-only" for="setting-sort">Sort settings</label><select id="setting-sort"><option value="0">sort name</option><option value="1">sort value</option></select></div>
-          <table>
-            <thead><tr><th>Setting</th><th>Value</th><th>Default</th><th>Bounds</th><th></th></tr></thead>
-            <tbody id="settings"></tbody>
-          </table>
         </div>
       </div>
 
@@ -501,20 +592,6 @@
       </div>
     </section>
 
-    <!-- Registry: every account ever seen. -->
-    <section id="tab-players" role="tabpanel" aria-labelledby="tabfor-players" tabindex="-1" hidden>
-      <div class="panel">
-        <h2>Everyone who has played here</h2>
-        <div class="body scroll">
-          <div class="table-tools"><label class="sr-only" for="player-search">Search players</label><input type="search" id="player-search" placeholder="search name or Steam ID…"><label class="sr-only" for="player-sort">Sort players</label><select id="player-sort"><option value="0">sort name</option><option value="2">sort playtime</option><option value="4">sort last seen</option></select></div>
-          <table>
-            <thead><tr><th>Name</th><th>Steam ID</th><th>Playtime</th><th>Visits</th><th>Last seen</th></tr></thead>
-            <tbody id="players"></tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
     <!-- Database: the read-only browser. -->
     <section id="tab-database" role="tabpanel" aria-labelledby="tabfor-database" tabindex="-1" hidden>
       <div class="panel">
@@ -552,41 +629,6 @@
             <tbody id="db-body"></tbody>
           </table>
         </div>
-      </div>
-    </section>
-
-    <!-- Releases: what is installed, what is available, what changed. -->
-    <section id="tab-releases" role="tabpanel" aria-labelledby="tabfor-releases" tabindex="-1" hidden>
-      <div class="grid-2">
-        <div class="panel">
-          <h2>Installed</h2>
-          <div class="body scroll">
-            <table>
-              <tbody id="versions"></tbody>
-            </table>
-          </div>
-        </div>
-        <div class="panel">
-          <h2>Updates</h2>
-          <div class="body">
-            <p id="update-state" class="muted">Checking…</p>
-            <ul id="update-what" class="small"></ul>
-            <div class="row">
-              <button class="action" id="release-build">Build checkout</button>
-              <button class="action" id="release-publish">Publish package</button>
-            </div>
-            <p class="notice" id="release-notice"></p>
-            <p class="muted small">
-              The updater never restarts a populated server. Policy, the maintenance
-              window and the only-when-empty gate all live in <code>cellar.toml</code>.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div class="panel">
-        <h2>Changelog</h2>
-        <div class="body" id="changelog"></div>
       </div>
     </section>
 

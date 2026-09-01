@@ -20,6 +20,6 @@ database. Cellar still provides the supervised process, live console, resource
 telemetry, logs, addresses, Prometheus metrics, and operator dashboard at
 `http://127.0.0.1:8091`.
 
-The dashboard's Configs tab can switch between this profile and the AppleJackRP
+The dashboard's Config tab, Profile, can switch between this profile and the AppleJackRP
 profiles. Switching restarts the supervised server, so do it while the test
 server is empty.

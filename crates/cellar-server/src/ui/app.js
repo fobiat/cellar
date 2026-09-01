@@ -324,16 +324,20 @@ async function loadInstances() {
  * failure mode that matters here: a console still streaming the old server
  * under a header naming the new one is how an operator types `quit` into the
  * wrong thing. */
-function selectInstance(id) {
+function selectInstance(id, tab, sub) {
   if (id === selectedInstance) return;
   selectedInstance = id;
   writeRoute();
   consoleRecords = [];
   cpuHistory = [];
   resourceHistory = [];
+  playerHistory = new Map();
   loadInstances();
   refreshStatus();
-  showTab(activeTab);
+  /* The tab is an argument because a link naming both, `#/i/pub/records`,
+   * arrives as one navigation: switching the instance and then staying on
+   * whatever tab was already open silently drops half of what was asked for. */
+  showTab(tab || activeTab, false, sub);
 }
 
 /* Append `?instance=` when one is selected. Every call that is about a
@@ -397,24 +401,57 @@ function notifyOperator(title, body) {
  *
  * A bookmark, a PWA shortcut or a link in a runbook outlives a restructure, and
  * dropping it on the default tab teaches nothing. Precinct dissolved into the
- * console: its commands came from a gamemode profile rather than from Cellar
- * once profiles existed, and their output has always landed in the console. */
-const MOVED_TABS = { precinct: "dispatch" };
+ * console. Roster, Registry and Access became one Players tab, and Configs,
+ * the convar tables and the build half of Releases became one Config tab.
+ *
+ * `players` is in here as well as in the nav, which looks like a contradiction
+ * and is not: a canonical route always carries its sub-tab, so a bare
+ * `#/players` can only be an old link, and the old one meant the registry. */
+const MOVED_TABS = {
+  precinct: "dispatch",
+  roster: "players/connected",
+  players: "players/history",
+  registry: "players/history",
+  access: "players/access",
+  configs: "config/profile",
+  releases: "config/build",
+};
+
+/* A tab with sub-tabs, and the one its own button selects. */
+const SUB_TABS = {
+  players: ["connected", "history", "access"],
+  config: ["profile", "convars", "build"],
+};
+
+/* The sub-tab last looked at, per tab, so coming back to Players lands where
+ * it was left rather than resetting to Connected every time. */
+const lastSub = {};
 
 function readRoute() {
   const legacy = new URLSearchParams(location.search).get("tab");
-  if (legacy && !location.hash) return { instance: null, tab: legacy };
+  const parts = legacy && !location.hash
+    ? [legacy]
+    : location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
 
-  const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
-  const moved = (tab) => MOVED_TABS[tab] || tab;
-  if (parts[0] === "i" && parts.length >= 2) {
-    return { instance: parts[1], tab: moved(parts[2] || "dispatch") };
+  const instance = parts[0] === "i" && parts.length >= 2 ? parts[1] : null;
+  const rest = instance ? parts.slice(2) : parts;
+  const tab = rest[0] || "dispatch";
+
+  /* Only a route with no sub-tab can have moved: `#/players/access` is a
+   * current route that happens to start with a name that also used to mean
+   * something else. */
+  if (rest.length < 2 && MOVED_TABS[tab]) {
+    const [movedTab, movedSub] = MOVED_TABS[tab].split("/");
+    return { instance, tab: movedTab, sub: movedSub || null };
   }
-  return { instance: null, tab: moved(parts[0] || "dispatch") };
+  return { instance, tab, sub: rest[1] || null };
 }
 
 function writeRoute() {
-  const wanted = selectedInstance ? `#/i/${selectedInstance}/${activeTab}` : `#/${activeTab}`;
+  const sub = SUB_TABS[activeTab] ? `/${activeSub(activeTab)}` : "";
+  const wanted = selectedInstance
+    ? `#/i/${selectedInstance}/${activeTab}${sub}`
+    : `#/${activeTab}${sub}`;
   if (location.hash !== wanted) {
     /* replaceState, not assignment: switching tabs is not navigation, and a
      * back button that walks an operator through every tab they glanced at is
@@ -423,16 +460,22 @@ function writeRoute() {
   }
 }
 
+function activeSub(tab) {
+  const subs = SUB_TABS[tab];
+  if (!subs) return null;
+  return subs.includes(lastSub[tab]) ? lastSub[tab] : subs[0];
+}
+
 function applyRoute() {
   const route = readRoute();
+  const known = TAB_LOADERS[route.tab] || document.getElementById(`tab-${route.tab}`);
+  const tab = known ? route.tab : "dispatch";
   if (route.instance && route.instance !== selectedInstance
       && knownInstances.some((entry) => entry.id === route.instance)) {
-    selectInstance(route.instance);
+    selectInstance(route.instance, tab, route.sub);
     return;
   }
-  showTab(TAB_LOADERS[route.tab] || document.getElementById(`tab-${route.tab}`)
-    ? route.tab
-    : "dispatch");
+  showTab(tab, false, route.sub);
 }
 
 /* ---- tabs --------------------------------------------------------------- */
@@ -440,8 +483,9 @@ function applyRoute() {
 /* `moveFocus` is false for the initial route and for a hash change, because
  * stealing focus on page load is its own accessibility problem. It is true
  * when the operator picked the tab, which is when they want to be there. */
-function showTab(name, moveFocus) {
+function showTab(name, moveFocus, sub) {
   activeTab = name;
+  if (sub && SUB_TABS[name]?.includes(sub)) lastSub[name] = sub;
   writeRoute();
   document.querySelectorAll("nav.tabs button").forEach((button) => {
     const selected = button.dataset.tab === name;
@@ -457,15 +501,41 @@ function showTab(name, moveFocus) {
 
   if (moveFocus) $(`#tab-${name}`)?.focus();
 
+  if (SUB_TABS[name]) showSub(name, activeSub(name));
   const pane = TAB_LOADERS[name];
   if (pane) load(pane.what, $(pane.into), pane.run);
 }
 
-/* Left, Right, Home and End inside the tab bar, per the WAI-ARIA tabs pattern.
- * Without it the bar is a row of eleven buttons a keyboard user tabs through
- * one at a time to reach anything. */
+/* A sub-tab is a tab: the same roles, the same roving tabindex, the same
+ * arrow keys. What it is not is a second thing to remember, so its loader
+ * lives in the same table under a `tab/sub` key. */
+function showSub(tab, sub, moveFocus) {
+  lastSub[tab] = sub;
+  if (activeTab === tab) writeRoute();
+
+  document.querySelectorAll(`nav.subtabs button[data-of="${tab}"]`).forEach((button) => {
+    const selected = button.dataset.sub === sub;
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
+  for (const name of SUB_TABS[tab] || []) {
+    const panel = document.getElementById(`sub-${tab}-${name}`);
+    if (panel) panel.hidden = name !== sub;
+  }
+
+  if (moveFocus) document.getElementById(`sub-${tab}-${sub}`)?.focus();
+
+  const pane = TAB_LOADERS[`${tab}/${sub}`];
+  if (pane) load(pane.what, $(pane.into), pane.run);
+}
+
+/* Left, Right, Home and End inside a tab bar, per the WAI-ARIA tabs pattern.
+ * Without it the bar is a row of buttons a keyboard user tabs through one at a
+ * time to reach anything. The same handler serves the sub-tab bars, which are
+ * tablists too and would otherwise be the exception nobody tested. */
 function tablistKey(event) {
-  const buttons = [...document.querySelectorAll("nav.tabs button")];
+  const bar = event.currentTarget.closest("nav");
+  const buttons = [...bar.querySelectorAll("button")];
   const here = buttons.indexOf(event.currentTarget);
   if (here < 0) return;
 
@@ -479,31 +549,38 @@ function tablistKey(event) {
 
   event.preventDefault();
   const wrapped = (next + buttons.length) % buttons.length;
-  showTab(buttons[wrapped].dataset.tab);
-  buttons[wrapped].focus();
+  const button = buttons[wrapped];
+  if (button.dataset.of) showSub(button.dataset.of, button.dataset.sub);
+  else showTab(button.dataset.tab);
+  button.focus();
 }
 
 /* What each tab loads, where a failure goes, and what to call the thing in the
  * message. One table rather than a try/catch inside each loader, so a loader
- * added later cannot quietly be the one without error handling. */
+ * added later cannot quietly be the one without error handling.
+ *
+ * A sub-tab is keyed `tab/sub` and is loaded when it is shown, so opening
+ * Players does not fetch the allowlist of a panel nobody is looking at. */
 const TAB_LOADERS = {
   records: { what: "documents", into: "#documents", run: () => loadDocuments() },
   database: { what: "the database", into: "#tables", run: () => loadDatabase() },
-  players: { what: "players", into: "#players", run: () => loadPlayers() },
-  access: { what: "access", into: "#access-list", run: () => loadAccess() },
-  releases: { what: "releases", into: "#versions", run: () => loadReleases() },
-  settings: { what: "settings", into: "#settings", run: () => loadSettings() },
+  settings: { what: "Cellar's version", into: "#cellar-update", run: () => loadCellarUpdate() },
   monitoring: { what: "status", into: null, run: () => refreshStatus() },
   dispatch: {
     what: "the gamemode palette",
     into: "#precinct-palette",
     run: () => loadPalette(),
   },
-  configs: {
+  "players/connected": { what: "the roster", into: "#roster", run: () => loadConnected() },
+  "players/history": { what: "players", into: "#players", run: () => loadPlayers() },
+  "players/access": { what: "access", into: "#access-list", run: () => loadAccess() },
+  "config/profile": {
     what: "profiles",
     into: "#config-list",
     run: async () => { await loadConfigs(); await loadGamemode(); },
   },
+  "config/convars": { what: "settings", into: "#settings", run: () => loadSettings() },
+  "config/build": { what: "the build", into: "#versions", run: () => loadReleases() },
   activity: { what: "activity", into: "#activity", run: () => loadActivity() },
   diagnostics: { what: "diagnostics", into: "#diagnostics-checks", run: () => loadDiagnostics() },
 };
@@ -921,7 +998,36 @@ async function exportSettings(format, overrides) {
   $("#export").textContent = await response.text();
 }
 
-/* ---- releases ----------------------------------------------------------- */
+/* ---- the build, and Cellar's own release --------------------------------- */
+
+/* Three versions used to share one table: Cellar's, the gamemode's and the
+ * engine's. They update for different reasons, on different schedules, and
+ * only one of them is Cellar's to update, so Cellar's own goes to Settings and
+ * the two the operator builds and ships stay with the build controls. */
+async function loadCellarUpdate() {
+  const rows = $("#cellar-update");
+  rows.replaceChildren();
+
+  const response = await fetch("/api/versions");
+  const data = await response.json();
+  const add = (label, value) => {
+    const row = el("tr");
+    row.append(el("td", "muted", label), el("td", null, value));
+    rows.append(row);
+  };
+
+  if (!response.ok) return add("check", text(data.error));
+
+  const program = data.program_update;
+  if (!program) return emptyRow(rows, 2, "Cellar is not checking for its own updates.");
+
+  add(
+    "installed",
+    `${text(program.current)}${program.update_available ? `, ${text(program.latest)} available` : ", current"}`,
+  );
+  if (program.checked_at) add("checked", text(program.checked_at));
+  if (program.error) add("check", `error: ${text(program.error)}`);
+}
 
 async function loadReleases() {
   const rows = $("#versions");
@@ -941,13 +1047,6 @@ async function loadReleases() {
     row.append(el("td", "muted", label), el("td", null, value));
     rows.append(row);
   };
-
-  const program = data.program_update;
-  if (program) {
-    add("Cellar", `${text(program.current)}${program.update_available ? `, ${text(program.latest)} available` : ", current"}`);
-    if (program.checked_at) add("Cellar checked", text(program.checked_at));
-    if (program.error) add("Cellar check", `error: ${text(program.error)}`);
-  }
 
   if (versions.gamemode) {
     add("gamemode", `${text(versions.gamemode.version)} (${text(versions.gamemode.commit)})`);
@@ -1295,31 +1394,58 @@ function renderTimings(bar) {
   target.append(table);
 }
 
+/* Every account this Cellar has ever recorded, by Steam ID, so a connected
+ * player's history is one lookup rather than another screen. Empty until the
+ * Connected panel has been opened once, which is also when it is wanted. */
+let playerHistory = new Map();
+
+/* The Connected panel: the roster is already arriving on the status poll, so
+ * what this loads is the history it gets joined against. */
+async function loadConnected() {
+  const response = await fetch("/api/players");
+  const players = await response.json();
+  playerHistory = new Map(
+    (Array.isArray(players) ? players : []).map((player) => [String(player.steam_id), player]),
+  );
+  if (lastStatus?.server) renderRoster(lastStatus.server.players);
+}
+
 function renderRoster(players) {
   const body = $("#roster");
   body.replaceChildren();
 
   if (!players.length) {
-    const row = el("tr");
-    const cell = el("td", "muted", "Nobody connected.");
-    cell.colSpan = 4;
-    row.append(cell);
-    body.append(row);
+    /* An empty roster is exactly when the join address is wanted, and it is
+     * already on the wire for the Addresses panel. */
+    const game = (lastStatus?.addresses || []).find((entry) => entry.label === "Game server");
+    const join = game && (game.remote_url || game.local_url);
+    emptyRow(body, 6, join ? `Nobody connected. Join at ${text(join)}.` : "Nobody connected.");
     return;
   }
 
   for (const player of players) {
     const row = el("tr");
     const kick = el("button", "chip", "kick");
-    kick.onclick = () => runCommand(`kick ${player.steam_id}`);
+    /* Kicking somebody is not undoable from their side: they are on a loading
+     * screen before the operator has finished reading the row. */
+    kick.onclick = async () => {
+      const going = await confirmAction({
+        title: `Kick ${player.name || player.steam_id}?`,
+        body: "They are disconnected immediately and can rejoin unless the invite gate is on.",
+      });
+      if (going) runCommand(`kick ${player.steam_id}`);
+    };
 
     const actions = el("td");
     actions.append(kick);
 
+    const seen = playerHistory.get(String(player.steam_id));
     row.append(
       el("td", null, text(player.name)),
       el("td", null, text(player.steam_id)),
       el("td", null, formatUptime(player.joined_at)),
+      el("td", null, seen ? formatDuration(seen.total_seconds) : "—"),
+      el("td", null, seen ? text(seen.sessions) : "—"),
       actions,
     );
     body.append(row);
@@ -1982,14 +2108,16 @@ async function start() {
       await loadInstances();
     }
   });
-  showTab(document.getElementById(`tab-${route.tab}`) ? route.tab : "dispatch");
+  showTab(document.getElementById(`tab-${route.tab}`) ? route.tab : "dispatch", false, route.sub);
   window.addEventListener("hashchange", applyRoute);
   // Null: a failure here must not replace the console, which is where the
   // operator is reading the very lines that explain the failure.
   load("the log", null, () => loadLogs());
   connect();
   refreshStatus();
-  load("releases", $("#versions"), () => loadReleases());
+  /* The build panel loads with its own tab. What has to run at startup is the
+   * drift check behind the Build lamp in the strip, which is a different
+   * question and a cheaper one. */
   refreshBuildHealth();
   setInterval(() => {
     refreshStatus();
@@ -2201,6 +2329,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     button.onclick = () => showTab(button.dataset.tab, true);
     button.addEventListener("keydown", tablistKey);
   });
+  document.querySelectorAll("nav.subtabs button").forEach((button) => {
+    button.onclick = () => showSub(button.dataset.of, button.dataset.sub, true);
+    button.addEventListener("keydown", tablistKey);
+  });
 
   restoreTheme();
   $("#login").onsubmit = signIn;
@@ -2341,12 +2473,29 @@ function paletteCandidates() {
   const entries = [];
 
   for (const button of document.querySelectorAll("nav.tabs button")) {
-    entries.push({
-      kind: "tab",
-      label: button.textContent.trim(),
-      hint: "tab",
-      run: () => showTab(button.dataset.tab),
-    });
+    const tab = button.dataset.tab;
+    const subs = SUB_TABS[tab];
+    if (!subs) {
+      entries.push({
+        kind: "tab",
+        label: button.textContent.trim(),
+        hint: "tab",
+        run: () => showTab(tab),
+      });
+      continue;
+    }
+    /* A grouped tab offers its sub-tabs rather than itself. "Access" was a
+     * tab an operator could type; it must not become a place they have to
+     * know is inside Players. */
+    for (const sub of subs) {
+      const subButton = document.getElementById(`subfor-${tab}-${sub}`);
+      entries.push({
+        kind: "tab",
+        label: `${button.textContent.trim()} · ${subButton ? subButton.textContent.trim() : sub}`,
+        hint: "tab",
+        run: () => showTab(tab, false, sub),
+      });
+    }
   }
 
   if (knownInstances.length > 1) {

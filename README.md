@@ -168,7 +168,7 @@ shortcut watches source files and restarts the game after changes. This keeps
 s&box generated state out of Git while avoiding a `sbox.game` publish for local
 testing. Use the platform profiles in [AppleJackRP configuration](docs/APPLEJACKRP.md)
 when switching between Windows, Linux under Wine, local source, and published
-package modes. The web UI Configs tab exposes the same Development and Published
+package modes. The web UI's Config tab, Profile, exposes the same Development and Published
 mode switch, and the header always names the active mode.
 
 Cellar is a good fit when you want a repeatable local server that survives

@@ -491,7 +491,7 @@ other's dumps and neither keeps seven.
 ## `[release]`
 
 Project-local commands for building and publishing the game, exposed on the
-Releases tab. Cellar never invents an s&box editor command: the editor owns the
+Config tab, Build. Cellar never invents an s&box editor command: the editor owns the
 Steam session, so the exact commands come from the operator.
 
 | Key | Default | Meaning |

@@ -69,6 +69,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A theme control offering Dark, Light and System, with the choice remembered.
 
+- **Playtime and visits beside every connected player.** The roster and the
+  recorded history were two separate tabs, so an operator deciding whether to
+  kick somebody could not see that they had forty hours here. They are one
+  screen now, joined on the Steam ID, and a dash means the operations database
+  is off rather than a first visit.
+
 ### Fixed
 
 - **The light theme, which never worked.** The `ink` token carried the dark
@@ -138,6 +144,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Twelve tabs became nine.** Roster, Registry and Access are one **Players**
+  tab with Connected, History and Access inside it; Configs, the convar tables
+  that were living in Settings and the build controls that were living in
+  Releases are one **Config** tab with Profile, Convars and Build. Settings
+  keeps what is Cellar's own: the web UI's authentication posture, Cellar's own
+  version, and shutting it down. Every old route still resolves, now to the
+  sub-tab its screen went to.
+
+- **SteamIDs are strings in every JSON response**, because JSON numbers are
+  doubles and every real SteamID64 is above 2^53. Deserialising still accepts a
+  number, so an older recorded payload reads back.
+
 - Report sizes in decimal KB/MB/GB rather than KiB/MiB/GiB, in the web UI and
   in the TUI and CLI both. The two error strings naming a fixed binary limit
   (the 512 KiB settings import and the 2 MiB MCP response cap) keep their
@@ -148,6 +166,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   build commit on the left. Dropped the "server control" tagline.
 
 ### Fixed
+
+- **Every SteamID the dashboard showed was rounded.** They crossed as JSON
+  numbers, and `JSON.parse` turns a number above 2^53 into the nearest double,
+  which for a SteamID64 is a multiple of 16. Three players whose ids differed
+  by one appeared as the same account, and the kick button sent that id back.
+  A Rust test had guarded the u64 through serde and stopped one hop short of
+  the reader that breaks.
+
+- **A link naming both an instance and a tab dropped the tab.** Following
+  `#/i/published/records` from another instance switched the server and stayed
+  on whatever tab was open, so a route written into a runbook arrived
+  half-applied.
+
+- Confirm before kicking a player. It fired on the click, and the person is on
+  a loading screen before the operator has finished reading the row.
 
 - Stop the two Linux AppleJackRP profiles shipping `mariadb.managed = true`.
   A managed instance cannot work there, so both now ship `managed = false`

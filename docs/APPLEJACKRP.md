@@ -58,7 +58,7 @@ The dashboard is at `http://127.0.0.1:8081`. Use `/readyz` for the game-server
 readiness probe and `/healthz` for the Cellar process liveness probe.
 The dashboard header keeps a compact record of the active mode, profile,
 installed Cellar version, and AppleJackRP commit; hover the muted build marker
-for the full commit. The Configs tab has explicit Use Development mode and Use
+for the full commit. The Config tab, Profile, has explicit Use Development mode and Use
 Published mode actions. Development mode is the local `.sbproj` path and the
 watcher-backed sync/restart loop. Published mode is the `sbox.game` package and
 does not use local source hot reload.
@@ -69,7 +69,7 @@ and leaves a visible crash-loop state for investigation.
 The checked-in published profiles run the published
 package with `thieves.rpdowntown3t`, so the s&box lobby can resolve the game and
 map thumbnails. The local project profile is for development and does not have
-published package branding. Switch profiles from Cellar's Configs tab, or copy
+published package branding. Switch profiles from Cellar's Config tab, Profile, or copy
 the public profile beside the active config before starting Cellar.
 
 To take a new gamemode build safely, follow the update runbook in

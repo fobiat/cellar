@@ -299,8 +299,41 @@ nav.tabs button[aria-selected="true"] {
   border-bottom-color: var(--aj-azure);
 }
 
+/* One level down from the section tabs, and deliberately quieter: an
+   underlined row would read as a second navigation of equal weight, which is
+   how a two-level structure stops being one. */
+nav.subtabs {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 14px;
+  overflow-x: auto;
+}
+
+nav.subtabs button {
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--aj-frost) 20%, transparent);
+  border-radius: 3px;
+  background: var(--aj-raised);
+  color: var(--aj-text-muted);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 7px 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+nav.subtabs button:hover { color: var(--aj-text); }
+
+nav.subtabs button[aria-selected="true"] {
+  color: var(--aj-azure);
+  border-color: color-mix(in srgb, var(--aj-azure) 55%, transparent);
+}
+
 main { padding: 18px 20px 48px; }
 section[hidden] { display: none; }
+[role="tabpanel"][hidden] { display: none; }
 
 /* ---- panels ------------------------------------------------------------- */
 
@@ -703,6 +736,7 @@ dialog.confirm input {
    the one device an operator uses while walking away from the desk. */
 @media (pointer: coarse) {
   nav.tabs button,
+  nav.subtabs button,
   nav.instances .instance,
   .action,
   .chip {

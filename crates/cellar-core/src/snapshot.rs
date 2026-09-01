@@ -28,6 +28,7 @@ pub const UNPARSED_SAMPLES: usize = 20;
 /// A player currently on the server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Player {
+    #[serde(with = "crate::event::steam_id_wire")]
     pub steam_id: SteamId,
     pub name: String,
     pub joined_at: DateTime<Utc>,

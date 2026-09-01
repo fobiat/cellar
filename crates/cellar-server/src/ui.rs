@@ -369,11 +369,16 @@ mod tests {
     fn the_tab_bar_follows_the_tabs_pattern() {
         assert!(HTML.contains(r#"<nav class="tabs" role="tablist""#));
 
-        let tabs: Vec<&str> = HTML
+        let bar = HTML
+            .split_once(r#"<nav class="tabs""#)
+            .and_then(|(_, rest)| rest.split_once("</nav>"))
+            .map(|(bar, _)| bar)
+            .expect("the tab bar is not a nav");
+        let tabs: Vec<&str> = bar
             .split('<')
             .filter(|tag| tag.starts_with("button role=\"tab\""))
             .collect();
-        assert!(tabs.len() >= 12, "found {} tabs", tabs.len());
+        assert!(tabs.len() >= 9, "found {} tabs", tabs.len());
 
         for tab in &tabs {
             let name = tab
@@ -502,6 +507,75 @@ mod tests {
             HTML.contains(r#"id="precinct-palette""#),
             "the command palette went with the tab instead of moving"
         );
+
+        // Every tab the grouping dissolved, and where it went. A name that is
+        // gone from the nav and absent from this table is a dead bookmark.
+        for (gone, went) in [
+            ("roster", "players/connected"),
+            ("access", "players/access"),
+            ("configs", "config/profile"),
+            ("releases", "config/build"),
+        ] {
+            assert!(
+                JS.contains(&format!(r#"{gone}: "{went}""#)),
+                "the '{gone}' tab moved without saying where"
+            );
+            assert!(
+                !HTML.contains(&format!(r#"data-tab="{gone}""#)),
+                "the '{gone}' tab is in the nav and in MOVED_TABS at once"
+            );
+        }
+
+        // `players` is both a live tab and a moved one, because a canonical
+        // route always carries its sub-tab: a bare `#/players` can only be an
+        // old link, and the old one meant the registry.
+        assert!(JS.contains(r#"players: "players/history""#));
+        assert!(HTML.contains(r#"data-tab="players""#));
+    }
+
+    /// A sub-tab is a tab, and gets the same pattern.
+    ///
+    /// Twelve tabs became nine by folding Roster, Registry and Access into
+    /// Players and Configs, the convar tables and the build controls into
+    /// Config. A second level that is not a real tablist is a second level a
+    /// keyboard cannot reach.
+    #[test]
+    fn every_sub_tab_is_a_real_tab() {
+        let subs: Vec<&str> = HTML
+            .split('<')
+            .filter(|tag| tag.starts_with(r#"button class="subtab""#))
+            .collect();
+        assert!(subs.len() >= 6, "found {} sub-tabs", subs.len());
+
+        for sub in &subs {
+            let field = |name: &str| {
+                sub.split(&format!("{name}=\""))
+                    .nth(1)
+                    .and_then(|rest| rest.split('"').next())
+                    .unwrap_or_else(|| panic!("a sub-tab with no {name}: <{sub}"))
+            };
+            let of = field("data-of");
+            let name = field("data-sub");
+
+            assert!(
+                sub.contains(r#"role="tab""#) && sub.contains("tabindex="),
+                "the '{of}/{name}' sub-tab is not part of a tablist"
+            );
+            assert!(
+                HTML.contains(&format!(
+                    r#"<div id="sub-{of}-{name}" role="tabpanel" aria-labelledby="subfor-{of}-{name}""#
+                )),
+                "the '{of}/{name}' panel is not labelled by its sub-tab"
+            );
+            assert!(
+                HTML.contains(&format!(r#"data-tab="{of}""#)),
+                "the '{of}' sub-tabs belong to a tab that is not in the nav"
+            );
+            assert!(
+                JS.contains(&format!(r#""{of}/{name}""#)),
+                "nothing loads the '{of}/{name}' panel"
+            );
+        }
     }
 
     /// The UI half of the AppleJackRP coupling, pinned.

@@ -8,6 +8,64 @@ use serde::{Deserialize, Serialize};
 /// A Steam account id as the engine prints it.
 pub type SteamId = u64;
 
+/// A SteamID on the wire is a string, because JSON numbers are doubles.
+///
+/// Every real SteamID64 is above 2^53, so `JSON.parse` rounds one to the
+/// nearest multiple of 16 and hands the browser a different account. It looked
+/// right for years: the id is 17 digits either way, and only the last one or
+/// two move. Measured against three connected players whose ids differ by one,
+/// the dashboard showed all three as the same person and the kick button sent
+/// that id back.
+///
+/// Serialising as a string is what Steam's own Web API does, and for this
+/// reason. Deserialising accepts either, so an older payload still reads.
+pub mod steam_id_wire {
+    use serde::{Deserialize, Deserializer, Serializer, de};
+
+    pub fn serialize<S: Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&value.to_string())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        match Wire::deserialize(deserializer)? {
+            Wire::Text(text) => text.parse().map_err(de::Error::custom),
+            Wire::Number(number) => Ok(number),
+        }
+    }
+
+    /// The optional half, for a record that may not name an account.
+    pub mod option {
+        use serde::{Deserialize, Deserializer, Serializer, de};
+
+        pub fn serialize<S: Serializer>(
+            value: &Option<u64>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error> {
+            match value {
+                Some(id) => serializer.serialize_str(&id.to_string()),
+                None => serializer.serialize_none(),
+            }
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<Option<u64>, D::Error> {
+            match Option::<super::Wire>::deserialize(deserializer)? {
+                Some(super::Wire::Text(text)) => text.parse().map(Some).map_err(de::Error::custom),
+                Some(super::Wire::Number(number)) => Ok(Some(number)),
+                None => Ok(None),
+            }
+        }
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Wire {
+        Text(String),
+        Number(u64),
+    }
+}
+
 /// Severity as the engine's own logger classifies it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -89,26 +147,22 @@ pub enum LeaveReason {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Event {
     /// The child process was spawned. Not yet serving.
-    ProcessStarted {
-        pid: u32,
-        command: String,
-    },
+    ProcessStarted { pid: u32, command: String },
     /// The engine reached the point where it accepts connections.
     ServerReady {
         hostname: Option<String>,
         map: Option<String>,
     },
     /// The child exited. `code` is `None` when a signal killed it.
-    ProcessExited {
-        code: Option<i32>,
-        graceful: bool,
-    },
+    ProcessExited { code: Option<i32>, graceful: bool },
 
     PlayerJoined {
+        #[serde(with = "steam_id_wire")]
         steam_id: SteamId,
         name: String,
     },
     PlayerLeft {
+        #[serde(with = "steam_id_wire")]
         steam_id: SteamId,
         name: String,
         reason: LeaveReason,
@@ -117,10 +171,7 @@ pub enum Event {
     /// A line the grammar recognised as engine or gamemode output.
     Log(LogLine),
     /// A line nothing matched. Counted, surfaced, never discarded.
-    Unparsed {
-        raw: String,
-        origin: Origin,
-    },
+    Unparsed { raw: String, origin: Origin },
 
     /// The status bar the dedicated console draws, sampled.
     Status(StatusBar),
@@ -128,10 +179,7 @@ pub enum Event {
     Resources(ResourceSample),
 
     /// A console command Cellar dispatched, and what came back.
-    CommandDispatched {
-        command: String,
-        actor: String,
-    },
+    CommandDispatched { command: String, actor: String },
     CommandReplied {
         command: String,
         reply: Vec<String>,
@@ -139,10 +187,7 @@ pub enum Event {
     },
 
     /// The bridge's own health, so the UI can show it beside the server's.
-    BridgeHealth {
-        healthy: bool,
-        detail: String,
-    },
+    BridgeHealth { healthy: bool, detail: String },
 }
 
 /// An [`Event`] with the instance it came from.
@@ -377,17 +422,44 @@ mod instance_event_tests {
         }
     }
 
-    /// `flatten` forces serde's buffering path, and a SteamID is a u64 above
-    /// 2^53. A 17-digit id arriving as a float would be a different player.
+    /// A SteamID is a string on the wire, and the reason is the reader.
+    ///
+    /// This test used to assert the opposite, that the id stayed a JSON
+    /// number through `flatten`. It did, and that was the defect: serde keeps
+    /// a u64 exact, and then `JSON.parse` in the browser turns it into a
+    /// double and rounds it to the nearest multiple of 16. The test proved the
+    /// hop it checked and stopped one short of the consumer that breaks.
     #[test]
-    fn a_seventeen_digit_steam_id_survives_the_flatten() {
+    fn a_seventeen_digit_steam_id_reaches_a_double_precision_reader_intact() {
         let json = wrap(Event::PlayerJoined {
             steam_id: 76561198000000001,
             name: "Kyle".into(),
         });
 
-        assert_eq!(json["steam_id"], serde_json::json!(76561198000000001u64));
-        assert_eq!(json["steam_id"].to_string(), "76561198000000001");
+        assert_eq!(json["steam_id"], serde_json::json!("76561198000000001"));
+
+        // What the browser does with it, done here: every real SteamID64 is
+        // above 2^53, so a number would come back as ...000 rather than ...001.
+        let text = serde_json::to_string(&json).unwrap();
+        let reparsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(reparsed["steam_id"].as_str(), Some("76561198000000001"));
+        assert!(76561198000000001f64 as u64 != 76561198000000001);
+    }
+
+    /// The wire form reads back, including the number an older payload holds.
+    #[test]
+    fn a_steam_id_deserialises_from_a_string_or_a_number() {
+        for wire in [r#""76561198000000001""#, "76561198000000001"] {
+            let json = format!(r#"{{"kind":"player_joined","steam_id":{wire},"name":"Kyle"}}"#);
+            let event: Event = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                event,
+                Event::PlayerJoined {
+                    steam_id: 76561198000000001,
+                    name: "Kyle".into(),
+                }
+            );
+        }
     }
 
     #[test]
