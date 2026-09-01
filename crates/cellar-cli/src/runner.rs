@@ -67,12 +67,16 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         tokio::spawn(notifier.run(handle.subscribe()));
     }
 
+    // One merged stream, tagged with which server each event came from.
+    let merged = fan_in(&[(primary.id.clone(), handle.clone())]);
+
     if let Some(pool) = &pool {
-        tokio::spawn(record_events(
-            pool.clone(),
-            handle.subscribe(),
-            config.scope(),
-        ));
+        let scopes = config
+            .instances()
+            .into_iter()
+            .map(|instance| (instance.id, instance.scope))
+            .collect();
+        tokio::spawn(record_events(pool.clone(), merged.subscribe(), scopes));
     }
 
     if config.backup.enabled {
@@ -294,6 +298,70 @@ async fn bind(
     }))
 }
 
+/// Merge every instance's event stream into one, tagged by instance.
+///
+/// A task per instance rather than a select over N receivers, because the set
+/// is fixed at startup and a task is the simpler thing to reason about. Each
+/// one handles `Lagged` by continuing: returning would end that task and leave
+/// the instance silent on the merged stream while its own channel is perfectly
+/// healthy, which is the failure that looks like a dead server and is not one.
+fn fan_in(
+    instances: &[(cellar_core::config::InstanceId, Handle)],
+) -> tokio::sync::broadcast::Sender<cellar_core::event::InstanceEvent> {
+    let (merged, _) = tokio::sync::broadcast::channel(1024);
+
+    for (id, handle) in instances {
+        let (id, mut events, out) = (id.clone(), handle.subscribe(), merged.clone());
+        tokio::spawn(async move {
+            loop {
+                match events.recv().await {
+                    Ok(event) => {
+                        let _ = out.send(cellar_core::event::InstanceEvent {
+                            instance: id.clone(),
+                            event,
+                        });
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
+                        tracing::warn!(
+                            "instance '{id}' fan-in fell behind, {missed} event(s) lost"
+                        );
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                }
+            }
+        });
+    }
+
+    merged
+}
+
+/// Which session row is open for which instance.
+///
+/// One `Option<u64>` used to hold this, which was correct for one server and
+/// silently wrong for two: on a merged stream one instance's exit would
+/// `take()` the id and close the other instance's session row, leaving the
+/// first open forever and the second ended by an event about a different
+/// process.
+#[derive(Debug, Default)]
+struct SessionLedger {
+    open: std::collections::HashMap<cellar_core::config::InstanceId, u64>,
+}
+
+impl SessionLedger {
+    fn begin(&mut self, instance: cellar_core::config::InstanceId, session: u64) {
+        self.open.insert(instance, session);
+    }
+
+    fn get(&self, instance: &cellar_core::config::InstanceId) -> Option<u64> {
+        self.open.get(instance).copied()
+    }
+
+    /// Close this instance's session, and only this instance's.
+    fn end(&mut self, instance: &cellar_core::config::InstanceId) -> Option<u64> {
+        self.open.remove(instance)
+    }
+}
+
 /// Mirror the event stream into the operations tables.
 ///
 /// Every write here is best effort. An operations insert must never be the
@@ -301,13 +369,13 @@ async fn bind(
 /// stream carries on.
 async fn record_events(
     pool: sqlx::MySqlPool,
-    mut events: tokio::sync::broadcast::Receiver<Event>,
-    scope: String,
+    mut events: tokio::sync::broadcast::Receiver<cellar_core::event::InstanceEvent>,
+    scopes: std::collections::HashMap<cellar_core::config::InstanceId, String>,
 ) {
-    let mut session: Option<u64> = None;
+    let mut ledger = SessionLedger::default();
 
     loop {
-        let event = match events.recv().await {
+        let wrapped = match events.recv().await {
             Ok(event) => event,
             Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
                 tracing::warn!("the recorder fell behind, {missed} event(s) not stored");
@@ -315,19 +383,21 @@ async fn record_events(
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
         };
+        let instance = wrapped.instance;
+        let event = wrapped.event;
+        let session = ledger.get(&instance);
+        let Some(scope) = scopes.get(&instance) else {
+            tracing::warn!("an event arrived for unknown instance '{instance}'");
+            continue;
+        };
 
         let result = match &event {
             Event::ProcessStarted { command, .. } => {
-                match cellar_store::ops::begin_session(
-                    &pool,
-                    &scope,
-                    hostname().as_deref(),
-                    command,
-                )
-                .await
+                match cellar_store::ops::begin_session(&pool, scope, hostname().as_deref(), command)
+                    .await
                 {
                     Ok(id) => {
-                        session = Some(id);
+                        ledger.begin(instance.clone(), id);
                         Ok(())
                     }
                     Err(why) => Err(why),
@@ -337,7 +407,7 @@ async fn record_events(
                 Some(id) => cellar_store::ops::mark_ready(&pool, id).await,
                 None => Ok(()),
             },
-            Event::ProcessExited { code, graceful } => match session.take() {
+            Event::ProcessExited { code, graceful } => match ledger.end(&instance) {
                 Some(id) => cellar_store::ops::end_session(&pool, id, *code, *graceful).await,
                 None => Ok(()),
             },
@@ -517,5 +587,62 @@ async fn wait_for_shutdown(shutdown_requested: std::sync::Arc<std::sync::atomic:
 async fn wait_for_api_shutdown(requested: std::sync::Arc<std::sync::atomic::AtomicBool>) {
     while !requested.load(std::sync::atomic::Ordering::Acquire) {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use cellar_core::config::InstanceId;
+
+    use super::*;
+
+    fn id(name: &str) -> InstanceId {
+        InstanceId::new(name).unwrap()
+    }
+
+    /// The interleaving that a single `Option<u64>` got wrong.
+    ///
+    /// Two servers start, then the first one exits. With one slot, that exit
+    /// closed whichever session was stored last, which is the *other* server's,
+    /// leaving one row open forever and ending another with an exit code from a
+    /// different process. Nothing would have reported it: both writes succeed.
+    #[test]
+    fn one_instance_exiting_does_not_close_another_instance_session() {
+        let mut ledger = SessionLedger::default();
+
+        ledger.begin(id("dev"), 100);
+        ledger.begin(id("published"), 200);
+
+        assert_eq!(ledger.end(&id("dev")), Some(100));
+        assert_eq!(
+            ledger.get(&id("published")),
+            Some(200),
+            "published's session was closed by dev's exit"
+        );
+        assert_eq!(ledger.end(&id("published")), Some(200));
+    }
+
+    #[test]
+    fn a_restart_replaces_only_its_own_session() {
+        let mut ledger = SessionLedger::default();
+        ledger.begin(id("dev"), 100);
+        ledger.begin(id("published"), 200);
+
+        // dev crashes and comes back.
+        ledger.end(&id("dev"));
+        ledger.begin(id("dev"), 101);
+
+        assert_eq!(ledger.get(&id("dev")), Some(101));
+        assert_eq!(ledger.get(&id("published")), Some(200));
+    }
+
+    #[test]
+    fn an_exit_for_an_instance_that_never_started_closes_nothing() {
+        let mut ledger = SessionLedger::default();
+        ledger.begin(id("published"), 200);
+
+        assert_eq!(ledger.end(&id("dev")), None);
+        assert_eq!(ledger.get(&id("published")), Some(200));
     }
 }

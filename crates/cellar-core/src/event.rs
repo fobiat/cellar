@@ -132,6 +132,21 @@ pub enum Event {
     },
 }
 
+/// An [`Event`] with the instance it came from.
+///
+/// A wrapper rather than a field on `Event`, because `Event` is internally
+/// tagged and consumed by four independent things: the tracker, the TUI, the
+/// notifier, and the browser, which switches on `kind`. `flatten` over an
+/// internally-tagged enum produces exactly the JSON the dashboard already
+/// parses plus one `instance` key, so nothing downstream has to change to keep
+/// working and everything downstream gains the ability to filter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InstanceEvent {
+    pub instance: crate::config::InstanceId,
+    #[serde(flatten)]
+    pub event: Event,
+}
+
 /// The dedicated server console's status line, which is the only place the
 /// engine reports its own frame timings.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -201,5 +216,78 @@ impl Event {
             self,
             Self::Log(_) | Self::Status(_) | Self::Resources(_) | Self::Unparsed { .. }
         )
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod instance_event_tests {
+    use super::*;
+    use crate::config::InstanceId;
+
+    fn wrap(event: Event) -> serde_json::Value {
+        let wrapped = InstanceEvent {
+            instance: InstanceId::new("published").unwrap(),
+            event,
+        };
+        serde_json::to_value(wrapped).unwrap()
+    }
+
+    /// A wire-format assumption rather than an obvious truth. `flatten` over an
+    /// internally-tagged enum could have nested the variant instead, and the
+    /// browser switches on a top-level `kind`.
+    #[test]
+    fn kind_stays_top_level_for_every_variant_shape() {
+        let cases = [
+            Event::ProcessStarted {
+                pid: 1,
+                command: "a".into(),
+            },
+            Event::ServerReady {
+                hostname: None,
+                map: None,
+            },
+            Event::Unparsed {
+                raw: "a".into(),
+                origin: Origin::Cellar,
+            },
+            Event::Status(StatusBar::default()),
+        ];
+
+        for event in cases {
+            let json = wrap(event);
+            assert!(json.get("kind").is_some(), "{json}");
+            assert_eq!(json["instance"], "published");
+        }
+    }
+
+    /// `flatten` forces serde's buffering path, and a SteamID is a u64 above
+    /// 2^53. A 17-digit id arriving as a float would be a different player.
+    #[test]
+    fn a_seventeen_digit_steam_id_survives_the_flatten() {
+        let json = wrap(Event::PlayerJoined {
+            steam_id: 76561198000000001,
+            name: "Kyle".into(),
+        });
+
+        assert_eq!(json["steam_id"], serde_json::json!(76561198000000001u64));
+        assert_eq!(json["steam_id"].to_string(), "76561198000000001");
+    }
+
+    #[test]
+    fn it_round_trips_back_into_the_same_event() {
+        let event = Event::ProcessExited {
+            code: Some(137),
+            graceful: false,
+        };
+        let json = serde_json::to_string(&InstanceEvent {
+            instance: InstanceId::new("dev").unwrap(),
+            event: event.clone(),
+        })
+        .unwrap();
+
+        let back: InstanceEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.event, event);
+        assert_eq!(back.instance.as_str(), "dev");
     }
 }
