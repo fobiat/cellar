@@ -69,13 +69,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A theme control offering Dark, Light and System, with the choice remembered.
 
+- **Doctor checks for the two silences.** A game-owned schema is the default
+  and Cellar never creates tables in one, so a database without Cellar's
+  `srv_` tables records nothing: no activity, no player history, no console
+  audit, and a warning per line in a log nobody is reading. The dashboard shows
+  empty tables, which is what a quiet server looks like. `operations tables`
+  names the absence. `backup` reads the newest dump back, because a backup that
+  cannot be restored is not a backup, and checks that `mariadb-dump` and
+  `mariadb` exist at all when backups are enabled.
+
 - **A Backups screen, on Settings.** The schedule, where dumps land and how
   much room is left there, whether each dump read back, the backup job's own
   last verdict, and a restore button per dump behind a typed confirmation. The
   restore path was written in Phase 1 with no way to reach it from the
   dashboard, which is the wrong shape for the one operation that gets looked
-  for under pressure. An empty list says which of the three reasons it is:
-  no database configured, none scheduled, or none taken yet.
+  for under pressure. An empty list says whether none are scheduled or none
+  have been taken yet, which are different problems.
 
 - **Which server this is, above the console it belongs to.** A collapsible
   header carrying the mode, gamemode, map, players, uptime, restart policy,

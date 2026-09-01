@@ -439,3 +439,39 @@ pub async fn prune_events(pool: &MySqlPool, days: u32) -> Result<u64, StoreError
 
     Ok(result.rows_affected())
 }
+
+/// The tables Cellar writes to, and which of them are absent.
+///
+/// Every write in this module is best-effort at the call site, which is right:
+/// an operations insert must never stop a server starting. The cost is that a
+/// database with none of these tables looks exactly like a quiet one, from the
+/// dashboard and from the CLI both, while a warning per line scrolls past in
+/// the log. Naming the absence is the difference between "nobody has played
+/// here" and "nothing has ever been recorded".
+pub async fn missing_tables(pool: &MySqlPool) -> Result<Vec<String>, StoreError> {
+    const WRITTEN: [&str; 5] = [
+        "srv_session",
+        "srv_player",
+        "srv_player_session",
+        "srv_event",
+        "srv_command",
+    ];
+
+    let rows = sqlx::query(
+        "SELECT TABLE_NAME FROM information_schema.TABLES
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE 'srv\\_%'",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let present: Vec<String> = rows
+        .into_iter()
+        .map(|row| row.try_get::<String, _>("TABLE_NAME"))
+        .collect::<Result<_, _>>()?;
+
+    Ok(WRITTEN
+        .iter()
+        .filter(|table| !present.iter().any(|found| found == *table))
+        .map(|table| (*table).to_owned())
+        .collect())
+}

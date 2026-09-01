@@ -96,6 +96,7 @@ pub async fn run(config: &Config, owned_binds: &[String]) -> Report {
     }
 
     database(config, &mut report).await;
+    backups(config, &mut report);
     binds(config, owned_binds, &mut report).await;
     ports(&instances, &mut report);
     disks(config, &instances, &mut report);
@@ -135,6 +136,7 @@ async fn database(config: &Config, report: &mut Report) {
                     "database",
                     format!("reachable, {pending} migration(s) known"),
                 );
+                recording_tables(config, &pool, report).await;
             }
             Err(why) => report.check(None, false, "database", why.to_string()),
         },
@@ -144,6 +146,133 @@ async fn database(config: &Config, report: &mut Report) {
             "database",
             "CELLAR_DATABASE_URL is not set".to_owned(),
         ),
+    }
+}
+
+/// Whether anything Cellar writes down has somewhere to go.
+///
+/// A game-owned schema is the default, and Cellar never creates tables in one.
+/// If the gamemode's migrations do not include Cellar's, every join, event and
+/// console command is written, refused and logged as a warning, once per line,
+/// forever. Nothing else says so: the Activity screen and the player history
+/// are simply empty, which is indistinguishable from a quiet server. Measured
+/// on a scratch database that had every other check green.
+async fn recording_tables(config: &Config, pool: &sqlx::MySqlPool, report: &mut Report) {
+    let missing = cellar_store::ops::missing_tables(pool).await;
+    match missing {
+        Ok(missing) if missing.is_empty() => {
+            report.check(None, true, "operations tables", "all present".to_owned())
+        }
+        Ok(missing) => {
+            let owner = if config.database.schema_owner
+                == cellar_core::config::DatabaseSchemaOwner::Gamemode
+            {
+                ". The schema is game-owned, so Cellar will not create them: run \
+                 `cellar db migrate`, or add them to the gamemode's own migrations"
+            } else {
+                ". Run `cellar db migrate`, or set database.migrate_on_start"
+            };
+            report.check(
+                None,
+                false,
+                "operations tables",
+                format!(
+                    "{} is missing, so nothing is being recorded: no activity, no player history, \
+                     and no console audit{owner}",
+                    missing.join(", ")
+                ),
+            )
+        }
+        Err(why) => report.note(None, "operations tables", why.to_string()),
+    }
+}
+
+/// Whether a configured backup could actually be taken and put back.
+///
+/// Every part of this is a way for the answer to "we have backups" to be no
+/// while the config says yes: no database to dump, a client binary that is not
+/// installed, a directory that cannot be written, and a newest dump that does
+/// not read back.
+fn backups(config: &Config, report: &mut Report) {
+    if !config.backup.enabled {
+        return;
+    }
+
+    // No check for a missing database URL: `validate` refuses that config at
+    // parse time (config.rs, "backup.enabled needs database.enabled and a
+    // database URL"), so a check for it here could never fire.
+
+    for binary in ["mariadb-dump", "mariadb"] {
+        let found = config
+            .mariadb
+            .install_dir
+            .as_ref()
+            .map(|dir| dir.join("bin").join(binary))
+            .is_some_and(|path| path.exists())
+            || which(binary).is_some();
+        if !found {
+            report.check(
+                None,
+                false,
+                "backup client",
+                format!(
+                    "{binary} is not in mariadb.install_dir or on PATH, so a backup cannot be \
+                     taken or restored"
+                ),
+            );
+        }
+    }
+
+    let Some(directory) = config.backup.directory.clone().or_else(|| {
+        config
+            .mariadb
+            .data_dir
+            .as_ref()
+            .map(|path| path.join("backups"))
+    }) else {
+        report.check(
+            None,
+            false,
+            "backup.directory",
+            "backups are enabled and neither backup.directory nor mariadb.data_dir is set"
+                .to_owned(),
+        );
+        return;
+    };
+
+    match cellar_mariadb::backup::list(&directory) {
+        Err(why) => report.check(
+            None,
+            false,
+            "backup.directory",
+            format!("{} cannot be read: {why}", directory.display()),
+        ),
+        Ok(dumps) => match dumps.first() {
+            None => report.note(
+                None,
+                "backup",
+                format!("no dumps yet in {}", directory.display()),
+            ),
+            // The newest one, because that is the one a restore reaches for.
+            Some(newest) => match cellar_mariadb::backup::verify(&newest.path) {
+                Ok(bytes) => report.check(
+                    None,
+                    true,
+                    "backup",
+                    format!(
+                        "{} dump(s), newest {} at {} bytes, reads back",
+                        dumps.len(),
+                        newest
+                            .path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy(),
+                        bytes
+                    ),
+                ),
+                Err(why) => report.check(None, false, "backup", why.to_string()),
+            },
+        },
     }
 }
 
@@ -637,6 +766,60 @@ fn which(program: &str) -> Option<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A backup that cannot be restored is not a backup.
+    ///
+    /// The newest dump is the one a restore reaches for, so it is the one
+    /// worth reading back. Driven for real, the failure this catches is a
+    /// dump that stops partway: a plausible file, a plausible size, and no
+    /// end marker, which used to be refused when written and accepted when
+    /// restored.
+    #[tokio::test]
+    async fn the_newest_dump_is_read_back_and_a_truncated_one_fails() {
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        std::fs::write(
+            directory.path().join("cellar-2.sql"),
+            format!(
+                "-- MariaDB dump 10.19\n{}",
+                "INSERT INTO x VALUES (1);\n".repeat(40)
+            ),
+        )
+        .expect("the truncated dump is written");
+
+        let config: Config = toml::from_str(&format!(
+            r#"
+            [server]
+            executable = "/nonexistent/sbox-server.exe"
+            game = "facepunch.sandbox"
+
+            [web]
+            enabled = false
+            [bridge]
+            enabled = false
+            [database]
+            enabled = false
+            [backup]
+            enabled = true
+            directory = "{}"
+            "#,
+            directory.path().display()
+        ))
+        .expect("the fixture parses");
+
+        let report = run(&config, &[]).await;
+        let backup = report
+            .checks
+            .iter()
+            .find(|check| check.label == "backup")
+            .expect("backups are checked when they are enabled");
+
+        assert_eq!(backup.outcome, Outcome::Fail);
+        assert!(
+            backup.detail.contains("end-of-dump marker"),
+            "the refusal must say what is wrong with it: {}",
+            backup.detail
+        );
+    }
 
     #[test]
     fn a_report_counts_only_failures_as_problems() {

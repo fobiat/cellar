@@ -10,13 +10,16 @@ authors.workspace = true
 
 [dependencies]
 cellar-core = { workspace = true }
+cellar-mariadb = { workspace = true }
 cellar-runtime = { workspace = true }
 cellar-store = { workspace = true }
 cellar-update = { workspace = true }
 serde = { workspace = true }
 reqwest = { workspace = true }
+sqlx = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 

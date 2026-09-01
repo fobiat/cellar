@@ -64,6 +64,14 @@ present when `launcher = "wine"`, the log path is writable, the database is
 reachable when enabled, and the bind addresses are free. Run it first, every
 time; it turns a confusing startup failure into a sentence.
 
+Two of its checks are about silences rather than failures. **`operations
+tables`** answers whether Cellar's `srv_` tables exist in the configured
+database: a game-owned schema is the default and Cellar never creates tables in
+one, so without them nothing is recorded, and an empty Activity screen looks
+exactly like a quiet server. **`backup`** reads the newest dump back, because a
+dump with no end-of-dump marker is one `mariadb-dump` never finished writing and
+cannot be restored from.
+
 It also reads the `.sbproj` when the instance has one and reports the package
 ident, the player ceiling and how many packages the engine will resolve from
 sbox.game at boot. **`Metadata.MaxPlayers` is the only place the ceiling

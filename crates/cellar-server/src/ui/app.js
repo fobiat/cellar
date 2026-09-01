@@ -1138,12 +1138,12 @@ async function loadBackups() {
 
   const dumps = data.dumps || [];
   if (!dumps.length) {
-    /* Three different reasons for an empty list, and they need three
-     * different actions. The one that used to be invisible is a configured
-     * schedule with no database URL, which only ever appeared in a log line. */
+    /* "None scheduled" and "none taken yet" are different problems and an
+     * empty table is the same picture for both. The no-database case cannot
+     * reach here, because `validate` refuses that config at parse time, but
+     * it is answered anyway rather than falling through to the wrong one. */
     emptyRow(rows, 4, !data.database_configured
-      ? "No dumps: no database is configured, so there is nothing to dump. "
-        + "Set CELLAR_DATABASE_URL."
+      ? "No dumps: no database is configured, so there is nothing to dump."
       : settings.enabled
         ? "No dumps yet. The first one is due within the interval above, or press Back up now."
         : "No dumps, and none are scheduled: backup.enabled is off.");

@@ -341,11 +341,14 @@ name = "cellar-diagnostics"
 version = "0.1.13"
 dependencies = [
  "cellar-core",
+ "cellar-mariadb",
  "cellar-runtime",
  "cellar-store",
  "cellar-update",
  "reqwest",
  "serde",
+ "sqlx",
+ "tempfile",
  "tokio",
  "toml",
 ]
