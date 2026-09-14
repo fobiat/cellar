@@ -45,8 +45,12 @@ AppleJackRP page is an integration guide, not a Cellar dependency.
 - Exposes the same state to the CLI, TUI, web UI, probes, and WebSocket clients.
 - Discovers and runs gamemode commands through the profile prefix without
   hardcoding a named gamemode.
+- Offers an AppleJack-inspired responsive operator UI with touch-sized controls,
+  dark surfaces, live status chips, and narrow-screen layouts.
 - Connects to a database supplied by the gamemode. Cellar can inspect it, but
   it does not own game tables or silently run game migrations.
+- Can optionally snapshot the gamemode's bridge documents as verified JSON,
+  export a second copy elsewhere, and restore a selected snapshot safely.
 - Provides authenticated, audited operator actions and bounded read-only
   database queries.
 - Supports health checks, graceful shutdown, crash-loop detection, backups,
@@ -130,6 +134,11 @@ its source tree, its package publication, its schema, and its game-specific
 policy. Integration-specific material belongs under
 [docs/integrations/](docs/integrations/), so a new gamemode can use Cellar
 without inheriting another game's assumptions.
+
+Persistence snapshots are the boundary between those responsibilities. Cellar
+preserves bridge document keys and JSON bodies, while the gamemode remains the
+authority for their meaning. AppleJack-specific setup lives in its integration
+guide and is not required by Cellar.
 
 ## License
 

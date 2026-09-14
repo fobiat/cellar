@@ -51,6 +51,8 @@ pub struct Config {
     #[serde(default)]
     pub backup: BackupConfig,
     #[serde(default)]
+    pub persistence: PersistenceConfig,
+    #[serde(default)]
     pub release: ReleaseConfig,
 
     /// What gamemode every instance runs, unless one overrides it.
@@ -827,6 +829,32 @@ pub struct BackupConfig {
     pub before_update: bool,
 }
 
+/// Optional snapshots of the gamemode documents Cellar stores through the
+/// generic bridge. The format contains no gamemode schema, so any bridge
+/// client can export and restore its own documents without Cellar knowing what
+/// they mean.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PersistenceConfig {
+    pub enabled: bool,
+    pub directory: Option<PathBuf>,
+    pub copy_to: Option<PathBuf>,
+    pub retain: usize,
+    pub verify: bool,
+}
+
+impl Default for PersistenceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            directory: None,
+            copy_to: None,
+            retain: 7,
+            verify: true,
+        }
+    }
+}
+
 /// Optional project-local commands for building and publishing the game.
 ///
 /// Cellar never invents an s&box editor command. The editor owns the Steam
@@ -1142,6 +1170,13 @@ impl Config {
         if self.backup.enabled && self.backup.retain == 0 {
             return Err(ConfigError::Invalid(
                 "backup.retain must be at least 1 when backups are enabled".into(),
+            ));
+        }
+
+        if self.persistence.enabled && self.persistence.retain == 0 {
+            return Err(ConfigError::Invalid(
+                "persistence.retain must be at least 1 when persistence snapshots are enabled"
+                    .into(),
             ));
         }
 
@@ -1560,6 +1595,7 @@ mod tests {
             update: UpdateConfig::default(),
             mariadb: MariaDbConfig::default(),
             backup: BackupConfig::default(),
+            persistence: PersistenceConfig::default(),
             release: ReleaseConfig::default(),
         }
     }

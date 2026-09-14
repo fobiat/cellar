@@ -18,7 +18,7 @@ An open-source dedicated server runner and manager for s&box.
 | --- | --- |
 | **[Game database](GAME_DATABASE.md)** | Hosted database access, schema ownership, and the read-only operator browser. |
 | **[Facepunch Sandbox](FACEPUNCH-SANDBOX.md)** | A published `facepunch.sandbox` profile for testing a second gamemode. |
-| **[Operations](OPERATIONS.md)** | Running it for real: health probes, graceful shutdown, webhooks, updates, backups. |
+| **[Operations](OPERATIONS.md)** | Running it for real: health probes, graceful shutdown, webhooks, updates, backups, and persistence snapshots. |
 | **[Troubleshooting](TROUBLESHOOTING.md)** | Symptoms, causes and fixes, including the ones that look like something else. |
 | **[Architecture](ARCHITECTURE.md)** | How it is built and why, including the engine findings the design rests on. |
 | **[AppleJackRP integration](integrations/applejackrp.md)** | Optional profile and workflow notes for AppleJackRP. |
@@ -47,3 +47,8 @@ Anything marked **unproven** has not been run against a live s&box server. It is
 marked rather than omitted, because a claim you cannot check is worse than a gap
 you can see. [Troubleshooting](TROUBLESHOOTING.md#what-has-not-been-proven) lists
 them in one place.
+
+Cellar's optional persistence snapshots cover the JSON documents exposed by its
+generic bridge. They are portable game-data exports, not a second copy of the
+gamemode's schema. Configure them in [`CONFIGURATION.md`](CONFIGURATION.md#persistence)
+and use the Settings panel for verified backup and restore actions.

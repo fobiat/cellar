@@ -126,6 +126,16 @@ verify = true
 # rollback is most likely to be wanted and least likely to have been planned for.
 before_update = true
 
+# Optional, generic snapshots of the documents the gamemode stores through
+# Cellar's bridge. Cellar does not interpret the schema. Set this up when the
+# gamemode's persistence should have a portable export and restore path.
+[persistence]
+enabled = false
+# directory = "C:\\ProgramData\\Cellar\\persistence"
+retain = 7
+verify = true
+# copy_to = "Z:\\cellar-persistence"
+
 # Uncomment to have Cellar download, initialize and supervise its own MariaDB
 # instead of only connecting to one already running somewhere. `database.url`
 # (CELLAR_DATABASE_URL) is unaffected either way; run `cellar mariadb
