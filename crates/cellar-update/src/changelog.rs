@@ -1,10 +1,8 @@
 //! Reading `CHANGELOG.md`.
 //!
-//! AppleJackRP keeps a Keep a Changelog document and generates its in-game
-//! version stamp from the top heading, so the changelog is not decoration: it is
-//! the thing that decides what the build calls itself. Cellar parses the same
-//! file so an operator can see what a pending update actually contains before
-//! taking it.
+//! Cellar keeps a Keep a Changelog document and uses its top heading as the
+//! release identity, so an operator can see what a pending update contains
+//! before taking it.
 //!
 //! Strict about structure, forgiving about prose. A heading it does not
 //! recognise ends the current release rather than being folded into it, because
@@ -108,9 +106,9 @@ pub fn parse(markdown: &str) -> Vec<Release> {
             continue;
         }
 
-        // An indented, non-empty line continues the bullet above it. Applejack's
-        // entries routinely run to eight wrapped lines, and treating each as its
-        // own item would turn one change into eight.
+        // An indented, non-empty line continues the bullet above it. Release
+        // entries often wrap, and treating each line as an item would split one
+        // change into several notifications.
         if let Some(current) = item.as_mut()
             && line.starts_with(char::is_whitespace)
             && !trimmed.trim().is_empty()
@@ -227,8 +225,7 @@ All notable changes are documented here.
         assert!(!releases[1].is_unreleased());
     }
 
-    /// Applejack's entries wrap over many lines. Treating each wrapped line as a
-    /// separate item would turn one change into eight.
+    /// Wrapped release entries remain one item.
     #[test]
     fn a_wrapped_entry_stays_one_item() {
         let releases = parse(SAMPLE);
@@ -303,20 +300,28 @@ All notable changes are documented here.
         assert_eq!(releases[0].headlines(99).len(), 3);
     }
 
-    /// The real document, if it is on this machine. Not a fixture: the point is
-    /// to notice when the upstream format changes.
+    /// The checked-in generic release fixture protects parsing without relying
+    /// on a sibling checkout.
     #[test]
-    fn the_real_applejack_changelog_parses_if_present() {
-        let path = std::path::Path::new("/home/kyle/Projects/AppleJackRP-sandbox/CHANGELOG.md");
-        let Ok(markdown) = std::fs::read_to_string(path) else {
-            eprintln!("skipping: {} is not on this machine", path.display());
-            return;
-        };
+    fn a_checked_in_project_changelog_parses() {
+        let releases = parse(include_str!("../test-fixtures/changelog.md"));
+        assert!(!releases.is_empty(), "the fixture produced no releases");
+        assert!(releases[0].is_unreleased());
+        assert!(releases[0].item_count() > 0);
+    }
 
+    /// Run manually with `CELLAR_COMPAT_CHANGELOG=/path/to/CHANGELOG.md cargo
+    /// test -p cellar-update -- --ignored` when checking a real project.
+    #[test]
+    #[ignore = "requires an explicitly supplied compatibility changelog"]
+    fn an_explicit_compatibility_changelog_parses() {
+        let path = std::env::var_os("CELLAR_COMPAT_CHANGELOG")
+            .expect("set CELLAR_COMPAT_CHANGELOG to run this compatibility check");
+        let markdown = std::fs::read_to_string(&path).expect("read compatibility changelog");
         let releases = parse(&markdown);
         assert!(
             !releases.is_empty(),
-            "the real changelog produced no releases"
+            "compatibility changelog produced no releases"
         );
         assert!(releases[0].is_unreleased());
         assert!(releases[0].item_count() > 0);

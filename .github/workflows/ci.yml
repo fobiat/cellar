@@ -51,12 +51,21 @@ jobs:
 
       - name: docs
         run: ./scripts/check-docs.sh
+        shell: bash
+
+      - name: examples
+        run: ./scripts/check-examples.sh
+        shell: bash
+
+      - name: generated-file drift
+        run: ./scripts/check-generated.sh
+        shell: bash
 
       - name: build
         run: cargo build --workspace --all-targets
 
       - name: clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: test
         env:
@@ -77,30 +86,36 @@ jobs:
           fi
 
   windows:
-    name: windows build
-    # GitHub-hosted by default, overridable to a self-hosted runner: there was
-    # no Windows runner to route to before, so this job pinned to
-    # windows-latest and stayed permanently red on the same billing block the
-    # `gate` job's comment above describes. `CI_WINDOWS_RUNNER` is separate
-    # from `CI_RUNNER` because they need different label sets (this one is a
-    # Windows label, not `cellar-runners`).
+    name: windows clean-checkout gate
     runs-on: ${{ github.event_name == 'pull_request' && 'windows-latest' || vars.CI_WINDOWS_RUNNER || 'windows-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # The dedicated server is Windows-only, so this target is not optional.
-      #
-      # Build only, not test: cellar-windows runs as a Windows service
-      # (NETWORK SERVICE, Session 0), which has no interactive desktop, and
-      # ConPTY allocation hangs forever without one. cargo test hung here for
-      # 16 minutes until GitHub cancelled the job. The Linux gate job already
-      # exercises everything except ConPTY itself (it uses forkpty instead),
-      # so this job's job is the Windows-only compile check, which the repo
-      # had never actually had until this runner existed.
+      - name: fmt
+        run: cargo fmt --all --check
+
+      - name: docs
+        run: ./scripts/check-docs.sh
+        shell: bash
+
+      - name: examples
+        run: ./scripts/check-examples.sh
+        shell: bash
+
+      - name: generated-file drift
+        run: ./scripts/check-generated.sh
+        shell: bash
+
       - name: build
         run: cargo build --workspace --all-targets
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --workspace
 
   notify-discord:
     name: notify
