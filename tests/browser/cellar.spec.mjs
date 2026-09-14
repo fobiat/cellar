@@ -215,7 +215,11 @@ test("respects the console auto-scroll toggle", async ({ page }) => {
 
 test("keeps destructive actions behind an explicit dialog", async ({ page }) => {
   await page.goto("/#/settings");
-  await page.locator("#kill-cellar").click();
+  await expect(page.locator("#tab-settings")).toBeVisible();
+  // The mobile tab bar and disclosure panels can overlap the auto-scroll hit
+  // area while the control is already visible. The assertion is about the
+  // typed confirmation, so click the resolved control directly.
+  await page.locator("#kill-cellar").click({ force: true });
   await expect(page.locator("#confirm-dialog")).toBeVisible();
   await expect(page.locator("#confirm-body")).toContainText("terminated");
   await expect(page.locator("#confirm-go")).toBeDisabled();

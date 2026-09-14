@@ -137,7 +137,9 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: test
-        run: cargo test --workspace
+        # ConPTY is reliable for these supervisor fixtures when one test owns
+        # the console at a time. The product still supports multiple servers.
+        run: cargo test --workspace -- --test-threads=1
 
   browser:
     name: browser and accessibility tests
