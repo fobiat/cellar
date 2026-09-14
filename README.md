@@ -2,7 +2,6 @@
   <img src="crates/cellar-server/src/ui/assets/cellar-logo-horizontal.svg" alt="Cellar">
 </p>
 
-# Cellar
 
 Cellar supervises dedicated [s&box](https://sbox.game) servers. It provides a
 CLI, a terminal dashboard, a responsive web control panel, health probes,
