@@ -18,7 +18,11 @@ services:
       - ./cellar.toml:/etc/cellar/cellar.toml:ro
       - sbox-data:/home/container/sbox/data
       - sbox-logs:/home/container/sbox/logs
+      - cellar-persistence:/var/lib/cellar/persistence
+      - cellar-backups:/var/lib/cellar/backups
 
 volumes:
   sbox-data:
   sbox-logs:
+  cellar-persistence:
+  cellar-backups:

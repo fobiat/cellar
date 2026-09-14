@@ -13,7 +13,7 @@ bad=0
 
 check_links() {
     local file dir links link target anchor resolved slugs
-    for file in $(find . -name '*.md' -not -path './target/*' -not -path './.git/*'); do
+    for file in $(find . -name '*.md' -not -path './target/*' -not -path './.git/*' -not -path '*/node_modules/*'); do
         dir=$(dirname "$file")
         links=$(grep -oE '\]\([^)#]*\.md(#[A-Za-z0-9-]+)?\)' "$file" | sed 's/^](//; s/)$//')
 
@@ -54,7 +54,7 @@ check_links() {
 check_em_dashes() {
     local hits em_dash
     em_dash=$(printf '\xe2\x80\x94')
-    hits=$(grep -rn "$em_dash" --include='*.md' --include='*.rs' --include='*.sh' \
+    hits=$(grep -rn --exclude-dir=node_modules "$em_dash" --include='*.md' --include='*.rs' --include='*.sh' \
         --include='*.ps1' --include='*.toml' . 2>/dev/null \
         | grep -v '^./target/' || true)
 

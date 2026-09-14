@@ -1,4 +1,4 @@
-# Cellar local AppleJackRP development profile for Linux under Wine.
+# Cellar local AppleJack Framework development profile for Linux under Wine.
 # Sync the checkout to the runtime copy before starting.
 
 profile_file = "profiles/applejackrp.toml"
@@ -8,7 +8,7 @@ executable = '/home/container/sbox/sbox-server.exe'
 project = '/home/container/applejackrp-runtime/applejackrp.sbproj'
 launcher = "wine"
 working_dir = '/home/container/sbox'
-hostname = "AppleJackRP Dev"
+hostname = "AppleJack Framework Dev"
 data_dir = '/home/container/sbox/data/fobiat/applejackrp#local'
 log_file = '/home/container/sbox/logs/sbox-server.log'
 direct_connect = false

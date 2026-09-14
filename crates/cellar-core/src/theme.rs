@@ -1,6 +1,6 @@
 //! The Applejack palette, in one place.
 //!
-//! AppleJackRP generates its colours from `Branding/palette.py` into
+//! AppleJack Framework generates its colours from `Branding/palette.py` into
 //! `Branding/tokens/applejack-tokens.json`, and its `BRANDING.md` is explicit
 //! that a committed copy is a copy that goes stale. Cellar therefore states the
 //! tokens once, here, with the role each one carries, and the web UI and the

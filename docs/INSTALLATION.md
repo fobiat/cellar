@@ -39,6 +39,17 @@ will run `cellar doctor` and then replace itself with `cellar run`.
 .\install.ps1 -Run
 ```
 
+Add -Tray to install a Startup shortcut for the Cellar tray. It provides
+status, the web UI, the remote TUI, start, stop, restart, update checks, and
+exit controls:
+
+```powershell
+.\install.ps1 -Tray
+```
+
+When the web UI has a password, set CELLAR_SESSION in the environment used
+to start the tray. The tray does not save a password.
+
 Manual instead: download `cellar-x86_64-pc-windows.zip` from the
 [releases page](https://github.com/fobiat/cellar/releases), unzip it anywhere,
 and run `cellar.exe`. The zip carries `cellar.toml.example` with the Windows
@@ -96,6 +107,7 @@ Options:
 ```sh
 sh install.sh --version v0.1.1              # a specific release
 sh install.sh --from-file ./cellar.tar.gz   # a file you already downloaded
+sh install.sh --tray                         # install the Linux tray and autostart it
 sh install.sh --run                         # install, doctor, and start Cellar
 sudo sh install.sh --system --service       # /usr/local/bin plus a systemd unit
 ```
@@ -104,10 +116,25 @@ sudo sh install.sh --system --service       # /usr/local/bin plus a systemd unit
 sets `TimeoutStopSec=60`, because the engine installs no SIGTERM handler and
 systemd's default would kill it before its own shutdown finished.
 
-**x86_64 only.** No arm64 build is published, and the installer says so rather
-than downloading something that will not run. The dedicated server is a Windows
-x86_64 binary under Wine, so an arm64 host cannot run what Cellar supervises
-anyway. Build the CLI from source if you want it there.
+**x86_64 release archive.** No arm64 archive is published, and the installer
+says so rather than downloading something that will not run. Cellar itself can
+be built from source on another architecture.
+
+The Linux tray is optional and needs yad plus a desktop session. --tray
+installs cellar-tray and a per-user autostart entry. It passes
+CELLAR_SESSION through to authenticated controls without printing it.
+
+### Remote TUI
+
+Once Cellar is running, open a dashboard in another terminal without starting
+another supervisor:
+
+```sh
+CELLAR_SESSION='your-session-cookie' cellar tui --url http://127.0.0.1:8081
+```
+
+The local foreground form, cellar run --tui, remains available when the
+supervisor and dashboard should share one terminal.
 
 ### A bare host, including what Cellar supervises
 
@@ -127,7 +154,8 @@ failing the run.
 
 | Flag | What it adds |
 | --- | --- |
-| (default) | curl, tar, rsync, Wine, then Cellar itself |
+| (default) | curl, tar, rsync, then Cellar itself |
+| `--with-wine` | Wine for an explicit Windows-binary fallback |
 | `--with-steamcmd` | steamcmd, which is how `sbox-server.exe` reaches the host |
 | `--with-dotnet` | the Windows .NET runtime, inside the Wine prefix |
 | `--with-mariadb` | MariaDB, for `[database]` and the web UI's history |
@@ -177,7 +205,10 @@ shipped Docker recipe:
 ## Docker and Swarm
 
 A `Dockerfile` is at the repo root. It builds the Cellar layer, while the final
-server image supplies the s&box executable, Wine, and the gamemode package.
+server image supplies the s&box executable, its selected runtime, and the
+gamemode package. The checked-in deployment example uses native Linux
+execution. Choose `launcher = "wine"` only when the image supplies a Windows
+`.exe`, Wine, and the Windows .NET runtime.
 Ready-to-adapt Compose and Swarm settings are in
 [`deploy/docker-compose.yml`](../deploy/docker-compose.yml).
 
@@ -192,7 +223,7 @@ when needed, runs `cellar doctor`, and then starts `cellar run`:
 docker run -it \
   -e CELLAR_DATABASE_URL='mysql://cellar:secret@db/cellar' \
   -e CELLAR_WEB_PASSWORD_HASH='from-cellar-hash-password' \
-  -v /path/to/sbox:/home/container/sbox \
+  -v /path/to/sbox:/srv/sbox \
   -v /path/to/cellar.toml:/etc/cellar/cellar.toml \
   -p 8081:8081 \
   your-registry/your-sbox-server:latest
@@ -218,7 +249,9 @@ secrets or environment secrets.
 manifest. It includes the one-replica `Recreate` strategy, persistent volumes,
 HTTP probes, UDP game/query ports, and a 60 second termination grace period.
 Create `cellar-secrets` before applying it. The image must contain the Cellar
-entrypoint, the s&box dedicated server, Wine, and the selected gamemode.
+entrypoint, the s&box dedicated server, the runtime selected by
+`deploy/cellar.toml`, and the selected gamemode. The manifest has separate
+volumes for game data, logs, persistence snapshots, and database dumps.
 
 The pod spec needs these settings:
 

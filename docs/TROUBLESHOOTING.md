@@ -158,7 +158,7 @@ Also expected. There is no such convar and no such launch switch.
 `LaunchArguments.MaxPlayers` exists but nothing on the command line sets it; the
 real ceiling comes from `Metadata.MaxPlayers` in the `.sbproj`.
 
-AppleJackRP's old repository entrypoint used to pass `+maxplayers`, but the
+AppleJack Framework's old repository entrypoint used to pass `+maxplayers`, but the
 engine ignores it. Cellar does not pass the flag.
 
 ## Uptime in the status bar is an hour ahead
@@ -202,8 +202,8 @@ releases page or re-run the current installer script.
 No arm64 build is published, and the installer says so rather than downloading
 something that will not run.
 
-The dedicated server is a Windows x86_64 binary run under Wine, so an arm64 host
-cannot run what Cellar supervises. Build the CLI from source with
+The dedicated server is an x86_64 binary, so an arm64 host cannot run what
+Cellar supervises. Build the CLI from source with
 `cargo build --release` if you want it on an arm64 box for its own sake.
 
 ---
@@ -214,7 +214,7 @@ Stated rather than omitted. A claim you cannot check is worse than a gap you can
 see.
 
 - **Gamemode telemetry is not built.** Balances, jobs, positions and feature
-  state are carried by no log line. That needs a `Code/` file in AppleJackRP,
+ state are carried by no log line. That needs a `Code/` file in AppleJack Framework,
   which is expensive there, so it is deliberately last.
 
 - **Whether A2S reports players once players are connected.** The query port

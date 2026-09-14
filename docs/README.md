@@ -8,6 +8,7 @@ An open-source dedicated server runner and manager for s&box.
 | --- | --- |
 | **[Quickstart](QUICKSTART.md)** | A server running in about ten minutes, on Windows or Linux. Start here. |
 | **[Installation](INSTALLATION.md)** | Every install path: installers, Docker, Kubernetes, from source, upgrading, uninstalling. |
+| **[Remote access](REMOTE-ACCESS.md)** | Safe LAN, Tailscale, reverse-proxy, and mobile browser access. |
 | **[Configuration](CONFIGURATION.md)** | Every `cellar.toml` key, its default, and what it does. |
 | **[CLI reference](CLI.md)** | Every command and flag, with worked examples. |
 | **[MCP integration](MCP.md)** | Read-only MCP tools, authenticated command access, and stdio client usage. |
@@ -19,9 +20,10 @@ An open-source dedicated server runner and manager for s&box.
 | **[Game database](GAME_DATABASE.md)** | Hosted database access, schema ownership, and the read-only operator browser. |
 | **[Facepunch Sandbox](FACEPUNCH-SANDBOX.md)** | A published `facepunch.sandbox` profile for testing a second gamemode. |
 | **[Operations](OPERATIONS.md)** | Running it for real: health probes, graceful shutdown, webhooks, updates, backups, and persistence snapshots. |
+| **[Security](SECURITY.md)** | Threat model, privacy, credentials, and release controls. |
 | **[Troubleshooting](TROUBLESHOOTING.md)** | Symptoms, causes and fixes, including the ones that look like something else. |
 | **[Architecture](ARCHITECTURE.md)** | How it is built and why, including the engine findings the design rests on. |
-| **[AppleJackRP integration](integrations/applejackrp.md)** | Optional profile and workflow notes for AppleJackRP. |
+| **[AppleJack Framework integration](integrations/applejack-framework.md)** | Optional profile and workflow notes for AppleJack Framework. |
 
 ## The one thing to know before anything else
 

@@ -21,7 +21,7 @@ use serde::Deserialize;
 
 use cellar_core::config::WebAuthMode;
 
-use crate::session::{self, COOKIE};
+use crate::session;
 use crate::state::AppState;
 
 const HTML: &str = include_str!("ui/index.html");
@@ -196,47 +196,58 @@ async fn login(State(state): State<Arc<AppState>>, Json(login): Json<Login>) -> 
 
     let token = state.sessions.create("operator");
 
-    (
-        StatusCode::OK,
-        [(
-            header::SET_COOKIE,
-            if state.web_secure_cookies {
-                format!(
-                    "{COOKIE}={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=43200"
-                )
-            } else {
-                format!("{COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200")
-            },
-        )],
-        Json(serde_json::json!({ "ok": true })),
-    )
-        .into_response()
+    let cookie = format!(
+        "{}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200{}",
+        session::cookie_name(state.web_secure_cookies),
+        if state.web_secure_cookies {
+            "; Secure"
+        } else {
+            ""
+        },
+    );
+    let Ok(cookie) = cookie.parse::<header::HeaderValue>() else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let mut response = (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response();
+    response.headers_mut().insert(header::SET_COOKIE, cookie);
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
+    response
 }
 
 async fn logout(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> Response {
     if let Some(cookie) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
         for pair in cookie.split(';') {
             if let Some((key, value)) = pair.split_once('=')
-                && key.trim() == COOKIE
+                && (key.trim() == session::cookie_name(state.web_secure_cookies)
+                    || key.trim() == session::COOKIE)
             {
                 state.sessions.destroy(value.trim());
             }
         }
     }
 
-    (
-        StatusCode::OK,
-        [(
-            header::SET_COOKIE,
-            if state.web_secure_cookies {
-                format!("{COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0")
-            } else {
-                format!("{COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0")
-            },
-        )],
-        Json(serde_json::json!({ "ok": true })),
-    )
-        .into_response()
+    let cookie = format!(
+        "{}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{}",
+        session::cookie_name(state.web_secure_cookies),
+        if state.web_secure_cookies {
+            "; Secure"
+        } else {
+            ""
+        },
+    );
+    let Ok(cookie) = cookie.parse::<header::HeaderValue>() else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let mut response = (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response();
+    response.headers_mut().insert(header::SET_COOKIE, cookie);
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
+    response
 }
 
 #[cfg(test)]
@@ -284,6 +295,7 @@ mod tests {
             "test",
         );
         state.web_enabled = true;
+        state.web_auth = WebAuthMode::None;
         assert!(page_for_state(&state).contains("Web UI is local-only without a password"));
     }
 
@@ -605,7 +617,7 @@ mod tests {
         }
     }
 
-    /// The UI half of the AppleJackRP coupling, pinned.
+    /// The UI half of the AppleJack Framework coupling, pinned.
     ///
     /// The Precinct tab was thirteen `data-command="applejack_*"` buttons in
     /// markup, so every other gamemode's operator got a panel of commands their

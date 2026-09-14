@@ -14,8 +14,25 @@ use ratatui::widgets::{Block, Borders, Paragraph, Row as TableRow, Sparkline, Ta
 use crate::App;
 use crate::theme;
 
+const MIN_WIDTH: u16 = 60;
+const MIN_HEIGHT: u16 = 16;
+
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
+
+    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+        let message = format!(
+            "Cellar needs at least {MIN_WIDTH}x{MIN_HEIGHT}; current window is {}x{}.",
+            area.width, area.height
+        );
+        frame.render_widget(
+            Paragraph::new(message)
+                .block(panel("terminal too small"))
+                .wrap(ratatui::widgets::Wrap { trim: true }),
+            area,
+        );
+        return;
+    }
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -77,52 +94,59 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         ));
     }
 
-    match &app.snapshot {
-        Some(snapshot) => {
-            spans.push(Span::styled(
-                format!("● {} ", state_label(snapshot)),
-                Style::default().fg(theme::state_colour(snapshot.state)),
-            ));
-            spans.push(Span::styled(
-                format!("{} ", snapshot.hostname),
-                theme::body(),
-            ));
-            spans.push(Span::styled(
-                format!(
-                    "· {}/{} players · up {} ",
-                    snapshot.players.len(),
-                    if snapshot.max_players == 0 {
-                        "?".to_owned()
-                    } else {
-                        snapshot.max_players.to_string()
-                    },
-                    format_uptime(snapshot.uptime_seconds(chrono::Utc::now()))
-                ),
-                theme::dim(),
-            ));
-
-            if snapshot.bridge.enabled {
-                let (label, style) = if snapshot.bridge.healthy {
-                    ("bridge ok", Style::default().fg(theme::orchard()))
-                } else {
-                    ("bridge failing", Style::default().fg(theme::russet()))
-                };
-                spans.push(Span::styled(format!("· {label} "), style));
-            }
-
-            // A rising count means an engine update moved a log string and the
-            // grammar needs revisiting. Worth a permanent place on the screen.
-            if snapshot.unparsed_lines > 0 {
+    if !app.connected {
+        spans.push(Span::styled(
+            "● connection lost ",
+            Style::default().fg(theme::russet()),
+        ));
+    } else {
+        match &app.snapshot {
+            Some(snapshot) => {
                 spans.push(Span::styled(
-                    format!("· {} unparsed ", snapshot.unparsed_lines),
+                    format!("● {} ", state_label(snapshot)),
+                    Style::default().fg(theme::state_colour(snapshot.state)),
+                ));
+                spans.push(Span::styled(
+                    format!("{} ", snapshot.hostname),
+                    theme::body(),
+                ));
+                spans.push(Span::styled(
+                    format!(
+                        "· {}/{} players · up {} ",
+                        snapshot.players.len(),
+                        if snapshot.max_players == 0 {
+                            "?".to_owned()
+                        } else {
+                            snapshot.max_players.to_string()
+                        },
+                        format_uptime(snapshot.uptime_seconds(chrono::Utc::now()))
+                    ),
                     theme::dim(),
                 ));
+
+                if snapshot.bridge.enabled {
+                    let (label, style) = if snapshot.bridge.healthy {
+                        ("bridge ok", Style::default().fg(theme::orchard()))
+                    } else {
+                        ("bridge failing", Style::default().fg(theme::russet()))
+                    };
+                    spans.push(Span::styled(format!("· {label} "), style));
+                }
+
+                // A rising count means an engine update moved a log string and the
+                // grammar needs revisiting. Worth a permanent place on the screen.
+                if snapshot.unparsed_lines > 0 {
+                    spans.push(Span::styled(
+                        format!("· {} unparsed ", snapshot.unparsed_lines),
+                        theme::dim(),
+                    ));
+                }
             }
+            None => spans.push(Span::styled(
+                "● connecting ",
+                Style::default().fg(theme::frost()),
+            )),
         }
-        None => spans.push(Span::styled(
-            "● connecting ",
-            Style::default().fg(theme::frost()),
-        )),
     }
 
     frame.render_widget(
@@ -319,13 +343,13 @@ mod tests {
     #[test]
     fn the_masthead_names_the_gamemode_and_the_server_it_is_about() {
         let mut app = App::new();
-        app.gamemode = Some("AppleJackRP".to_owned());
+        app.gamemode = Some("AppleJack Framework".to_owned());
         // Set only when there is more than one server it could have followed.
         // A `quit` typed at the prompt goes to this one.
         app.instance = Some("published".to_owned());
 
         let screen = render(&app, 100, 30);
-        assert!(screen.contains("APPLEJACKRP"), "{screen}");
+        assert!(screen.contains("APPLEJACK FRAMEWORK"), "{screen}");
         assert!(screen.contains("[published]"), "{screen}");
     }
 
@@ -364,11 +388,37 @@ mod tests {
 
     #[test]
     fn a_narrow_terminal_does_not_panic() {
-        // The failure this guards: a layout that underflows on a small window
-        // and takes the whole dashboard down with it.
+        // The small-window screen must render without asking ratatui to split
+        // a layout into negative space.
         for (width, height) in [(20u16, 10u16), (40, 12), (200, 60), (30, 20)] {
             render(&App::new(), width, height);
         }
+    }
+
+    #[test]
+    fn a_small_terminal_explains_what_to_resize() {
+        let screen = render(&App::new(), 40, 12);
+        assert!(screen.contains("terminal too small"), "{screen}");
+        assert!(screen.contains("40x12"), "{screen}");
+    }
+
+    #[test]
+    fn a_lost_connection_is_visible_instead_of_silent() {
+        let mut app = App::new();
+        app.connected = false;
+        let screen = render(&app, 100, 30);
+        assert!(screen.contains("connection lost"), "{screen}");
+    }
+
+    #[test]
+    fn unicode_and_ascii_log_lines_are_clipped_safely() {
+        let mut app = App::new();
+        app.apply(&cellar_core::Event::Unparsed {
+            raw: "☃ café [ascii]".into(),
+            origin: cellar_core::Origin::Console,
+        });
+        let screen = render(&app, 60, 16);
+        assert!(screen.contains("☃ café"), "{screen}");
     }
 
     #[test]

@@ -10,13 +10,15 @@
 #   CELLAR_WEBHOOK_URL          generic JSON notifications
 
 [server]
-# Linux, in a container or on a host:
+# Linux, in a container or on a host. Native is the default.
 executable = "/home/container/sbox/sbox-server"
 project = "/home/container/projects/my-game/my-game.sbproj"
 # For a published package, use `game` instead of `project`:
 # game = "your-org.your-game"
 # map = "thieves.rpdowntown3t"
-launcher = "wine"
+launcher = "native"
+# For a Windows-only server binary, opt into the compatibility fallback:
+# launcher = "wine"
 
 # Windows, natively:
 # executable = 'C:\sbox\sbox-server.exe'
@@ -179,9 +181,9 @@ rate_limit_per_minute = 600
 [web]
 enabled = true
 bind = "127.0.0.1:8081"
-# auto uses the password when configured, password always requires it, and
-# none is accepted only on loopback. Create a hash with `cellar hash-password`.
-auth = "auto"
+# Password authentication is the safe default. Create a hash with
+# `cellar hash-password` and export CELLAR_WEB_PASSWORD_HASH before starting.
+auth = "password"
 # A remote UI must sit behind a TLS reverse proxy. These explicit acknowledgements
 # allow its internal HTTP hop and keep the browser session cookie Secure.
 allow_insecure_http = false

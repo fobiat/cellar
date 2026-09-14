@@ -40,7 +40,7 @@
   <header class="masthead">
     <span class="mark">★</span>
     <span class="wordmark">C E L L A R</span>
-    <span class="header-meta" id="header-build" title="Installed Cellar and AppleJackRP build">build loading</span>
+    <span class="header-meta" id="header-build" title="Installed Cellar and gamemode build">build loading</span>
     <span class="spacer"></span>
     <span class="header-meta" id="header-profile" title="Active document and database scope">profile loading</span>
     <span class="header-meta" id="header-restart" title="Supervisor crash policy">restart policy loading</span>
@@ -150,7 +150,7 @@
           </div>
           <p class="muted small" id="console-state">Live output. Filters are saved on this browser.</p>
           <p class="muted small" id="console-integrity" title="Whether this console has skipped anything">No gaps.</p>
-          <div class="console" id="console" aria-live="off" role="log"></div>
+          <div class="console" id="console" aria-live="off" role="log" tabindex="0"></div>
           <div class="prompt">
             <span class="caret">&gt;</span>
             <label class="sr-only" for="command">Console command</label><input type="text" id="command" placeholder="type a command, for example status"
@@ -242,7 +242,7 @@
         <div class="panel">
           <h2>Config manager</h2>
           <div class="body">
-            <p class="muted small">Development mode runs the local AppleJackRP project, syncs the latest checkout, and uses the watcher when one is running. Published mode runs the configured <code>sbox.game</code> package. Switching mode restarts the supervised server.</p>
+            <p class="muted small">Development mode runs the local gamemode project, syncs the latest checkout, and uses the watcher when one is running. Published mode runs the configured <code>sbox.game</code> package. Switching mode restarts the supervised server.</p>
             <div class="row" id="config-mode-actions"></div>
             <div class="row" id="config-list"><p class="muted small">Loading profiles…</p></div>
             <p class="notice" id="config-notice"></p>
@@ -250,7 +250,7 @@
         </div>
 
         <!-- What this gamemode told Cellar about itself. Every one of these was
-             hardcoded to AppleJackRP before the profile existed. -->
+             hardcoded to one gamemode before the profile existed. -->
         <div class="panel">
           <h2 id="gamemode-title">Gamemode</h2>
           <div class="body scroll">

@@ -4,7 +4,7 @@
 #   ./scripts/bootstrap-linux.sh                  # prerequisites, then Cellar
 #   ./scripts/bootstrap-linux.sh --check          # report only, change nothing
 #   ./scripts/bootstrap-linux.sh --from-source    # build the CLI here
-#   ./scripts/bootstrap-linux.sh --with-steamcmd --with-dotnet --with-mariadb
+#   ./scripts/bootstrap-linux.sh --with-wine --with-steamcmd --with-dotnet --with-mariadb
 #   ./scripts/bootstrap-linux.sh --all            # every optional component
 #
 # `install.sh` installs Cellar and nothing else, which is right for a container
@@ -23,6 +23,7 @@ CHECK_ONLY=0
 WANT_STEAMCMD=0
 WANT_DOTNET=0
 WANT_MARIADB=0
+WANT_WINE=0
 DOTNET_VERSION="10.0"
 FAILED=0
 
@@ -31,11 +32,12 @@ while [ $# -gt 0 ]; do
         --version) VERSION="$2"; shift 2 ;;
         --from-source) FROM_SOURCE=1; shift ;;
         --check) CHECK_ONLY=1; shift ;;
+        --with-wine) WANT_WINE=1; shift ;;
         --with-steamcmd) WANT_STEAMCMD=1; shift ;;
-        --with-dotnet) WANT_DOTNET=1; shift ;;
+        --with-dotnet) WANT_DOTNET=1; WANT_WINE=1; shift ;;
         --with-mariadb) WANT_MARIADB=1; shift ;;
-        --dotnet-version) DOTNET_VERSION="$2"; shift 2 ;;
-        --all) WANT_STEAMCMD=1; WANT_DOTNET=1; WANT_MARIADB=1; shift ;;
+        --dotnet-version) DOTNET_VERSION="$2"; WANT_WINE=1; shift 2 ;;
+        --all) WANT_STEAMCMD=1; WANT_DOTNET=1; WANT_MARIADB=1; WANT_WINE=1; shift ;;
         -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
@@ -169,14 +171,14 @@ want tar tar || true
 # development loop on every platform.
 want rsync rsync || true
 
-# Wine is not optional on Linux: Facepunch ships no Linux dedicated server, so
-# `launcher = "wine"` is the only launcher a real deployment uses here.
-printf '\n'
-grey "  The server's runtime"
-want wine wine || true
+if [ "$WANT_WINE" -eq 1 ]; then
+    printf '\n'
+    grey "  Optional Windows compatibility runtime"
+    want wine wine || true
 
-if have wine; then
-    grey "        $(wine --version 2>/dev/null || echo 'version unknown')"
+    if have wine; then
+        grey "        $(wine --version 2>/dev/null || echo 'version unknown')"
+    fi
 fi
 
 # ------------------------------------------------------------------- steamcmd

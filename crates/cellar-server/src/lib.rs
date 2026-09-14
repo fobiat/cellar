@@ -22,6 +22,10 @@ pub mod ws;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::body::Body;
+use axum::http::{HeaderMap, Method, Request, StatusCode, header};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 
 pub use state::{AppState, Documents};
 
@@ -45,7 +49,84 @@ pub fn web_router(state: Arc<AppState>) -> Router {
         .merge(api::routes())
         .merge(ws::routes())
         .merge(health::routes())
+        .layer(middleware::from_fn(add_security_headers))
+        .layer(middleware::from_fn(enforce_browser_origin))
         .with_state(state)
+}
+
+async fn add_security_headers(request: Request<Body>, next: Next) -> Response {
+    let is_api = request.uri().path().starts_with("/api/");
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        header::HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::X_FRAME_OPTIONS,
+        header::HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        header::HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        header::HeaderName::from_static("permissions-policy"),
+        header::HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+    if is_api {
+        headers.insert(
+            header::CACHE_CONTROL,
+            header::HeaderValue::from_static("no-store"),
+        );
+    }
+    response
+}
+
+/// Browser state-changing requests must prove they came from this origin.
+/// Native clients do not send browser metadata, so the authenticated TUI and
+/// CLI remain usable without a second CSRF token protocol.
+async fn enforce_browser_origin(request: Request<Body>, next: Next) -> Response {
+    if !matches!(
+        request.method(),
+        &Method::GET | &Method::HEAD | &Method::OPTIONS
+    ) {
+        let headers = request.headers();
+        if let Some(site) = headers
+            .get("sec-fetch-site")
+            .and_then(|value| value.to_str().ok())
+            && site != "same-origin"
+        {
+            return (StatusCode::FORBIDDEN, "cross-origin request refused").into_response();
+        }
+        if let Some(origin) = headers
+            .get(header::ORIGIN)
+            .and_then(|value| value.to_str().ok())
+            && !origin_matches_host(origin, headers)
+        {
+            return (StatusCode::FORBIDDEN, "cross-origin request refused").into_response();
+        }
+    }
+    next.run(request).await
+}
+
+fn origin_matches_host(origin: &str, headers: &HeaderMap) -> bool {
+    let Some((scheme, remainder)) = origin.split_once("://") else {
+        return false;
+    };
+    if !matches!(scheme, "http" | "https") {
+        return false;
+    }
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    remainder
+        .split('/')
+        .next()
+        .is_some_and(|authority| authority.eq_ignore_ascii_case(host))
 }
 
 #[cfg(test)]
@@ -103,6 +184,100 @@ mod contract_tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn a_cross_origin_browser_mutation_is_refused_before_login() {
+        let state = Arc::new(AppState::new(
+            Documents::memory(),
+            Policy::Trusted,
+            "test-scope",
+        ));
+        let response = web_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/login")
+                    .header("Host", "cellar.example")
+                    .header("Origin", "https://evil.example")
+                    .header("Sec-Fetch-Site", "cross-site")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"password":"wrong"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn a_same_origin_browser_mutation_reaches_the_handler() {
+        let state = Arc::new(AppState::new(
+            Documents::memory(),
+            Policy::Trusted,
+            "test-scope",
+        ));
+        let response = web_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/login")
+                    .header("Host", "cellar.example")
+                    .header("Origin", "https://cellar.example")
+                    .header("Sec-Fetch-Site", "same-origin")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"password":"wrong"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn secure_login_issues_a_host_cookie_that_authenticates_the_api() {
+        let hash = crate::session::hash_password("a long operator password").unwrap();
+        let mut state = AppState::new(Documents::memory(), Policy::Trusted, "test-scope");
+        state.web_auth = cellar_core::config::WebAuthMode::Password;
+        state.web_secure_cookies = true;
+        state.web_password_hash = Some(cellar_core::Secret::new(hash));
+        let state = Arc::new(state);
+
+        let login = web_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/login")
+                    .header("Host", "cellar.example")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"password":"a long operator password"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(login.status(), StatusCode::OK);
+        let set_cookie = login
+            .headers()
+            .get(axum::http::header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(set_cookie.starts_with("__Host-cellar_session="));
+        assert!(set_cookie.contains("Secure"));
+        let cookie = set_cookie.split(';').next().unwrap();
+
+        let status = web_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/instances")
+                    .header("Host", "cellar.example")
+                    .header("Cookie", cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(status.status(), StatusCode::OK);
     }
 
     #[tokio::test]

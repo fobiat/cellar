@@ -1,4 +1,4 @@
-# Cellar local AppleJackRP development profile for Windows.
+# Cellar local AppleJack Framework development profile for Windows.
 # Sync the checkout to the runtime copy before starting.
 
 profile_file = "profiles/applejackrp.toml"
@@ -8,7 +8,7 @@ executable = 'C:\AppleJackServer\sbox\sbox-server.exe'
 project = 'C:\AppleJackServer\applejackrp-runtime\applejackrp.sbproj'
 launcher = "native"
 working_dir = 'C:\AppleJackServer\sbox'
-hostname = "AppleJackRP Dev"
+hostname = "AppleJack Framework Dev"
 data_dir = 'C:\AppleJackServer\sbox\data\fobiat\applejackrp#local'
 log_file = 'C:\AppleJackServer\sbox\logs\sbox-server.log'
 direct_connect = false

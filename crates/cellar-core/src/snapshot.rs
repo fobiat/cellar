@@ -300,7 +300,7 @@ mod tests {
     }
 
     fn tracker() -> Tracker {
-        Tracker::new("AppleJackRP Dev", 64)
+        Tracker::new("AppleJack Framework Dev", 64)
     }
 
     #[test]

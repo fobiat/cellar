@@ -2,12 +2,15 @@
 
 Cellar is the PID 1 supervisor in these examples. The image named by the
 Compose or Kubernetes template must provide `cellar-entrypoint`, the s&box
-dedicated server, Wine on Linux, and the server's gamemode packages. The root
-`Dockerfile` builds the Cellar layer and documents that image boundary.
+dedicated server, its selected runtime, and the server's gamemode packages.
+The root `Dockerfile` builds the Cellar layer and documents that image
+boundary. The checked-in deployment template selects native Linux execution.
+Wine is an explicit fallback for images that provide a Windows `.exe`.
 
-The examples keep game data and logs on persistent volumes, expose `/healthz`
-for liveness and `/readyz` for serving readiness, and give Cellar 60 seconds to
-send the engine's graceful `quit` command before a forced container stop.
+The examples keep game data, logs, Cellar persistence snapshots, and database
+dumps on persistent volumes. They expose `/healthz` for liveness and `/readyz`
+for serving readiness, and give Cellar 60 seconds to send the engine's graceful
+`quit` command before a forced container stop.
 
 For Docker Compose or Swarm:
 

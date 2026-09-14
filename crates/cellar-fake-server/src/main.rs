@@ -92,7 +92,7 @@ fn main() -> std::process::ExitCode {
         }
     }
 
-    // The line AppleJackRP's NetworkBootstrap logs, and Cellar's default
+    // The line AppleJack Framework's NetworkBootstrap logs, and Cellar's default
     // readiness pattern.
     emit(&mut log, "Bootstrap", "Server is ready");
 
@@ -371,7 +371,7 @@ fn parse_args() -> Options {
         ignore_quit: false,
         players: 0,
         flood: false,
-        hostname: "AppleJackRP Dev".to_owned(),
+        hostname: "AppleJack Framework Dev".to_owned(),
         max_players: 64,
     };
 

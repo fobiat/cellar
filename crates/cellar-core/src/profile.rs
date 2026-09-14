@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// Every field is optional. A profile that sets only `ready_pattern` is a
 /// legitimate profile, and it is the one that fixes the defect this type was
 /// written for: `facepunch.sandbox` failing readiness forever because it never
-/// logs AppleJackRP's line.
+/// logs AppleJack Framework's line.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GamemodeProfile {
@@ -149,7 +149,7 @@ where
 /// A file in the gamemode's source tree that must contain given strings.
 ///
 /// Resolved relative to the directory holding `server.project`, which is what
-/// the AppleJackRP check it replaces did. A profile cannot name an absolute
+/// the AppleJack Framework check it replaces did. A profile cannot name an absolute
 /// path, and cannot look outside that tree: a config file is not a licence to
 /// read arbitrary host files back through `cellar doctor`'s output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

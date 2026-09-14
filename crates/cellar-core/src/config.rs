@@ -303,7 +303,8 @@ pub struct ServerConfig {
     #[serde(default)]
     pub map: Option<String>,
 
-    /// Launcher. `Native` on Windows, `Wine` on Linux.
+    /// Launcher. Native is the default on Linux and Windows; Wine is an
+    /// explicit compatibility fallback for Windows binaries.
     #[serde(default)]
     pub launcher: Launcher,
 
@@ -462,7 +463,7 @@ impl ServerConfig {
     /// the data directory after the ident, so a profile carrying the other
     /// mode's leaf still starts: `hosting.json` goes where nothing reads it, and
     /// neither mode can see the other's characters, permissions or features.
-    /// Every AppleJackRP profile shipped with the `#local` leaf, published ones
+    /// Every AppleJack Framework profile shipped with the `#local` leaf, published ones
     /// included, until 2026-08-28.
     pub fn data_dir_mode_mismatch(&self) -> Option<String> {
         let leaf = self.data_dir.as_ref()?.file_name()?.to_str()?;
@@ -484,24 +485,14 @@ impl ServerConfig {
 }
 
 /// How the executable gets launched.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Launcher {
     /// Run the executable directly. Windows.
+    #[default]
     Native,
-    /// Run it under Wine. Linux, which is the only option there: Facepunch's
-    /// Linux dedicated server is roadmapped, not shipped.
+    /// Run a Windows server binary under Wine as an explicit fallback.
     Wine,
-}
-
-impl Default for Launcher {
-    fn default() -> Self {
-        if cfg!(windows) {
-            Self::Native
-        } else {
-            Self::Wine
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -693,11 +684,11 @@ pub struct WebConfig {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WebAuthMode {
-    /// Require a password when one is configured, otherwise allow loopback.
+    /// Require the configured Argon2 password hash.
     #[default]
-    Auto,
-    /// Always require the configured Argon2 password hash.
     Password,
+    /// Require a password when one is configured, otherwise allow loopback.
+    Auto,
     /// Disable the login gate. Valid only on a loopback bind.
     None,
 }
@@ -1616,6 +1607,12 @@ mod tests {
         minimal().validate().unwrap();
     }
 
+    #[test]
+    fn native_is_the_cross_platform_launcher_default() {
+        assert_eq!(Launcher::default(), Launcher::Native);
+        assert_eq!(ServerConfig::default().launcher, Launcher::Native);
+    }
+
     fn minimal_server() -> ServerConfig {
         minimal().server.unwrap_or_default()
     }
@@ -1706,7 +1703,7 @@ mod tests {
         assert!(minimal_server().data_dir_mode_mismatch().is_none());
     }
 
-    /// Every AppleJackRP profile shipped with the `#local` leaf, published ones
+    /// Every AppleJack Framework profile shipped with the `#local` leaf, published ones
     /// included, until 2026-08-28, and the published Facepunch Sandbox profiles
     /// slipped past the first version of this test because it only read
     /// `applejackrp*` files. Reading the files is the only way to catch any of
@@ -1752,7 +1749,7 @@ mod tests {
         }
     }
 
-    /// Six AppleJackRP configs point at one profile file, so this asserts the
+    /// Six AppleJack Framework configs point at one profile file, so this asserts the
     /// link resolves rather than silently reading as "no profile".
     #[test]
     fn a_profile_file_is_read_relative_to_the_config_that_names_it() {

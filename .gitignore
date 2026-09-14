@@ -15,6 +15,9 @@ roadmap.md
 # cellar.toml.example is the committed one.
 /cellar.toml
 /logs
+/tests/browser/node_modules
+/tests/browser/playwright-report
+/tests/browser/test-results
 
 # Local credentials and signing material. Keep examples explicit and tracked.
 .env

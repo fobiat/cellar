@@ -35,7 +35,7 @@ migrate_on_start = false
 The file contains one `mysql://` or `mariadb://` URL. `CELLAR_DATABASE_URL`
 takes precedence when both are present. Cellar reads the file at startup,
 never writes the password to TOML, and never copies the source database into
-the AppleJackRP repository. Set `[mariadb].managed = false` when the database
+the AppleJack Framework repository. Set `[mariadb].managed = false` when the database
 is hosted elsewhere. `cellar doctor` validates reachability before starting
 the server.
 

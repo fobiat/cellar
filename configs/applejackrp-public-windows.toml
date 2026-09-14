@@ -1,4 +1,4 @@
-# Cellar published AppleJackRP profile for Windows.
+# Cellar published AppleJack Framework profile for Windows.
 
 profile_file = "profiles/applejackrp.toml"
 
@@ -8,7 +8,7 @@ game = "fobiat.applejackrp"
 map = "thieves.rpdowntown3t"
 launcher = "native"
 working_dir = 'C:\AppleJackServer\sbox'
-hostname = "AppleJackRP Dev"
+hostname = "AppleJack Framework Dev"
 data_dir = 'C:\AppleJackServer\sbox\data\fobiat\applejackrp'
 log_file = 'C:\AppleJackServer\sbox\logs\sbox-server.log'
 direct_connect = false

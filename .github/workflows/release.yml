@@ -9,81 +9,30 @@ on:
         description: "Tag to release"
         required: true
 
-permissions:
-  contents: write
+permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  gamemode-release:
-    name: package AppleJackRP
-    runs-on: windows-latest
-    outputs:
-      available: ${{ steps.credentials.outputs.present }}
-    steps:
-      - name: Check AppleJackRP release access
-        id: credentials
-        env:
-          APPLEJACK_RELEASE_TOKEN: ${{ secrets.APPLEJACK_RELEASE_TOKEN }}
-        shell: bash
-        run: |
-          if [ -n "${APPLEJACK_RELEASE_TOKEN:-}" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "APPLEJACK_RELEASE_TOKEN is not configured; skipping the gamemode bundle."
-          fi
-
-      - uses: actions/checkout@v4
-        if: steps.credentials.outputs.present == 'true'
-
-      - uses: actions/checkout@v4
-        if: steps.credentials.outputs.present == 'true'
-        with:
-          repository: fobiat/AppleJackRP-sandbox
-          token: ${{ secrets.APPLEJACK_RELEASE_TOKEN }}
-          path: applejackrp
-          fetch-depth: 0
-
-      - uses: actions/setup-python@v5
-        if: steps.credentials.outputs.present == 'true'
-        with:
-          python-version: '3.x'
-
-      - name: Verify gamemode build metadata
-        if: steps.credentials.outputs.present == 'true'
-        run: python tools/stamp_build.py --check
-        working-directory: applejackrp
-
-      - name: Package gamemode release bundle
-        if: steps.credentials.outputs.present == 'true'
-        run: .\scripts\package-applejack-release.ps1 -AppleJackRoot .\applejackrp -OutputDirectory .\dist\gamemode -Version '${{ inputs.tag || github.ref_name }}'
-
-      # AppleJackRP is private. Keep its source bundle inside the private
-      # Actions artifact store and never copy it into Cellar's public release.
-      - uses: actions/upload-artifact@v4
-        if: steps.credentials.outputs.present == 'true'
-        with:
-          name: applejackrp-release
-          path: dist/gamemode/*
-
   release:
     name: build and publish
-    needs: [gamemode-release]
-    if: always()
     # Public releases use GitHub-hosted capacity so a missing private runner
     # cannot leave a pushed tag queued forever.
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
 
     steps:
       # `github.ref` is the tag on a tag push. The input is what makes a manual
       # re-run build the tag it was given rather than the default branch.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
       - name: build linux
         run: cargo build --release -p cellar-cli -p cellar-fake-server
@@ -100,6 +49,18 @@ jobs:
       - name: package
         run: ./scripts/package-release.sh
 
+      - name: generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: spdx-json
+          artifact-name: cellar-sbom
+          output-file: dist/release/cellar-sbom.spdx.json
+          upload-release-assets: false
+
+      - name: checksum the SBOM
+        run: sha256sum dist/release/cellar-sbom.spdx.json > dist/release/cellar-sbom.spdx.json.sha256
+
       # Both installers and self-update refuse anything whose checksum was not
       # published. Better to fail the release than to publish something nobody
       # can take.
@@ -113,8 +74,13 @@ jobs:
           done
           exit "$missing"
 
+      - name: attest release artifacts and SBOM
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-checksums: dist/release/*.sha256
+
       - name: release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           name: ${{ inputs.tag || github.ref_name }}

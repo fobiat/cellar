@@ -479,7 +479,8 @@ mod tests {
         // Both halves, as `DedicatedServerConsole` actually renders them. The
         // format itself is tested in `crate::statusbar`; this only proves the
         // grammar hands off to it.
-        let head = parse_status_fragment("AppleJackRP Dev (7/64) [4:12:33]     Network 0.42ms");
+        let head =
+            parse_status_fragment("AppleJack Framework Dev (7/64) [4:12:33]     Network 0.42ms");
         assert!(matches!(
             head,
             Some(statusbar::Fragment::Head { players: 7, .. })

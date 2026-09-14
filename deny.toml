@@ -1,0 +1,35 @@
+[advisories]
+version = 2
+ignore = [
+  # No patched release exists. SQLx brings RSA in for MySQL authentication;
+  # Cellar does not expose RSA operations to remote callers.
+  "RUSTSEC-2023-0071",
+  # ratatui and portable-pty currently depend on these unmaintained crates,
+  # with no compatible replacement available in their release lines.
+  "RUSTSEC-2024-0436",
+  "RUSTSEC-2017-0008",
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "OpenSSL",
+  "CDLA-Permissive-2.0",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

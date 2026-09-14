@@ -256,7 +256,7 @@ fn state_word(enabled: bool) -> &'static str {
 /// work, derived from its `profile.convar_prefix`.
 ///
 /// `<prefix>_features`, `<prefix>_settings`, `<prefix>_feature_set` and
-/// `<prefix>_setting_set`. This is AppleJackRP's naming convention, not an
+/// `<prefix>_setting_set`. This is AppleJack Framework's naming convention, not an
 /// engine one, and it is stated here rather than assumed: a gamemode that
 /// declares a prefix and names its commands differently gets a console error
 /// naming the command it does not have, which is a better failure than the
@@ -584,7 +584,7 @@ mod tests {
     fn snapshot() -> Snapshot {
         Snapshot {
             captured_at: Some("2026-08-25T10:00:00Z".to_owned()),
-            hostname: Some("AppleJackRP Dev".to_owned()),
+            hostname: Some("AppleJack Framework Dev".to_owned()),
             features: vec![
                 Feature {
                     id: "ui.menu.admin".into(),

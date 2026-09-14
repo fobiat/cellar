@@ -126,7 +126,7 @@ mod tests {
     fn the_player_ceiling_comes_off_the_project_and_not_off_a_switch() {
         let project = parse(
             r#"{
-              "Title": "AppleJackRP",
+              "Title": "AppleJack Framework",
               "Org": "fobiat",
               "Ident": "applejackrp",
               "Metadata": { "MaxPlayers": 32 }
@@ -139,7 +139,7 @@ mod tests {
             project.package_ident().as_deref(),
             Some("fobiat.applejackrp")
         );
-        assert_eq!(project.title.as_deref(), Some("AppleJackRP"));
+        assert_eq!(project.title.as_deref(), Some("AppleJack Framework"));
     }
 
     #[test]

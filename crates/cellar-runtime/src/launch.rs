@@ -50,13 +50,8 @@ pub fn command_for(config: &ServerConfig, bridge_needs_local_http: bool) -> Comm
 
     let (program, mut args) = match config.launcher {
         Launcher::Native => (executable, Vec::new()),
-        // Facepunch's Linux dedicated server ships on the public branch and
-        // does not link: `ErrorReports::Breadcrumb` is referenced by
-        // libengine2, librendersystemvulkan and libtier0, and defined by none
-        // of the 33 shipped libraries. Stated this way on purpose. Anyone who
-        // notices that depot 1892933 has a public manifest will otherwise
-        // conclude the Wine decision was a mistake and reverse it. Worth a
-        // re-test each release; it is one symbol away from working.
+        // Wine stays available for Windows-only server binaries. It is never
+        // selected implicitly because the native Linux depot is the default.
         Launcher::Wine => ("wine".to_owned(), vec![executable]),
     };
 
@@ -152,7 +147,7 @@ mod tests {
             wine_prefix: None,
             working_dir: None,
             log_file: None,
-            hostname: "AppleJackRP Dev".to_owned(),
+            hostname: "AppleJack Framework Dev".to_owned(),
             gslt: None,
             direct_connect: false,
             port: 27015,

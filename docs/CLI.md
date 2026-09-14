@@ -49,6 +49,19 @@ the bridge and the web UI, and stops it gracefully on `SIGTERM` or `Ctrl-C`.
 Runs until the server exits and the restart policy says to stop, or until it is
 asked to stop. See [`supervisor.restart`](CONFIGURATION.md#supervisor).
 
+## `cellar tui`
+
+Open the terminal dashboard for a Cellar process that is already running.
+
+```
+CELLAR_SESSION='your-session-cookie' cellar tui
+cellar tui --url http://127.0.0.1:8081
+```
+
+It uses the same authenticated web session as the browser and sends console
+commands through the audited `/api/exec` route. It never starts another game
+server. The tray launchers call this command for their `Open TUI` action.
+
 ---
 
 ## `cellar doctor`
@@ -60,7 +73,7 @@ cellar doctor
 ```
 
 Verifies the executable exists and is runnable, the project file parses, Wine is
-present when `launcher = "wine"`, the log path is writable, the database is
+present only when the explicit `launcher = "wine"` fallback is selected, the log path is writable, the database is
 reachable when enabled, and the bind addresses are free. Run it first, every
 time; it turns a confusing startup failure into a sentence.
 
@@ -134,7 +147,7 @@ cellar version [--json]
 
 Reports Cellar's own version, the gamemode's build stamp, the git remote's HEAD,
 and the installed Steam build id, side by side. The stale-stamp problem in
-AppleJackRP was found exactly this way: the stamp said one commit, the remote
+AppleJack Framework was found exactly this way: the stamp said one commit, the remote
 said another.
 
 ---

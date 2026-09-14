@@ -36,11 +36,11 @@ serialisation path, so a config dump or a crash log cannot leak one.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `executable` | *required* | Path to `sbox-server.exe`. |
+| `executable` | *required* | Path to the native `sbox-server` binary by default, or a Windows `.exe` when `launcher = "wine"` is selected. |
 | `project` | *required unless `game` is set* | Path to the local `.sbproj`. |
 | `game` | unset | Published package ident such as `your-org.your-game`. |
 | `map` | unset | Map ident appended to a published game ident, such as `thieves.rpdowntown3t`. |
-| `launcher` | `wine` | `wine` or `native`. `native` on Windows. |
+| `launcher` | `native` | `native` or explicit `wine` compatibility fallback. |
 | `wine_prefix` | inherited | The prefix this instance runs in, passed as `WINEPREFIX`. Concurrent instances on Linux need one each. |
 | `hostname` | `"S&box Server"` | Server name, and what the status bar shows. |
 | `working_dir` | inherited | Working directory for the child. It does **not** decide where the engine writes; see below. |
@@ -84,7 +84,7 @@ process. A config uses one or the other, never both.
 scope = "your-game-local"
 
 [instances.published.server]
-executable = "/srv/published/sbox-server.exe"
+executable = "/srv/published/sbox-server"
 game = "your-org.your-game"
 data_dir = "/srv/published/data/your-org/your-game"
 
@@ -92,7 +92,7 @@ data_dir = "/srv/published/data/your-org/your-game"
 enabled = false
 
 [instances.dev.server]
-executable = "/srv/dev/sbox-server.exe"
+executable = "/srv/dev/sbox-server"
 project = "/srv/dev/your-game.sbproj"
 data_dir = "/srv/dev/data/your-org/your-game#local"
 ```
@@ -142,7 +142,7 @@ Cellar itself, with no graceful stop anywhere. It is registered ahead of
 `/api/control/{action}`, needs the same operator session as the rest, and is
 reached from the dashboard's Kill everything or from `cellar kill`.
 
-**On Linux each also needs its own `server.wine_prefix`.** Every Wine process in
+**When Wine is selected, each Linux instance needs its own `server.wine_prefix`.** Every Wine process in
 a prefix shares one `wineserver` that jointly holds all their sockets, and
 `wineserver -k` is prefix-scoped, so with one prefix neither instance can be
 dealt with without reaching the other. A prefix needs the Windows .NET 10
@@ -287,7 +287,7 @@ The recommended setup is a hosted game database owned by the gamemode. See
 [Game database](GAME_DATABASE.md). The browser is read-only and should use a
 database account with a matching `SELECT` grant.
 
-For a published game that does not use AppleJackRP's database contract, see
+For a published game that does not use AppleJack Framework's database contract, see
 the [Facepunch Sandbox profile](FACEPUNCH-SANDBOX.md). It leaves the database
 and bridge disabled while retaining Cellar's process supervision and dashboard.
 
@@ -353,7 +353,7 @@ for the full walkthrough.
 
 ## `[bridge]`
 
-The half of AppleJackRP's storage contract that nothing implemented until now.
+The half of AppleJack Framework's storage contract that nothing implemented until now.
 See [The bridge](BRIDGE.md) for the protocol.
 
 | Key | Default | Meaning |
@@ -394,14 +394,13 @@ security claim is worse than an absent one.
 | --- | --- | --- |
 | `enabled` | `false` | Serve the dashboard and the control API. The shipped example turns this on. |
 | `bind` | `127.0.0.1:8081` | Listen address. |
-| `auth` | `auto` | `auto` uses a password when configured, `password` always requires one, and `none` is loopback-only. |
+| `auth` | `password` | Requires the configured Argon2 password hash. `none` is loopback-only, and `auto` is retained for explicit compatibility configurations. |
 | `allow_insecure_http` | `false` | Required for a non-loopback bind behind a TLS-terminating reverse proxy. |
 | `secure_cookies` | `false` | Required for a non-loopback bind so browser sessions are marked Secure. |
 | `password_hash` | from env | Argon2 hash from `cellar hash-password`. |
 
 `auth = "password"` requires `CELLAR_WEB_PASSWORD_HASH` even on loopback.
-`auth = "none"` is refused on a non-loopback bind. With `auth = "auto"`, a
-non-loopback bind still requires `CELLAR_WEB_PASSWORD_HASH`. The console behind
+`auth = "none"` is refused on a non-loopback bind. The console behind
 this page runs `ConVarSystem.Run` with `allowProtected: true`, which is full
 engine privilege.
 
