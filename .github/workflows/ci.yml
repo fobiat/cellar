@@ -38,7 +38,7 @@ jobs:
           MARIADB_DATABASE: cellar
         ports: ["3306:3306"]
         options: >-
-          --health-cmd="mariadb-admin ping -uroot -pcellartest --silent"
+          --health-cmd="mariadb-admin --protocol=tcp -h 127.0.0.1 -P 3306 -uroot -pcellartest --silent ping"
           --health-interval=5s --health-timeout=5s --health-retries=20
 
     steps:
@@ -70,6 +70,19 @@ jobs:
 
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: wait for MariaDB TCP service
+        run: |
+          for attempt in $(seq 1 60); do
+            if docker exec "${{ job.services.mariadb.id }}" \
+              mariadb-admin --protocol=tcp -h 127.0.0.1 -P 3306 \
+              -uroot -pcellartest --silent ping; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::MariaDB did not accept TCP connections within 60 seconds"
+          exit 1
 
       - name: test
         env:
