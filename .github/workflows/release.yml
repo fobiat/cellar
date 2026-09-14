@@ -28,7 +28,7 @@ jobs:
     steps:
       # `github.ref` is the tag on a tag push. The input is what makes a manual
       # re-run build the tag it was given rather than the default branch.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}
 
