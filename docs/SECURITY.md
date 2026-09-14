@@ -23,6 +23,11 @@ proxy. Configure `web.auth = "password"` for every operator UI, including
 loopback development instances. Keep `CELLAR_SESSION`, `CELLAR_WEB_PASSWORD_HASH`, `CELLAR_DATABASE_URL`,
 `CELLAR_GSLT`, updater tokens, and webhook URLs outside tracked files.
 
+Cellar also enforces this at the request boundary: every listener that is not
+loopback-bound requires an authenticated operator session, even if a stale or
+invalid runtime state claims that authentication is disabled. A non-loopback
+listener cannot fall back to local trusted access.
+
 The browser uses same-origin checks for state-changing requests, strict
 SameSite cookies, and an HttpOnly session. HTTPS deployments use a `__Host-`
 cookie name with Secure enabled. Sessions expire after twelve idle hours and

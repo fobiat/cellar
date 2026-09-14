@@ -43,7 +43,15 @@ the browser instead of exposing Cellar directly.
 
 ## Tailscale
 
-Keep Cellar on loopback and publish it through Tailscale Serve:
+Cellar can add a second listener on the host's Tailscale IPv4 address when
+`tailscale.enabled = true`, `web.auth` is not `none`, and a web password is
+configured. It uses the same port as `web.bind`, requires the operator
+password, and appears in the
+Addresses panel. Disable it with `tailscale.enabled = false` when the host
+should not serve the UI directly over the tailnet.
+
+For the preferred HTTPS path, keep Cellar on loopback and publish it through
+Tailscale Serve:
 
 ```sh
 tailscale serve --https=443 http://127.0.0.1:8081
@@ -54,6 +62,10 @@ Open the HTTPS URL shown by `tailscale serve status` from another device on the
 same tailnet. Tailscale provides the private network boundary, while Cellar's
 password still protects the operator console. `secure_cookies = true` is the
 right setting for this HTTPS path.
+
+For a direct tailnet connection, open `http://<tailscale-ip>:<web-port>` on the
+phone and sign in with the Cellar operator password. This direct listener is
+still password-protected. Use Tailscale Serve when HTTPS is required.
 
 For a Kubernetes deployment, expose the web Service through a Tailscale
 Ingress or an HTTPS ingress controller. Do not publish the bridge port to the
