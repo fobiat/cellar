@@ -41,6 +41,7 @@ pub struct Row {
 /// Everything the screen draws.
 pub struct App {
     pub snapshot: Option<Snapshot>,
+    pub connected: bool,
     /// What this screen is about, when it is not the only thing running.
     ///
     /// The TUI follows the primary instance and always has. On a one-server
@@ -73,6 +74,7 @@ impl App {
     pub fn new() -> Self {
         Self {
             snapshot: None,
+            connected: true,
             instance: None,
             gamemode: None,
             rows: VecDeque::with_capacity(SCROLLBACK),
@@ -318,10 +320,10 @@ async fn drive<B: ratatui::backend::Backend>(
         terminal.draw(|frame| view::draw(frame, &app))?;
 
         tokio::select! {
-            received = events.recv() => match received {
+            received = events.recv(), if app.connected => match received {
                 Ok(event) => app.apply(&event),
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
-                Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                Err(broadcast::error::RecvError::Closed) => app.connected = false,
             },
 
             _ = ticker.tick() => {
@@ -356,16 +358,16 @@ mod tests {
     #[test]
     fn enter_submits_a_command_and_clears_the_line() {
         let mut app = App::new();
-        for c in "applejack_features".chars() {
+        for c in "example_features".chars() {
             app.key(KeyCode::Char(c), KeyModifiers::NONE);
         }
 
         assert_eq!(
             app.key(KeyCode::Enter, KeyModifiers::NONE).as_deref(),
-            Some("applejack_features")
+            Some("example_features")
         );
         assert!(app.input.is_empty());
-        assert_eq!(app.history, vec!["applejack_features"]);
+        assert_eq!(app.history, vec!["example_features"]);
     }
 
     #[test]

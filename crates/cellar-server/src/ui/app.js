@@ -1625,8 +1625,8 @@ async function refreshBuildHealth() {
   const previous = buildDriftState;
   buildDriftState = drift.state || "unknown";
   if (buildDriftState === "drifted" && previous !== "drifted") {
-    notifyOperator("AppleJackRP build drift", drift.detail || "The running build differs from origin/main.");
-    appendLine("error", now(), "cellar", drift.detail || "AppleJackRP build drift detected.", false, "error", "cellar");
+    notifyOperator("Gamemode build drift", drift.detail || "The running build differs from origin/main.");
+    appendLine("error", now(), "cellar", drift.detail || "Gamemode build drift detected.", false, "error", "cellar");
   }
 }
 
@@ -2067,8 +2067,8 @@ function connect() {
       case "log":
         /* The category comes from the server. It used to be recomputed here
          * from a hand-copied regex chain, and the two copies had already
-         * diverged: the JavaScript one still tested for `applejack` after the
-         * Rust one started asking the gamemode profile. */
+         * diverged: the JavaScript one still tested for a specific gamemode
+         * after the Rust one started asking the gamemode profile. */
         appendLine(event.level === "error" ? "error" : "", clock(event.at), text(event.logger), text(event.message), true, event.level, text(event.category) || "other");
         noteSeen(event.at);
         break;
