@@ -118,7 +118,31 @@ impl LineAssembler {
 fn clean(bytes: &[u8]) -> String {
     let stripped = strip_terminal_bytes(bytes);
     let trimmed = stripped.trim_end_matches(['\n', '\r']);
-    collapse_carriage_returns(trimmed).to_owned()
+    normalize_headless_redraw(collapse_carriage_returns(trimmed))
+}
+
+fn normalize_headless_redraw(line: &str) -> String {
+    let Some(at) = line.find("\u{fffd}") else {
+        return line.to_owned();
+    };
+
+    let Some(timestamp) = (at..line.len()).find_map(|index| {
+        let candidate = line.get(index..)?;
+        let bytes = candidate.as_bytes();
+        (bytes.len() >= 9
+            && bytes[2] == b':'
+            && bytes[5] == b':'
+            && bytes[8] == b' '
+            && bytes[..8]
+                .iter()
+                .enumerate()
+                .all(|(offset, byte)| (offset == 2 || offset == 5) || byte.is_ascii_digit()))
+        .then_some(index)
+    }) else {
+        return String::new();
+    };
+
+    line[timestamp..].to_owned()
 }
 
 fn strip_terminal_bytes(bytes: &[u8]) -> String {
@@ -211,6 +235,23 @@ mod tests {
         let raw = b"\x9d0;engine status\x07reply\n";
         let mut assembler = LineAssembler::new();
         assert_eq!(assembler.push(raw), vec!["reply"]);
+    }
+
+    #[test]
+    fn drops_headless_cursor_redraw_artifacts() {
+        let raw = "��������]E\x1b[6n                                                                            \n";
+        let mut assembler = LineAssembler::new();
+        assert!(assembler.push(raw.as_bytes()).is_empty());
+    }
+
+    #[test]
+    fn preserves_a_console_log_after_a_headless_redraw_artifact() {
+        let raw = "��������]E11:31:28 engine/R Reloaded 5 resident symlinked resources in 0ms\n";
+        let mut assembler = LineAssembler::new();
+        assert_eq!(
+            assembler.push(raw.as_bytes()),
+            vec!["11:31:28 engine/R Reloaded 5 resident symlinked resources in 0ms"]
+        );
     }
 
     #[test]

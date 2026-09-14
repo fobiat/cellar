@@ -121,6 +121,11 @@ test("covers the two instances, keyboard tabs, themes, mobile shell, and accessi
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(overflow).toBe(false);
+  const strip = await page.locator(".strip").evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(strip.scrollWidth).toBeLessThanOrEqual(strip.clientWidth + 1);
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations.filter((violation) => ["serious", "critical"].includes(violation.impact))).toEqual([]);
 });

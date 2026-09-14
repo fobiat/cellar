@@ -64,21 +64,21 @@
        config, where a selector with one option is noise. -->
   <nav class="instances" id="instance-strip" role="tablist" aria-label="servers" hidden></nav>
 
-  <div class="strip" aria-live="off" role="region" aria-label="server status overview" tabindex="0">
-    <div class="stat"><div class="label">Server</div><div class="value lamp wait" id="stat-state">…</div></div>
-    <div class="stat"><div class="label">Players</div><div class="value" id="stat-players">—</div></div>
-    <div class="stat"><div class="label">Uptime</div><div class="value" id="stat-uptime">—</div></div>
-    <div class="stat"><div class="label">Memory</div><div class="value" id="stat-memory">—</div></div>
-    <div class="stat"><div class="label">CPU</div><div class="value" id="stat-cpu">—</div></div>
-    <div class="stat"><div class="label">Console</div><div class="value lamp wait" id="stat-console">…</div></div>
-    <div class="stat"><div class="label">Bridge</div><div class="value lamp wait" id="stat-bridge">…</div></div>
-    <div class="stat"><div class="label">Database</div><div class="value lamp wait" id="stat-mariadb">…</div></div>
-    <div class="stat"><div class="label">Backups</div><div class="value lamp wait" id="stat-backup">…</div></div>
-    <div class="stat"><div class="label">Persistence</div><div class="value lamp wait" id="stat-persistence">…</div></div>
-    <div class="stat"><div class="label">Map</div><div class="value lamp wait" id="stat-map">…</div></div>
-    <div class="stat"><div class="label">Access</div><div class="value lamp wait" id="stat-access">…</div></div>
-    <div class="stat"><div class="label">Build</div><div class="value lamp wait" id="stat-build">…</div></div>
-    <div class="stat"><div class="label">Anti-cheat</div><div class="value lamp wait" id="stat-anti-cheat">…</div></div>
+  <div class="strip" aria-live="off" role="region" aria-label="server status overview">
+    <div class="stat" data-priority="core"><div class="label">Server</div><div class="value lamp wait" id="stat-state">…</div></div>
+    <div class="stat" data-priority="core"><div class="label">Players</div><div class="value" id="stat-players">—</div></div>
+    <div class="stat" data-priority="core"><div class="label">Uptime</div><div class="value" id="stat-uptime">—</div></div>
+    <div class="stat" data-priority="core"><div class="label">Memory</div><div class="value" id="stat-memory">—</div></div>
+    <div class="stat" data-priority="core"><div class="label">CPU</div><div class="value" id="stat-cpu">—</div></div>
+    <div class="stat" data-priority="core"><div class="label">Console</div><div class="value lamp wait" id="stat-console">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Bridge</div><div class="value lamp wait" id="stat-bridge">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Database</div><div class="value lamp wait" id="stat-mariadb">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Backups</div><div class="value lamp wait" id="stat-backup">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Persistence</div><div class="value lamp wait" id="stat-persistence">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Map</div><div class="value lamp wait" id="stat-map">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Access</div><div class="value lamp wait" id="stat-access">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Build</div><div class="value lamp wait" id="stat-build">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Anti-cheat</div><div class="value lamp wait" id="stat-anti-cheat">…</div></div>
   </div>
 
   <nav class="tabs" role="tablist" aria-label="sections">
