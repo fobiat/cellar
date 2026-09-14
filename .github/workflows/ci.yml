@@ -10,6 +10,8 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+permissions: {}
+
 jobs:
   gate:
     name: build, test, clippy, fmt
@@ -23,6 +25,8 @@ jobs:
     # way AppleJackRP pins to `kyle-x1carbon`. Making the repository public also
     # resolves it, since public repos are not billed.
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
 
     # The same MariaDB the integration tests expect. Without it they skip, which
     # would quietly turn the SQL half of this project into untested code.
@@ -38,13 +42,13 @@ jobs:
           --health-interval=5s --health-timeout=5s --health-retries=20
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: clippy, rustfmt
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: fmt
         run: cargo fmt --all --check
@@ -88,10 +92,12 @@ jobs:
   windows:
     name: windows clean-checkout gate
     runs-on: ${{ github.event_name == 'pull_request' && 'windows-latest' || vars.CI_WINDOWS_RUNNER || 'windows-latest' }}
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: fmt
         run: cargo fmt --all --check
@@ -121,15 +127,17 @@ jobs:
     name: browser and accessibility tests
     runs-on: ubuntu-latest
     needs: gate
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
       - name: build browser fixtures
         run: cargo build -p cellar-cli -p cellar-fake-server
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -149,6 +157,7 @@ jobs:
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
     needs: [gate, windows, browser]
     if: always()
+    permissions: {}
     steps:
       - name: post the result
         env:

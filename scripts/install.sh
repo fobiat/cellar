@@ -6,6 +6,7 @@
 #   less install.sh && sh install.sh --version "$version"
 #   rm install.sh
 #   ./install.sh --system --service      # /usr/local/bin plus a systemd unit
+#   ./install.sh --tray                  # install and enable the desktop tray
 #   ./install.sh --run                   # install, doctor, and start Cellar
 #   ./install.sh --from-file cellar.tar.gz
 #
@@ -19,6 +20,7 @@ VERSION="latest"
 SYSTEM=0
 SERVICE=0
 RUN=0
+TRAY=0
 FROM_FILE=""
 
 while [ $# -gt 0 ]; do
@@ -27,6 +29,7 @@ while [ $# -gt 0 ]; do
         --system) SYSTEM=1; shift ;;
         --service) SERVICE=1; SYSTEM=1; shift ;;
         --run) RUN=1; shift ;;
+        --tray) TRAY=1; shift ;;
         --from-file) FROM_FILE="$2"; shift 2 ;;
         -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -39,6 +42,7 @@ green() { printf '\033[38;2;111;168;98m%s\033[0m\n' "$1"; }
 die() { printf '\033[38;2;218;91;77merror:\033[0m %s\n' "$1" >&2; exit 1; }
 
 [ "$RUN" -eq 0 ] || [ "$SERVICE" -eq 0 ] || die "--run cannot be combined with --service"
+[ "$TRAY" -eq 0 ] || [ "$SYSTEM" -eq 0 ] || die "--tray is a per-user desktop feature; drop --system"
 
 printf '\n'
 blue '  * CELLAR'
@@ -61,12 +65,12 @@ mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
 # Architecture, because an aarch64 box downloading an x86_64 binary produces a
 # confusing "not found" from the kernel rather than anything useful.
 #
-# Only x86_64 is published. The dedicated server is a Windows x86_64 binary run
-# under Wine, so an arm64 host cannot run the thing Cellar supervises anyway.
+# Only x86_64 is published for the bundled dedicated server. Cellar itself can
+# still be built from source on another architecture.
 case "$(uname -m)" in
     x86_64|amd64) TARGET="x86_64-unknown-linux" ;;
     aarch64|arm64)
-        die "no arm64 build is published: the s&box server is x86_64-only under Wine.
+        die "no arm64 build is published for the bundled s&box server.
      Build the CLI from source with 'cargo build --release' if you want it here." ;;
     *) die "unsupported architecture: $(uname -m)" ;;
 esac
@@ -181,6 +185,12 @@ for binary in cellar cellar-fake-server; do
     [ -f "${TEMP}/${binary}" ] && install -m 0755 "${TEMP}/${binary}" "${INSTALL_DIR}/${binary}"
 done
 
+if [ -f "${TEMP}/cellar-tray.sh" ]; then
+    install -m 0755 "${TEMP}/cellar-tray.sh" "${INSTALL_DIR}/cellar-tray"
+elif [ "$TRAY" -eq 1 ]; then
+    die "the release archive does not contain the Linux tray launcher"
+fi
+
 # ------------------------------------------------------------------- config
 
 CONFIG="${CONFIG_DIR}/cellar.toml"
@@ -191,6 +201,24 @@ if [ ! -f "$CONFIG" ]; then
     fi
 else
     grey "  Left your existing config at ${CONFIG}"
+fi
+
+# --------------------------------------------------------------- desktop tray
+
+if [ "$TRAY" -eq 1 ]; then
+    AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
+    mkdir -p "$AUTOSTART_DIR"
+    cat > "${AUTOSTART_DIR}/cellar-tray.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Cellar tray
+Comment=Cellar server status and controls
+Exec=${INSTALL_DIR}/cellar-tray
+TryExec=${INSTALL_DIR}/cellar-tray
+Terminal=false
+X-GNOME-Autostart-enabled=true
+DESKTOP
+    green "  Tray autostart enabled at ${AUTOSTART_DIR}/cellar-tray.desktop"
 fi
 
 # ------------------------------------------------------------------ service
@@ -252,11 +280,13 @@ green "  Installed $("${INSTALL_DIR}/cellar" --version)"
 printf '\n'
 grey "    Config:  ${CONFIG}"
 grey "    Binary:  ${INSTALL_DIR}/cellar"
+[ "$TRAY" -eq 0 ] || grey "    Tray:    ${INSTALL_DIR}/cellar-tray"
 printf '\n'
 printf '  Next:\n'
 grey "    1. edit ${CONFIG}"
 grey "    2. cellar doctor"
 grey "    3. cellar run"
+[ "$TRAY" -eq 0 ] || grey "    Tray:    ${INSTALL_DIR}/cellar-tray (needs yad)"
 printf '\n'
 
 case ":${PATH}:" in

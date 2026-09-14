@@ -188,8 +188,9 @@ while a supervised server is writing. **Both were unreachable before
 always been `ok`.
 
 `/readyz` is derived from a log line: `server.ready_pattern` if the instance
-sets one, otherwise the gamemode's `[profile]`, otherwise AppleJackRP's
-`Lobby created - session is joinable`. Its body says what it knows, for example
+sets one, otherwise the gamemode's `[profile]`. There is no generic s&box
+readiness signal, so a deployment must use the line its selected gamemode emits.
+Its body says what it knows, for example
 `running, 2 player(s)`.
 
 **A readiness line the gamemode never logs is the failure to look for first.**
@@ -242,7 +243,7 @@ kind: Deployment
 spec:
   template:
     spec:
-      terminationGracePeriodSeconds: 45     # >= graceful_timeout_seconds
+      terminationGracePeriodSeconds: 60     # >= graceful_timeout_seconds
       containers:
         - name: server
           image: cellar:latest
@@ -255,11 +256,11 @@ spec:
           tty: true
 
           readinessProbe:
-            httpGet: { path: /readyz, port: 8080 }
+            httpGet: { path: /readyz, port: 8081 }
             initialDelaySeconds: 10
             periodSeconds: 5
           livenessProbe:
-            httpGet: { path: /healthz, port: 8080 }
+            httpGet: { path: /healthz, port: 8081 }
             periodSeconds: 10
 
           env:
@@ -273,9 +274,8 @@ spec:
 
 Points worth stating:
 
-- **`stdin: true` and `tty: true` are required**, not stylistic. The existing
-  AppleJackRP deployment already carries them and works; its comment attributes
-  that to Kubernetes wiring, but the real reason is the engine's terminal check.
+- **`stdin: true` and `tty: true` are required**, not stylistic. The deployment
+  template carries them; the real reason is the engine's terminal check.
 - The bridge should stay on a ClusterIP behind a NetworkPolicy. `trusted` auth
   leans on the bridge being unreachable from anywhere but the game host, and
   Cellar refuses `trusted` on a non-loopback bind for that reason.

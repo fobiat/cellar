@@ -684,11 +684,11 @@ pub struct WebConfig {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WebAuthMode {
-    /// Require a password when one is configured, otherwise allow loopback.
+    /// Require the configured Argon2 password hash.
     #[default]
-    Auto,
-    /// Always require the configured Argon2 password hash.
     Password,
+    /// Require a password when one is configured, otherwise allow loopback.
+    Auto,
     /// Disable the login gate. Valid only on a loopback bind.
     None,
 }

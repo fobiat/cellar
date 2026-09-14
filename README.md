@@ -14,6 +14,7 @@ Cellar's core.
 ```sh
 cellar doctor     # check the executable, profile, paths, and dependencies
 cellar run        # supervise the configured server in the foreground
+cellar tui        # open a dashboard for an already running Cellar
 cellar status     # inspect a running Cellar instance
 ```
 
@@ -29,6 +30,7 @@ cellar status     # inspect a running Cellar instance
 | **[Operations](docs/OPERATIONS.md)** | Probes, updates, backups, notifications, and recovery. |
 | **[Game database](docs/GAME_DATABASE.md)** | The gamemode-owned database contract. |
 | **[MCP integration](docs/MCP.md)** | Read-only tools and authenticated command access. |
+| **[Security and privacy](docs/SECURITY.md)** | Threat model, credentials, telemetry, and reporting. |
 | **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Common failures and evidence to collect. |
 | **[Facepunch Sandbox](docs/FACEPUNCH-SANDBOX.md)** | The shipped generic profile example. |
 | **[AppleJackRP integration](docs/integrations/applejackrp.md)** | Optional profile and workflow notes for AppleJackRP. |
@@ -55,6 +57,8 @@ AppleJackRP page is an integration guide, not a Cellar dependency.
   database queries.
 - Supports health checks, graceful shutdown, crash-loop detection, backups,
   update checks, and webhook notifications.
+- Includes optional Windows and Linux tray launchers with web UI, TUI, status,
+  and server controls.
 
 ## Install
 
@@ -66,7 +70,7 @@ Public releases need no token.
 version=v0.3.0-beta.1
 curl -fsSLO "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.sh"
 less install.sh
-sh install.sh --version "$version"
+sh install.sh --tray --version "$version"
 rm install.sh
 ```
 
@@ -76,13 +80,18 @@ rm install.sh
 $version = 'v0.3.0-beta.1'
 Invoke-WebRequest "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.ps1" -OutFile install-cellar.ps1
 Get-Content .\install-cellar.ps1
-.\install-cellar.ps1 -Version $version
+.\install-cellar.ps1 -Version $version -Tray
 Remove-Item .\install-cellar.ps1
 ```
 
 Both installers verify the published checksum and install per-user by
 default. Docker, Kubernetes, services, source builds, and uninstall steps are
 covered by [Installation](docs/INSTALLATION.md).
+
+The tray is optional. Linux uses `yad` and a desktop autostart entry. Windows
+uses a Startup shortcut and PowerShell's notification area support. Set
+`CELLAR_SESSION` in the tray process environment when the web UI requires a
+password. The tray never stores the password or session in the repository.
 
 ## Minimal configuration
 

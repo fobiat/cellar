@@ -4,8 +4,9 @@ A supervised server with a web dashboard, in about ten minutes. No database and
 no persistence yet: [step 6](#6-optional-turn-on-persistence) adds those once the
 basics work.
 
-You need an s&box dedicated server already installed (`sbox-server.exe` and a
-built `.sbproj`). Cellar supervises that; it does not install the game server.
+You need an s&box dedicated server already installed (`sbox-server` on Linux,
+or `sbox-server.exe` on Windows) and a built `.sbproj`. Cellar supervises that;
+it does not install the game server.
 
 ---
 
@@ -59,7 +60,7 @@ The smallest config that does something useful:
 
 ```toml
 [server]
-executable = "/home/container/sbox/sbox-server.exe"
+executable = "/home/container/sbox/sbox-server"
 project    = "/home/container/projects/my-game/my-game.sbproj"
 launcher   = "native"        # use "wine" explicitly for a Windows binary
 hostname   = "S&box Server"
@@ -73,6 +74,13 @@ enabled = false              # turned on in step 6
 [web]
 enabled = true
 bind    = "127.0.0.1:8081"
+auth    = "password"
+```
+
+Create the operator password before running `doctor`:
+
+```sh
+export CELLAR_WEB_PASSWORD_HASH="$(cellar hash-password)"
 ```
 
 On Windows, the same three server lines with Windows paths:
@@ -119,6 +127,14 @@ Add the terminal dashboard if you have a real terminal:
 ```sh
 cellar run --tui
 ```
+
+To open the dashboard from another terminal while Cellar keeps running:
+
+```sh
+CELLAR_SESSION='your-session-cookie' cellar tui
+```
+
+The Windows and Linux tray launchers expose the same action as Open TUI.
 
 Stop it with `Ctrl-C`. Cellar sends the engine a `quit` and waits up to
 `graceful_timeout_seconds` before killing it, so the nine shutdown steps
@@ -189,8 +205,7 @@ Only do this behind something that terminates TLS. The console behind this page
 runs arbitrary engine commands.
 
 ```sh
-cellar hash-password                       # prompts, prints an argon2 hash
-export CELLAR_WEB_PASSWORD_HASH='$argon2id$v=19$...'
+# The password hash from step 2 remains in the environment.
 ```
 
 ```toml

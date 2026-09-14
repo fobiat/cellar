@@ -22,6 +22,9 @@
     .\install.ps1 -Version v0.1.0 -Service
 
 .EXAMPLE
+    .\install.ps1 -Tray
+
+.EXAMPLE
     .\install.ps1 -Run
 #>
 [CmdletBinding()]
@@ -34,6 +37,9 @@ param(
 
     # Register a Windows service that runs `cellar run` at boot.
     [switch] $Service,
+
+    # Install a tray shortcut for status, web UI, TUI and server controls.
+    [switch] $Tray,
 
     # Run doctor and start Cellar after installation. Cannot be combined with
     # -Service because the service owns the process.
@@ -227,11 +233,18 @@ try {
     # -------------------------------------------------------------------- PATH
 
     $current = [Environment]::GetEnvironmentVariable('Path', $pathScope)
-    if ($current -notlike "*$installDir*") {
-        Write-Step "Adding to the $pathScope PATH"
-        [Environment]::SetEnvironmentVariable('Path', "$current;$installDir", $pathScope)
+    if ([string]::IsNullOrWhiteSpace($current)) {
+        throw "Refusing to update the empty $pathScope PATH. Restore it before running the installer again."
     }
-    $env:Path = "$env:Path;$installDir"
+    $pathEntries = @($current -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if (-not ($pathEntries | Where-Object { $_.TrimEnd('\') -ieq $installDir.TrimEnd('\') })) {
+        Write-Step "Adding to the $pathScope PATH"
+        [Environment]::SetEnvironmentVariable('Path', (($pathEntries + $installDir) -join ';'), $pathScope)
+    }
+    $processEntries = @($env:Path -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if (-not ($processEntries | Where-Object { $_.TrimEnd('\') -ieq $installDir.TrimEnd('\') })) {
+        $env:Path = (($processEntries + $installDir) -join ';')
+    }
 
     # ------------------------------------------------------------------ config
 
@@ -244,6 +257,26 @@ try {
         }
     } else {
         Write-Note "Left your existing config at $config"
+    }
+
+    # --------------------------------------------------------------- tray
+
+    if ($Tray) {
+        $trayScript = Join-Path $installDir 'Cellar-Tray.ps1'
+        if (-not (Test-Path -LiteralPath $trayScript)) {
+            throw 'The release archive does not contain Cellar-Tray.ps1.'
+        }
+
+        $startup = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup'
+        New-Item -ItemType Directory -Force -Path $startup | Out-Null
+        $shortcutPath = Join-Path $startup 'Cellar Tray.lnk'
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`" -Cellar `"$exe`" -Config `"$config`""
+        $shortcut.WorkingDirectory = $installDir
+        $shortcut.Save()
+        Write-Done "Tray shortcut enabled at $shortcutPath"
     }
 
     # ----------------------------------------------------------------- service
@@ -273,6 +306,7 @@ try {
     Write-Host ''
     Write-Note "  Config:  $config"
     Write-Note "  Binary:  $exe"
+    if ($Tray) { Write-Note "  Tray:    $installDir\Cellar-Tray.ps1" }
     Write-Host ''
     Write-Host '  Next:' -ForegroundColor White
     Write-Host "    1. Edit $config" -ForegroundColor DarkGray

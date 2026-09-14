@@ -15,19 +15,25 @@ use std::time::{Duration, Instant};
 use argon2::Argon2;
 use argon2::password_hash::{
     PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng,
+    rand_core::RngCore,
 };
 use axum::extract::FromRequestParts;
 use axum::http::StatusCode;
 use axum::http::request::Parts;
-use rand::Rng;
 
 use cellar_core::config::WebAuthMode;
 
 /// How long a session lasts without being used.
 const SESSION_TTL: Duration = Duration::from_secs(12 * 3600);
+const SESSION_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
 
 /// The cookie the token lives in.
 pub const COOKIE: &str = "cellar_session";
+const SECURE_COOKIE: &str = "__Host-cellar_session";
+
+pub fn cookie_name(secure: bool) -> &'static str {
+    if secure { SECURE_COOKIE } else { COOKIE }
+}
 
 /// A verified operator, produced by the extractor.
 pub struct Operator {
@@ -68,7 +74,7 @@ where
 /// Live sessions.
 #[derive(Default)]
 pub struct Sessions {
-    tokens: Mutex<HashMap<String, (String, Instant)>>,
+    tokens: Mutex<HashMap<String, (String, Instant, Instant)>>,
 }
 
 impl Sessions {
@@ -78,22 +84,18 @@ impl Sessions {
 
     /// Mint a token for a verified login.
     pub fn create(&self, name: &str) -> String {
-        let token: String = {
-            let mut rng = rand::thread_rng();
-            (0..48)
-                .map(|_| {
-                    const ALPHABET: &[u8] =
-                        b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-                    ALPHABET[rng.gen_range(0..ALPHABET.len())] as char
-                })
-                .collect()
-        };
+        let mut bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        let token: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        let now = Instant::now();
 
         if let Ok(mut tokens) = self.tokens.lock() {
             // Expired entries are swept here rather than on a timer: the map is
             // small and the only thing that grows it is a login.
-            tokens.retain(|_, (_, seen)| seen.elapsed() < SESSION_TTL);
-            tokens.insert(token.clone(), (name.to_owned(), Instant::now()));
+            tokens.retain(|_, (_, seen, created)| {
+                seen.elapsed() < SESSION_TTL && created.elapsed() < SESSION_MAX_AGE
+            });
+            tokens.insert(token.clone(), (name.to_owned(), now, now));
         }
 
         token
@@ -102,12 +104,10 @@ impl Sessions {
     /// Look a token up, refreshing its idle timer.
     pub fn resolve(&self, token: &str) -> Option<String> {
         let mut tokens = self.tokens.lock().ok()?;
-        let (name, seen) = tokens.get_mut(token)?;
+        let (name, seen, created) = tokens.get_mut(token)?;
 
-        if seen.elapsed() >= SESSION_TTL {
-            let name = name.clone();
+        if seen.elapsed() >= SESSION_TTL || created.elapsed() >= SESSION_MAX_AGE {
             tokens.remove(token);
-            let _ = name;
             return None;
         }
 
@@ -182,8 +182,8 @@ where
             });
         }
 
-        let token =
-            cookie_value(parts, COOKIE).ok_or((StatusCode::UNAUTHORIZED, "not signed in"))?;
+        let token = cookie_value(parts, cookie_name(state.web_secure_cookies))
+            .ok_or((StatusCode::UNAUTHORIZED, "not signed in"))?;
 
         state
             .sessions

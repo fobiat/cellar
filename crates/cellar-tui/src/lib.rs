@@ -6,7 +6,11 @@
 //! server is doing.
 
 pub mod theme;
-mod view;
+pub mod view;
+
+use futures_util::StreamExt;
+use serde::Deserialize;
+use tokio_tungstenite::tungstenite::Message;
 
 use std::collections::VecDeque;
 use std::io;
@@ -300,6 +304,204 @@ pub async fn run(
     disable_raw_mode()?;
     crossterm::execute!(io::stdout(), LeaveAlternateScreen)?;
     result
+}
+
+/// Drive the dashboard against a running Cellar over its authenticated web API.
+///
+/// This is the path used by the tray launchers. It keeps the tray process small
+/// and lets an operator open a second dashboard without starting a second
+/// supervisor.
+pub async fn run_remote(
+    base_url: &str,
+    session: Option<&str>,
+    instance: Option<String>,
+) -> io::Result<()> {
+    enable_raw_mode()?;
+    let mut out = io::stdout();
+    crossterm::execute!(out, EnterAlternateScreen)?;
+
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = crossterm::execute!(io::stdout(), LeaveAlternateScreen);
+        previous(info);
+    }));
+
+    let result = remote_drive(
+        base_url.trim_end_matches('/'),
+        session,
+        instance,
+        Terminal::new(CrosstermBackend::new(io::stdout()))?,
+    )
+    .await;
+
+    disable_raw_mode()?;
+    crossterm::execute!(io::stdout(), LeaveAlternateScreen)?;
+    result
+}
+
+#[derive(Deserialize)]
+struct RemoteStatus {
+    server: Option<Snapshot>,
+    game: Option<String>,
+    instance: Option<String>,
+}
+
+async fn remote_drive<B: ratatui::backend::Backend>(
+    base_url: &str,
+    session: Option<&str>,
+    requested_instance: Option<String>,
+    mut terminal: Terminal<B>,
+) -> io::Result<()> {
+    let query = requested_instance
+        .as_deref()
+        .map(|id| format!("?instance={id}"))
+        .unwrap_or_default();
+    let client = reqwest::Client::new();
+    let mut status_request = client.get(format!("{base_url}/api/status{query}"));
+    if let Some(session) = session {
+        status_request =
+            status_request.header(reqwest::header::COOKIE, format!("cellar_session={session}"));
+    }
+
+    let mut app = App::new();
+    match status_request.send().await {
+        Ok(response) if response.status().is_success() => {
+            if let Ok(status) = response.json::<RemoteStatus>().await {
+                app.snapshot = status.server;
+                app.gamemode = status.game;
+                app.instance = requested_instance.or(status.instance);
+            }
+        }
+        Ok(response) => app.apply(&Event::Unparsed {
+            raw: format!("status request returned {}", response.status()),
+            origin: cellar_core::Origin::Console,
+        }),
+        Err(error) => app.apply(&Event::Unparsed {
+            raw: format!("status request failed: {error}"),
+            origin: cellar_core::Origin::Console,
+        }),
+    }
+
+    let ws_base = if let Some(rest) = base_url.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = base_url.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "TUI URL must start with http:// or https://",
+        ));
+    };
+    let ws_url = format!("{ws_base}/api/events{query}");
+    let mut request = tokio_tungstenite::tungstenite::http::Request::builder()
+        .uri(ws_url)
+        .header("User-Agent", "cellar-tui")
+        .body(())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    if let Some(session) = session {
+        request.headers_mut().insert(
+            "Cookie",
+            format!("cellar_session={session}")
+                .parse()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
+        );
+    }
+
+    let websocket = tokio_tungstenite::connect_async(request).await;
+    let (mut socket, _) = match websocket {
+        Ok(connection) => connection,
+        Err(error) => {
+            app.connected = false;
+            app.apply(&Event::Unparsed {
+                raw: format!("event stream failed: {error}"),
+                origin: cellar_core::Origin::Console,
+            });
+            drive_offline(&mut terminal, app).await?;
+            return Ok(());
+        }
+    };
+
+    let mut ticker = tokio::time::interval(Duration::from_millis(200));
+    loop {
+        terminal.draw(|frame| view::draw(frame, &app))?;
+        tokio::select! {
+            message = socket.next() => match message {
+                Some(Ok(Message::Text(text))) => {
+                    if let Ok(event) = serde_json::from_str::<cellar_core::event::InstanceEvent>(&text) {
+                        app.apply(&event.event);
+                    } else if let Ok(notice) = serde_json::from_str::<serde_json::Value>(&text)
+                        && let Some(raw) = notice.get("raw").and_then(serde_json::Value::as_str)
+                    {
+                        app.apply(&Event::Unparsed { raw: raw.to_owned(), origin: cellar_core::Origin::Console });
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => app.connected = false,
+                Some(Ok(_)) => {}
+            },
+            _ = ticker.tick() => {
+                if let Some(command) = poll_terminal(&mut app)? {
+                    let mut request = client.post(format!("{base_url}/api/exec{query}"))
+                        .json(&serde_json::json!({"command": command}));
+                    if let Some(session) = session {
+                        request = request.header(reqwest::header::COOKIE, format!("cellar_session={session}"));
+                    }
+                    match request.send().await {
+                        Ok(response) => {
+                            let success = response.status().is_success();
+                            match response.json::<serde_json::Value>().await {
+                            Ok(body) if success => {
+                                if let Some(reply) = body.get("reply").and_then(serde_json::Value::as_array) {
+                                    app.apply(&Event::CommandReplied { command: command.clone(), reply: reply.iter().filter_map(|line| line.as_str().map(str::to_owned)).collect(), ok: true });
+                                }
+                            }
+                            Ok(body) => app.apply(&Event::Unparsed { raw: body.to_string(), origin: cellar_core::Origin::Console }),
+                            Err(error) => app.apply(&Event::Unparsed { raw: format!("command request failed: {error}"), origin: cellar_core::Origin::Console }),
+                            }
+                        }
+                        Err(error) => app.apply(&Event::Unparsed { raw: format!("command request failed: {error}"), origin: cellar_core::Origin::Console }),
+                    }
+                }
+            }
+        }
+
+        if app.should_quit {
+            let _ = socket.close(None).await;
+            return Ok(());
+        }
+    }
+}
+
+async fn drive_offline<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    mut app: App,
+) -> io::Result<()> {
+    let mut ticker = tokio::time::interval(Duration::from_millis(200));
+    loop {
+        terminal.draw(|frame| view::draw(frame, &app))?;
+        ticker.tick().await;
+        if let Some(command) = poll_terminal(&mut app)? {
+            app.apply(&Event::Unparsed {
+                raw: format!("not connected, could not send `{command}`"),
+                origin: cellar_core::Origin::Console,
+            });
+        }
+        if app.should_quit {
+            return Ok(());
+        }
+    }
+}
+
+fn poll_terminal(app: &mut App) -> io::Result<Option<String>> {
+    let mut command = None;
+    while term::poll(Duration::from_millis(0))? {
+        if let TermEvent::Key(key) = term::read()?
+            && key.kind == KeyEventKind::Press
+        {
+            command = app.key(key.code, key.modifiers);
+        }
+    }
+    Ok(command)
 }
 
 async fn drive<B: ratatui::backend::Backend>(

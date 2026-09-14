@@ -5,21 +5,21 @@ metadata:
 data:
   cellar.toml: |
     [server]
-    executable = "/home/container/sbox/sbox-server.exe"
-    game = "facepunch.sandbox"
-    launcher = "wine"
+    # Linux is native by default. For a Windows binary, use the commented Wine
+    # fallback and provide Wine plus the Windows .NET runtime in the image.
+    executable = "/home/container/sbox/sbox-server"
+    game = "your-org.your-game"
+    launcher = "native"
+    # executable = "/home/container/sbox/sbox-server.exe"
+    # launcher = "wine"
     working_dir = "/home/container/sbox"
     hostname = "Cellar Sandbox"
-    data_dir = "/home/container/sbox/data/facepunch/sandbox"
+    data_dir = "/home/container/sbox/data/your-org/your-game"
     log_file = "/home/container/sbox/logs/sbox-server.log"
     direct_connect = true
     port = 27015
     query_port = 27016
-    # Measured 2026-09-01: `Connected to Steam` is the last line facepunch.sandbox
-    # ever logs, and the server is answering A2S by then. It used to say AppleJackRP's
-    # `Lobby created - session is joinable`, which this gamemode never emits, so this
-    # deployment returned 503 from /readyz forever against a healthy server and
-    # Kubernetes killed and retried the pod.
+    # Replace this with the line your profile or server emits once it is serving.
     ready_pattern = "Connected to Steam"
 
     [database]
@@ -38,6 +38,19 @@ data:
     only_when_empty = true
     update_gamemode = false
     update_engine = false
+
+    [backup]
+    enabled = false
+    directory = "/var/lib/cellar/backups"
+    retain = 7
+    verify = true
+
+    [persistence]
+    enabled = false
+    directory = "/var/lib/cellar/persistence"
+    retain = 7
+    verify = true
+    # copy_to = "/var/lib/cellar/persistence-export"
 
 ---
 apiVersion: apps/v1
@@ -86,6 +99,12 @@ spec:
               port: web
             periodSeconds: 5
             failureThreshold: 6
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: web
+            periodSeconds: 5
+            failureThreshold: 120
           livenessProbe:
             httpGet:
               path: /healthz
@@ -100,6 +119,10 @@ spec:
               mountPath: /home/container/sbox/data
             - name: sbox-logs
               mountPath: /home/container/sbox/logs
+            - name: cellar-persistence
+              mountPath: /var/lib/cellar/persistence
+            - name: cellar-backups
+              mountPath: /var/lib/cellar/backups
       volumes:
         - name: config
           configMap:
@@ -110,6 +133,12 @@ spec:
         - name: sbox-logs
           persistentVolumeClaim:
             claimName: cellar-logs
+        - name: cellar-persistence
+          persistentVolumeClaim:
+            claimName: cellar-persistence
+        - name: cellar-backups
+          persistentVolumeClaim:
+            claimName: cellar-backups
 ---
 apiVersion: v1
 kind: Service
@@ -145,6 +174,26 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: cellar-logs
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cellar-persistence
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cellar-backups
 spec:
   accessModes: ["ReadWriteOnce"]
   resources:

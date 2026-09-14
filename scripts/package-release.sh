@@ -22,6 +22,7 @@ rm -rf "$out"
 mkdir -p "$out"
 
 docs=(cellar.toml.example README.md CHANGELOG.md LICENSE-MIT)
+launchers=(scripts/cellar-tray.sh scripts/Cellar-Tray.ps1)
 
 # ------------------------------------------------------------------- linux
 
@@ -35,6 +36,7 @@ if [[ "$host_os" != MINGW* && "$host_os" != MSYS* && "$host_os" != CYGWIN* ]] &&
     [ -x "$root/target/release/cellar-fake-server" ] \
         && cp "$root/target/release/cellar-fake-server" "$staging/"
     cp "${docs[@]}" "$staging/"
+    cp "${launchers[@]}" "$staging/"
 
     tar -czf "$out/cellar-x86_64-unknown-linux.tar.gz" -C "$staging" .
     cp "$linux_bin" "$out/cellar-x86_64-unknown-linux"
@@ -53,6 +55,7 @@ if [ -f "$windows_bin" ]; then
     [ -f "$root/dist/windows/cellar-fake-server.exe" ] \
         && cp "$root/dist/windows/cellar-fake-server.exe" "$staging/"
     cp "${docs[@]}" "$staging/"
+    cp "${launchers[@]}" "$staging/"
 
     # zip, not tar: Windows expands a zip with no extra software, and
     # Expand-Archive is what install.ps1 calls.

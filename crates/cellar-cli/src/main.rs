@@ -50,6 +50,19 @@ enum Command {
         tui: bool,
     },
 
+    /// Open a terminal dashboard connected to an already running Cellar.
+    ///
+    /// The web session is read from CELLAR_SESSION or supplied explicitly by
+    /// the tray launcher. It never starts a second supervisor.
+    Tui {
+        /// Running Cellar web URL.
+        #[arg(long, default_value = "http://127.0.0.1:8081")]
+        url: String,
+        /// Authenticated web session cookie. Prefer CELLAR_SESSION in scripts.
+        #[arg(long, env = "CELLAR_SESSION")]
+        session: Option<String>,
+    },
+
     /// Print what the config resolves to, with every secret redacted.
     Config,
 
@@ -319,6 +332,11 @@ async fn main() -> std::process::ExitCode {
 
     let result = match cli.command {
         Command::Run { tui } => runner::run(&cli.config, tui).await,
+        Command::Tui { url, session } => {
+            cellar_tui::run_remote(&url, session.as_deref(), cli.instance)
+                .await
+                .map_err(Into::into)
+        }
         Command::Config => commands::show_config(&cli.config),
         Command::Doctor => commands::doctor(&cli.config).await,
         Command::Install { into, validate } => {

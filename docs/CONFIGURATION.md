@@ -36,7 +36,7 @@ serialisation path, so a config dump or a crash log cannot leak one.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `executable` | *required* | Path to `sbox-server.exe`. |
+| `executable` | *required* | Path to the native `sbox-server` binary by default, or a Windows `.exe` when `launcher = "wine"` is selected. |
 | `project` | *required unless `game` is set* | Path to the local `.sbproj`. |
 | `game` | unset | Published package ident such as `your-org.your-game`. |
 | `map` | unset | Map ident appended to a published game ident, such as `thieves.rpdowntown3t`. |
@@ -84,7 +84,7 @@ process. A config uses one or the other, never both.
 scope = "your-game-local"
 
 [instances.published.server]
-executable = "/srv/published/sbox-server.exe"
+executable = "/srv/published/sbox-server"
 game = "your-org.your-game"
 data_dir = "/srv/published/data/your-org/your-game"
 
@@ -92,7 +92,7 @@ data_dir = "/srv/published/data/your-org/your-game"
 enabled = false
 
 [instances.dev.server]
-executable = "/srv/dev/sbox-server.exe"
+executable = "/srv/dev/sbox-server"
 project = "/srv/dev/your-game.sbproj"
 data_dir = "/srv/dev/data/your-org/your-game#local"
 ```
@@ -394,14 +394,13 @@ security claim is worse than an absent one.
 | --- | --- | --- |
 | `enabled` | `false` | Serve the dashboard and the control API. The shipped example turns this on. |
 | `bind` | `127.0.0.1:8081` | Listen address. |
-| `auth` | `auto` | `auto` uses a password when configured, `password` always requires one, and `none` is loopback-only. |
+| `auth` | `password` | Requires the configured Argon2 password hash. `none` is loopback-only, and `auto` is retained for explicit compatibility configurations. |
 | `allow_insecure_http` | `false` | Required for a non-loopback bind behind a TLS-terminating reverse proxy. |
 | `secure_cookies` | `false` | Required for a non-loopback bind so browser sessions are marked Secure. |
 | `password_hash` | from env | Argon2 hash from `cellar hash-password`. |
 
 `auth = "password"` requires `CELLAR_WEB_PASSWORD_HASH` even on loopback.
-`auth = "none"` is refused on a non-loopback bind. With `auth = "auto"`, a
-non-loopback bind still requires `CELLAR_WEB_PASSWORD_HASH`. The console behind
+`auth = "none"` is refused on a non-loopback bind. The console behind
 this page runs `ConVarSystem.Run` with `allowProtected: true`, which is full
 engine privilege.
 

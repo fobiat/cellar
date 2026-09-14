@@ -1,19 +1,19 @@
 [server]
-executable = "/home/container/sbox/sbox-server.exe"
-game = "facepunch.sandbox"
-launcher = "wine"
+# Linux is native by default. If the image supplies a Windows binary instead,
+# use the commented Wine fallback and provide Wine plus the Windows .NET runtime.
+executable = "/home/container/sbox/sbox-server"
+game = "your-org.your-game"
+launcher = "native"
+# executable = "/home/container/sbox/sbox-server.exe"
+# launcher = "wine"
 working_dir = "/home/container/sbox"
 hostname = "Cellar Sandbox"
-data_dir = "/home/container/sbox/data/facepunch/sandbox"
+data_dir = "/home/container/sbox/data/your-org/your-game"
 log_file = "/home/container/sbox/logs/sbox-server.log"
 direct_connect = true
 port = 27015
 query_port = 27016
-# Measured 2026-09-01: `Connected to Steam` is the last line facepunch.sandbox
-# ever logs, and the server is answering A2S by then. It used to say AppleJackRP's
-# `Lobby created - session is joinable`, which this gamemode never emits, so this
-# deployment returned 503 from /readyz forever against a healthy server and
-# Kubernetes killed and retried the pod.
+# Replace this with the line your profile or server emits once it is serving.
 ready_pattern = "Connected to Steam"
 
 [database]
@@ -26,6 +26,20 @@ bind = "0.0.0.0:8081"
 auth = "password"
 allow_insecure_http = true
 secure_cookies = true
+
+[backup]
+enabled = false
+directory = "/var/lib/cellar/backups"
+retain = 7
+verify = true
+
+[persistence]
+enabled = false
+directory = "/var/lib/cellar/persistence"
+retain = 7
+verify = true
+# Set this to another mounted volume when a second export copy is wanted.
+# copy_to = "/var/lib/cellar/persistence-export"
 
 [update]
 policy = "notify"

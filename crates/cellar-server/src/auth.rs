@@ -98,7 +98,7 @@ pub fn bearer(headers: &HeaderMap) -> Option<&str> {
 }
 
 /// Compare without leaking length or content through timing.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }

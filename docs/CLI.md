@@ -49,6 +49,19 @@ the bridge and the web UI, and stops it gracefully on `SIGTERM` or `Ctrl-C`.
 Runs until the server exits and the restart policy says to stop, or until it is
 asked to stop. See [`supervisor.restart`](CONFIGURATION.md#supervisor).
 
+## `cellar tui`
+
+Open the terminal dashboard for a Cellar process that is already running.
+
+```
+CELLAR_SESSION='your-session-cookie' cellar tui
+cellar tui --url http://127.0.0.1:8081
+```
+
+It uses the same authenticated web session as the browser and sends console
+commands through the audited `/api/exec` route. It never starts another game
+server. The tray launchers call this command for their `Open TUI` action.
+
 ---
 
 ## `cellar doctor`
