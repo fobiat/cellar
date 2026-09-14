@@ -74,10 +74,20 @@ jobs:
           done
           exit "$missing"
 
+      - name: create attestation subject manifest
+        run: |
+          set -eu
+          : > dist/attestation-checksums.txt
+          for f in dist/release/*; do
+            case "$f" in *.sha256) continue ;; esac
+            sha256sum "$f" >> dist/attestation-checksums.txt
+          done
+          test -s dist/attestation-checksums.txt
+
       - name: attest release artifacts and SBOM
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
-          subject-checksums: dist/release/*.sha256
+          subject-checksums: dist/attestation-checksums.txt
 
       - name: release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
