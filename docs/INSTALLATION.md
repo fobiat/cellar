@@ -12,7 +12,7 @@ then `GITHUB_TOKEN`, when you install from a private fork.
 ## Windows
 
 ```powershell
-$version = 'v0.2.0'
+$version = 'v0.3.0-beta.1'
 Invoke-WebRequest "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.ps1" -OutFile install-cellar.ps1
 Get-Content .\install-cellar.ps1
 .\install-cellar.ps1 -Version $version
@@ -92,7 +92,7 @@ mariadb` is only for hosts where that is not an option.
 ## Linux
 
 ```sh
-version=v0.2.0
+version=v0.3.0-beta.1
 curl -fsSLO "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.sh"
 less install.sh
 sh install.sh --version "$version"
