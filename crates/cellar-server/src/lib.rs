@@ -306,6 +306,26 @@ mod contract_tests {
     }
 
     #[tokio::test]
+    async fn a_non_loopback_listener_requires_auth_even_if_mode_is_none() {
+        let mut state = AppState::new(Documents::memory(), Policy::Trusted, "test-scope");
+        state.web_auth = cellar_core::config::WebAuthMode::None;
+        state.web_bind = "0.0.0.0:8081".to_owned();
+
+        let response = web_router(Arc::new(state))
+            .oneshot(
+                Request::builder()
+                    .uri("/api/instances")
+                    .header("Host", "cellar.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn loopback_first_run_setup_saves_a_hash_and_cannot_run_twice() {
         let path =
             std::env::temp_dir().join(format!("cellar-web-password-test-{}", std::process::id()));
