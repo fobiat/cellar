@@ -2561,28 +2561,57 @@ enabled = false
 
     #[test]
     fn config_secret_fields_are_rejected_and_must_come_from_the_environment() {
-        let text = r#"
-            [server]
-            executable = "a.exe"
-            project = "a.sbproj"
-            gslt = "a-token-from-a-file"
+        let cases = [
+            (
+                "gslt",
+                r#"
+                    [server]
+                    executable = "a.exe"
+                    project = "a.sbproj"
+                    gslt = "a-token-from-a-file"
+                "#,
+            ),
+            (
+                "url",
+                r#"
+                    [database]
+                    url = "mysql://user:file-password@host/db"
+                "#,
+            ),
+            (
+                "shared_secret",
+                r#"
+                    [bridge]
+                    shared_secret = "bridge-file-secret"
+                "#,
+            ),
+            (
+                "password_hash",
+                r#"
+                    [web]
+                    password_hash = "$argon2id$v=19$not-a-real-hash"
+                "#,
+            ),
+            (
+                "discord_webhook",
+                r#"
+                    [notify]
+                    discord_webhook = "https://discord.example/webhook/file-secret"
+                "#,
+            ),
+            (
+                "generic_webhook",
+                r#"
+                    [notify]
+                    generic_webhook = "https://example.test/hook/file-secret"
+                "#,
+            ),
+        ];
 
-            [database]
-            url = "mysql://user:file-password@host/db"
-
-            [bridge]
-            shared_secret = "bridge-file-secret"
-
-            [web]
-            password_hash = "$argon2id$v=19$not-a-real-hash"
-
-            [notify]
-            discord_webhook = "https://discord.example/webhook/file-secret"
-            generic_webhook = "https://example.test/hook/file-secret"
-        "#;
-
-        let error = toml::from_str::<Config>(text).unwrap_err().to_string();
-        assert!(error.contains("gslt"), "{error}");
+        for (field, text) in cases {
+            let error = toml::from_str::<Config>(text).unwrap_err().to_string();
+            assert!(error.contains(field), "{field}: {error}");
+        }
     }
 
     #[test]
