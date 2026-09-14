@@ -46,6 +46,15 @@ They are optional diagnostics, not Cellar's interpretation of the game.
 
 ## Local and published servers
 
+The repository includes a fully populated native-Linux reference at
+[`configs/applejack-framework.toml`](../../configs/applejack-framework.toml)
+and its profile at
+[`configs/profiles/applejack-framework.toml`](../../configs/profiles/applejack-framework.toml).
+Copy them into a deployment-specific directory, then change the `/srv` and
+`/mnt` paths, database URL file, release commands, and secret inputs. The
+reference enables persistence and verified off-disk copies so the backup and
+restore workflow is visible in one place.
+
 Use `server.project` for a local `.sbproj` and `server.game` for a published
 package. Give each mode the data directory that the running package reads.
 Do not share one data directory between local and published modes unless the

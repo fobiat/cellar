@@ -40,6 +40,11 @@ cellar status     # inspect a running Cellar instance
 | **[Facepunch Sandbox](docs/FACEPUNCH-SANDBOX.md)** | The shipped generic profile example. |
 | **[AppleJack Framework integration](docs/integrations/applejack-framework.md)** | Optional profile and workflow notes for AppleJack Framework. |
 
+The repository also carries a [fully populated AppleJack Framework Cellar
+config](configs/applejack-framework.toml) for reference. It defaults to native
+Linux, keeps secrets outside TOML, and shows persistence plus verified backup
+copies.
+
 The [docs/README.md](docs/README.md) explains the documentation layout. The
 AppleJack Framework page is an integration guide, not a Cellar dependency.
 
