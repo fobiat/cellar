@@ -63,7 +63,7 @@ tempfile = "3"
 # zip; MariaDB has no such bare-binary option, it is a directory tree of
 # binaries, libraries and shared data, so there is no single-file
 # alternative here.
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 rmcp = { version = "3.1.4", default-features = false, features = [
   "server",
   "client",
