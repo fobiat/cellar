@@ -679,9 +679,25 @@ pub struct WebConfig {
     pub allow_insecure_http: bool,
     /// Mark operator cookies Secure when TLS is terminated before Cellar.
     pub secure_cookies: bool,
+    /// Expose the operator UI on the host's Tailscale address when available.
+    #[serde(default)]
+    pub tailscale: TailscaleWebConfig,
     /// Argon2 hash of the operator password, from `CELLAR_WEB_PASSWORD_HASH`.
     #[serde(skip_serializing, skip_deserializing)]
     pub password_hash: Option<Secret>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct TailscaleWebConfig {
+    /// Automatically add a listener on the local Tailscale IPv4 address.
+    pub enabled: bool,
+}
+
+impl Default for TailscaleWebConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 /// Authentication policy for the web UI.
@@ -705,6 +721,7 @@ impl Default for WebConfig {
             auth: WebAuthMode::default(),
             allow_insecure_http: false,
             secure_cookies: false,
+            tailscale: TailscaleWebConfig::default(),
             password_hash: None,
         }
     }

@@ -222,6 +222,13 @@ secure_cookies = true
 Cellar refuses to start on a non-loopback address without
 `CELLAR_WEB_PASSWORD_HASH`. That is deliberate and not overridable.
 
+When Tailscale is detected, Cellar can also add a listener on its Tailscale
+IPv4 address. That listener is enabled by default only when web auth is not
+`none` and the same password hash is configured. Every request still requires
+the operator session.
+Disable it with `tailscale.enabled = false` when direct tailnet access is not
+wanted.
+
 ---
 
 ## Where to go next

@@ -29,6 +29,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/logs", get(logs))
         .route("/api/configs", get(configs))
         .route("/api/configs/activate", post(activate_config))
+        .route(
+            "/api/web/tailscale",
+            get(tailscale_web).post(set_tailscale_web),
+        )
         .route("/api/release/{action}", post(release))
         .route("/api/exec", post(exec))
         .route("/api/control/kill", post(kill))
@@ -874,6 +878,12 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator, target: Target)
             "mode": state.web_auth,
             "password_configured": state.web_password().is_some(),
         },
+        "web_tailscale": {
+            "configured": state.web_tailscale_configured,
+            "enabled": state.web_tailscale_is_enabled(),
+            "bind": state.web_tailscale_bind(),
+            "password_configured": state.web_password().is_some(),
+        },
     }))
     .into_response()
 }
@@ -892,6 +902,16 @@ async fn addresses(state: &AppState) -> Vec<serde_json::Value> {
     }
     if state.web_enabled {
         result.push(address("Cellar web", &state.web_bind, &tailscale_ip, true));
+    }
+    if let Some(bind) = state.web_tailscale_bind()
+        && state.web_tailscale_is_enabled()
+    {
+        result.push(address(
+            "Cellar web (Tailscale)",
+            &bind,
+            &tailscale_ip,
+            true,
+        ));
     }
     if state.bridge_enabled()
         && let Some(bind) = state.bridge_bind()
@@ -962,38 +982,50 @@ fn address(
 }
 
 async fn tailscale_ip() -> Option<String> {
-    let mut commands = vec!["tailscale".to_owned()];
-    if cfg!(windows) {
-        commands.extend([
-            r"C:\Program Files\Tailscale\tailscale.exe".to_owned(),
-            r"C:\Program Files (x86)\Tailscale\tailscale.exe".to_owned(),
-        ]);
-    }
+    crate::tailscale::ip().await
+}
 
-    for command in commands {
-        let output = tokio::time::timeout(
-            std::time::Duration::from_millis(700),
-            tokio::process::Command::new(command)
-                .args(["ip", "-4"])
-                .output(),
-        )
-        .await
-        .ok()
-        .and_then(Result::ok);
-        let Some(output) = output else { continue };
-        if output.status.success()
-            && let Some(ip) = String::from_utf8(output.stdout).ok().and_then(|value| {
-                value
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())
-                    .map(str::to_owned)
-            })
-        {
-            return Some(ip);
-        }
+async fn tailscale_web(State(state): State<Arc<AppState>>, _: Operator) -> Response {
+    Json(serde_json::json!({
+        "configured": state.web_tailscale_configured,
+        "enabled": state.web_tailscale_is_enabled(),
+        "bind": state.web_tailscale_bind(),
+        "password_configured": state.web_password().is_some(),
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct TailscaleWebRequest {
+    enabled: bool,
+}
+
+async fn set_tailscale_web(
+    State(state): State<Arc<AppState>>,
+    operator: Operator,
+    Json(request): Json<TailscaleWebRequest>,
+) -> Response {
+    if request.enabled && state.web_tailscale_bind().is_none() {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Tailscale was not detected or the web UI password is not configured; restart Cellar after fixing that",
+        );
     }
-    None
+    state
+        .web_tailscale_enabled
+        .store(request.enabled, std::sync::atomic::Ordering::Relaxed);
+    record_action(
+        &state,
+        &operator,
+        "tailscale web access",
+        if request.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+    )
+    .await;
+    Json(serde_json::json!({ "enabled": request.enabled })).into_response()
 }
 
 /// The AppleJack invite gate and its SteamID64 allowlist.

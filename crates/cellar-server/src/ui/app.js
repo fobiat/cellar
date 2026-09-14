@@ -34,7 +34,7 @@ let consoleRecords = [];
 let consolePaused = false;
 let consoleAutoScroll = true;
 let buildDriftState = "";
-let activeTab = "dispatch";
+let activeTab = "overview";
 let serviceWorker = null;
 
 /* A queue, not a single slot. Killing a server produces several failures at
@@ -249,6 +249,81 @@ let databaseDirectControl = false;
 let commandHistory = [];
 let historyCursor = 0;
 
+const OVERVIEW_MODULES = [
+  { id: "health", label: "Server health", tab: "monitoring" },
+  { id: "identity", label: "Server identity", tab: "dispatch" },
+  { id: "players", label: "Players", tab: "players" },
+  { id: "player-history", label: "Player history", tab: "players", sub: "history" },
+  { id: "access", label: "Access gate", tab: "players", sub: "access" },
+  { id: "resources", label: "Resources", tab: "monitoring" },
+  { id: "timings", label: "Frame timings", tab: "monitoring" },
+  { id: "addresses", label: "Network addresses", tab: "monitoring" },
+  { id: "anti-cheat", label: "Anti-cheat", tab: "monitoring" },
+  { id: "console", label: "Console", tab: "dispatch" },
+  { id: "commands", label: "Gamemode commands", tab: "dispatch" },
+  { id: "storage", label: "Storage", tab: "database" },
+  { id: "documents", label: "Game documents", tab: "records" },
+  { id: "activity", label: "Activity", tab: "activity" },
+  { id: "diagnostics", label: "Diagnostics", tab: "diagnostics" },
+  { id: "jobs", label: "Scheduled jobs", tab: "diagnostics" },
+  { id: "profile", label: "Gamemode profile", tab: "config", sub: "profile" },
+  { id: "convars", label: "Gamemode settings", tab: "config", sub: "convars" },
+  { id: "build", label: "Build and updates", tab: "config", sub: "build" },
+  { id: "web-access", label: "Web access", tab: "settings" },
+  { id: "backups", label: "Database backups", tab: "settings" },
+  { id: "persistence", label: "Persistence backups", tab: "settings" },
+];
+const OVERVIEW_LAYOUT_KEY = "cellar.overview.layout";
+const OVERVIEW_COLUMNS = 12;
+const OVERVIEW_MIN_SPAN = 3;
+const DEFAULT_OVERVIEW_LAYOUT = [
+  { id: "health", span: 4 },
+  { id: "players", span: 4 },
+  { id: "resources", span: 4 },
+  { id: "console", span: 8 },
+  { id: "storage", span: 4 },
+  { id: "activity", span: 4 },
+];
+let overviewLayout = readOverviewLayout();
+let overviewEditMode = false;
+let overviewDragId = null;
+let overviewResize = null;
+
+function overviewModule(id) {
+  return OVERVIEW_MODULES.find((module) => module.id === id);
+}
+
+function overviewSpan(value) {
+  const span = Number(value);
+  if (!Number.isFinite(span)) return 4;
+  return Math.max(OVERVIEW_MIN_SPAN, Math.min(OVERVIEW_COLUMNS, Math.round(span)));
+}
+
+function normaliseOverviewLayout(saved) {
+  if (!Array.isArray(saved)) return [...DEFAULT_OVERVIEW_LAYOUT.map((entry) => ({ ...entry }))];
+  const entries = saved.map((entry) => {
+    if (typeof entry === "string") return { id: entry, span: 4 };
+    return { id: entry?.id, span: overviewSpan(entry?.span) };
+  });
+  const valid = entries.filter((entry) => overviewModule(entry.id));
+  return valid.filter((entry, index) => valid.findIndex((candidate) => candidate.id === entry.id) === index);
+}
+
+function readOverviewLayout() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(OVERVIEW_LAYOUT_KEY) || "null");
+    if (Array.isArray(saved)) return normaliseOverviewLayout(saved);
+    if (Array.isArray(saved?.modules)) return normaliseOverviewLayout(saved.modules);
+  } catch {}
+  return normaliseOverviewLayout(null);
+}
+
+function saveOverviewLayout() {
+  try {
+    localStorage.setItem(OVERVIEW_LAYOUT_KEY, JSON.stringify({ version: 2, modules: overviewLayout }));
+  } catch {}
+}
+
 /* What Tab completes from: the gamemode's declared and engine-discovered
  * commands, plus what has been typed here before. */
 function completions() {
@@ -260,6 +335,379 @@ function completions() {
 
 function instanceId() {
   return selectedInstance;
+}
+
+function renderOverviewEditor() {
+  const target = $("#overview-layout");
+  if (!target) return;
+  const editor = $("#overview-editor-panel");
+  if (editor) editor.hidden = !overviewEditMode;
+  const customize = $("#overview-customize");
+  const reset = $("#overview-reset");
+  const hint = $("#overview-layout-hint");
+  const status = $("#overview-layout-status");
+  if (customize) {
+    customize.setAttribute("aria-pressed", String(overviewEditMode));
+    customize.textContent = overviewEditMode ? "Done editing" : "Edit layout";
+  }
+  if (reset) reset.hidden = !overviewEditMode;
+  if (hint) {
+    hint.textContent = overviewEditMode
+      ? "Drag a card to move it. Drag its resize handle to change its width."
+      : "Your overview is ready. Customize it to arrange cards and choose what stays visible.";
+  }
+  if (status) {
+    status.textContent = `${overviewLayout.length} module${overviewLayout.length === 1 ? "" : "s"} shown`;
+  }
+  target.replaceChildren();
+  for (const module of OVERVIEW_MODULES) {
+    const row = el("div", "overview-layout-row");
+    const label = el("label", "overview-layout-label");
+    const checkbox = el("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = overviewLayout.some((entry) => entry.id === module.id);
+    checkbox.onchange = () => {
+      if (checkbox.checked) overviewLayout.push({ id: module.id, span: 4 });
+      else overviewLayout = overviewLayout.filter((entry) => entry.id !== module.id);
+      overviewLayout = normaliseOverviewLayout(overviewLayout);
+      saveOverviewLayout();
+      renderOverviewEditor();
+      renderOverviewCards();
+    };
+    label.append(checkbox, el("span", null, module.label));
+    row.append(label);
+    const entry = overviewLayout.find((candidate) => candidate.id === module.id);
+    if (entry && overviewEditMode) {
+      const position = overviewLayout.findIndex((candidate) => candidate.id === module.id);
+      const up = el("button", "chip", "earlier");
+      up.type = "button";
+      up.disabled = position === 0;
+      up.setAttribute("aria-label", `Move ${module.label} earlier`);
+      up.onclick = () => moveOverviewModule(module.id, -1);
+      const down = el("button", "chip", "later");
+      down.type = "button";
+      down.disabled = position === overviewLayout.length - 1;
+      down.setAttribute("aria-label", `Move ${module.label} later`);
+      down.onclick = () => moveOverviewModule(module.id, 1);
+      row.append(el("span", "overview-layout-size", `${entry.span}/12`), up, down);
+    }
+    target.append(row);
+  }
+}
+
+function moveOverviewModule(id, direction) {
+  const index = overviewLayout.findIndex((entry) => entry.id === id);
+  const next = index + direction;
+  if (index < 0 || next < 0 || next >= overviewLayout.length) return;
+  [overviewLayout[index], overviewLayout[next]] = [overviewLayout[next], overviewLayout[index]];
+  saveOverviewLayout();
+  renderOverviewEditor();
+  renderOverviewCards();
+}
+
+function resetOverviewLayout() {
+  overviewLayout = normaliseOverviewLayout(null);
+  saveOverviewLayout();
+  renderOverviewEditor();
+  renderOverviewCards();
+}
+
+function setOverviewEditMode(enabled) {
+  overviewEditMode = enabled;
+  document.body.classList.toggle("overview-editing", enabled);
+  renderOverviewEditor();
+  renderOverviewCards();
+}
+
+function overviewGridStep(grid) {
+  const style = getComputedStyle(grid);
+  const gap = Number.parseFloat(style.columnGap) || 12;
+  const width = grid.getBoundingClientRect().width;
+  const columns = style.gridTemplateColumns.split(" ").filter(Boolean).length || OVERVIEW_COLUMNS;
+  return (width - gap * (columns - 1)) / columns + gap;
+}
+
+function overviewGridColumns() {
+  if (window.innerWidth <= 680) return 1;
+  if (window.innerWidth <= 1100) return 6;
+  return OVERVIEW_COLUMNS;
+}
+
+function overviewRenderSpan(span) {
+  const columns = overviewGridColumns();
+  if (columns === OVERVIEW_COLUMNS) return span;
+  if (columns === 1) return 1;
+  return Math.max(3, Math.min(columns, Math.round(span / 2)));
+}
+
+function updateOverviewResize(event) {
+  if (!overviewResize) return;
+  const columns = overviewGridColumns();
+  const delta = Math.round((event.clientX - overviewResize.startX) / overviewGridStep(overviewResize.grid));
+  const desktopDelta = columns === OVERVIEW_COLUMNS ? delta : delta * (OVERVIEW_COLUMNS / columns);
+  const span = overviewSpan(overviewResize.startSpan + desktopDelta);
+  const entry = overviewLayout.find((candidate) => candidate.id === overviewResize.id);
+  if (!entry) return;
+  entry.span = span;
+  overviewResize.card.style.setProperty("--overview-span", String(span));
+  overviewResize.label.textContent = `${span}/12 columns`;
+}
+
+function finishOverviewResize() {
+  if (!overviewResize) return;
+  window.removeEventListener("pointermove", updateOverviewResize);
+  window.removeEventListener("pointerup", finishOverviewResize);
+  document.body.classList.remove("overview-resizing");
+  saveOverviewLayout();
+  overviewResize = null;
+  renderOverviewEditor();
+  renderOverviewCards();
+}
+
+function startOverviewResize(event, id, card, label) {
+  if (!overviewEditMode) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const entry = overviewLayout.find((candidate) => candidate.id === id);
+  if (!entry) return;
+  overviewResize = { id, card, label, grid: $("#overview-grid"), startX: event.clientX, startSpan: entry.span };
+  document.body.classList.add("overview-resizing");
+  window.addEventListener("pointermove", updateOverviewResize);
+  window.addEventListener("pointerup", finishOverviewResize, { once: true });
+}
+
+function finishOverviewDrag() {
+  overviewDragId = null;
+  document.querySelectorAll(".overview-card.dragging, .overview-card.drag-over")
+    .forEach((card) => card.classList.remove("dragging", "drag-over"));
+}
+
+function reorderOverviewModule(targetId, event) {
+  if (!overviewDragId || overviewDragId === targetId) return;
+  const from = overviewLayout.findIndex((entry) => entry.id === overviewDragId);
+  const target = overviewLayout.findIndex((entry) => entry.id === targetId);
+  if (from < 0 || target < 0) return;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const before = event.clientY < rect.top + rect.height / 2
+    || (event.clientY <= rect.bottom && event.clientX < rect.left + rect.width / 2);
+  const [entry] = overviewLayout.splice(from, 1);
+  let insertion = overviewLayout.findIndex((candidate) => candidate.id === targetId);
+  if (!before) insertion += 1;
+  overviewLayout.splice(insertion, 0, entry);
+  saveOverviewLayout();
+  finishOverviewDrag();
+  renderOverviewEditor();
+  renderOverviewCards();
+}
+
+function renderOverviewCards() {
+  const target = $("#overview-grid");
+  if (!target) return;
+  target.replaceChildren();
+  target.classList.toggle("is-editing", overviewEditMode);
+  const data = lastStatus || {};
+  const server = data.server;
+  const modules = {
+    health: () => {
+      const body = el("div", "overview-reading");
+      const lamp = { running: "up", starting: "wait", unhealthy: "warn", stopped: "down" }[server?.state] || "wait";
+      body.append(el("p", `overview-value lamp ${lamp}`, server ? stateLabel(server) : "waiting"));
+      body.append(el("p", "muted small", server?.hostname || "No supervised server"));
+      return body;
+    },
+    players: () => {
+      const players = server?.players || [];
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", `${players.length}/${server?.max_players || "—"}`));
+      body.append(el("p", "muted small", players.slice(0, 4).map((player) => player.name).join(", ") || "No connected players"));
+      return body;
+    },
+    resources: () => {
+      const resource = server?.resources;
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", resource ? `${formatBytes(resource.memory_bytes)} · ${processCpuAverage(resource).toFixed(0)}% CPU` : "waiting"));
+      body.append(el("p", "muted small", resource ? `${resource.cpu_core_count || "—"} logical cores · host ${percent(resource.host_memory_percent)} memory` : "No resource sample yet"));
+      return body;
+    },
+    console: () => {
+      const body = el("div", "overview-reading overview-console");
+      const lines = consoleRecords.slice(-3);
+      body.append(el("pre", null, lines.map((line) => `${line.who}: ${line.message}`).join("\n") || "No console output yet"));
+      return body;
+    },
+    storage: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.database ? "Database connected" : "Database off"));
+      body.append(el("p", "muted small", `Bridge ${data.bridge?.healthy ? "healthy" : "off"} · backups ${data.backup?.enabled ? "on" : "off"} · persistence ${data.persistence?.enabled ? "on" : "off"}`));
+      return body;
+    },
+    activity: () => {
+      const body = el("div", "overview-reading");
+      const latest = consoleRecords[consoleRecords.length - 1];
+      body.append(el("p", "overview-value", latest ? latest.kind : "quiet"));
+      body.append(el("p", "muted small", latest ? `${latest.who}: ${latest.message}` : "No recent activity"));
+      return body;
+    },
+    diagnostics: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value lamp up", data.health ? "Live checks available" : "Waiting"));
+      body.append(el("p", "muted small", "Open Diagnostics for the complete preflight and runtime report."));
+      return body;
+    },
+    config: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.game || "Gamemode unknown"));
+      body.append(el("p", "muted small", `${data.mode || "mode unknown"} · ${data.scope || "scope unknown"}`));
+      return body;
+    },
+    identity: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", server?.hostname || "No supervised server"));
+      body.append(el("p", "muted small", `${data.game || "gamemode unknown"} · ${data.scope || "scope unknown"}`));
+      return body;
+    },
+    "player-history": () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", `${playerHistory.size} tracked`));
+      body.append(el("p", "muted small", "Open Player history for joins, leaves, and playtime."));
+      return body;
+    },
+    access: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.access?.invite_only ? "Invite only" : "Public"));
+      body.append(el("p", "muted small", "Open Access gate to manage the allowlist."));
+      return body;
+    },
+    timings: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", timingHistory.length ? "Collecting" : "Waiting"));
+      body.append(el("p", "muted small", "Frame timing history is available in Monitoring."));
+      return body;
+    },
+    addresses: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", `${(data.addresses || []).length} addresses`));
+      body.append(el("p", "muted small", "Local, tailnet, game, and query endpoints."));
+      return body;
+    },
+    "anti-cheat": () => {
+      const body = el("div", "overview-reading");
+      const antiCheat = data.anti_cheat || {};
+      const lamp = antiCheat.state === "enabled" ? "up" : antiCheat.state === "disabled" ? "down" : "wait";
+      body.append(el("p", `overview-value lamp ${lamp}`, antiCheat.state || "unknown"));
+      body.append(el("p", "muted small", antiCheat.summary || "No anti-cheat signal found."));
+      return body;
+    },
+    commands: () => {
+      const body = el("div", "overview-reading");
+      const current = knownInstances.find((entry) => entry.id === selectedInstance) || knownInstances[0];
+      const profile = current?.profile || {};
+      body.append(el("p", "overview-value", `${(profile.command || []).length} available`));
+      body.append(el("p", "muted small", `${profile.name || "Gamemode"} commands from this instance profile.`));
+      return body;
+    },
+    documents: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.bridge?.enabled ? "Bridge available" : "Bridge off"));
+      body.append(el("p", "muted small", "Open Game documents to browse persistence data."));
+      return body;
+    },
+    jobs: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", "Scheduler"));
+      body.append(el("p", "muted small", "Open Diagnostics to inspect and run scheduled jobs."));
+      return body;
+    },
+    profile: () => {
+      const body = el("div", "overview-reading");
+      const current = knownInstances.find((entry) => entry.id === selectedInstance) || knownInstances[0];
+      body.append(el("p", "overview-value", current?.profile?.name || "Gamemode profile"));
+      body.append(el("p", "muted small", "Readiness, maps, checks, and command declarations."));
+      return body;
+    },
+    convars: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", "Live settings"));
+      body.append(el("p", "muted small", "Open Gamemode settings to inspect the live catalogue."));
+      return body;
+    },
+    build: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.cellar?.version || "Build unknown"));
+      body.append(el("p", "muted small", "Open Build and updates for version drift and release actions."));
+      return body;
+    },
+    "web-access": () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.web_auth?.password_configured ? "Password protected" : "Local only"));
+      body.append(el("p", "muted small", "Web UI authentication and Tailscale access."));
+      return body;
+    },
+    backups: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.backup?.enabled ? "Enabled" : "Off"));
+      body.append(el("p", "muted small", "Database backup and restore controls."));
+      return body;
+    },
+    persistence: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.persistence?.enabled ? "Enabled" : "Off"));
+      body.append(el("p", "muted small", "Document snapshot backup and restore controls."));
+      return body;
+    },
+  };
+  for (const entry of overviewLayout) {
+    const module = overviewModule(entry.id);
+    if (!module || !modules[entry.id]) continue;
+    const card = el("article", "panel overview-card");
+    card.dataset.overviewId = module.id;
+    card.style.setProperty("--overview-span", String(overviewRenderSpan(entry.span)));
+    card.dataset.overviewSpan = String(entry.span);
+    card.draggable = overviewEditMode;
+    card.addEventListener("dragstart", (event) => {
+      if (!overviewEditMode) return;
+      overviewDragId = module.id;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", module.id);
+      card.classList.add("dragging");
+    });
+    card.addEventListener("dragover", (event) => {
+      if (!overviewDragId || overviewDragId === module.id) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      card.classList.add("drag-over");
+    });
+    card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
+    card.addEventListener("drop", (event) => {
+      event.preventDefault();
+      reorderOverviewModule(module.id, event);
+    });
+    card.addEventListener("dragend", finishOverviewDrag);
+    const heading = el("div", "overview-card-heading");
+    const title = el("h2", null, module.label);
+    if (overviewEditMode) {
+      const dragHint = el("span", "overview-drag-hint", "drag to move");
+      dragHint.setAttribute("aria-hidden", "true");
+      title.append(" ", dragHint);
+    }
+    heading.append(title);
+    const open = el("button", "chip", "open");
+    open.type = "button";
+    open.onclick = () => showTab(module.tab, true, module.sub);
+    heading.append(open);
+    card.append(heading, el("div", "body", modules[entry.id]()));
+    if (overviewEditMode) {
+      const resize = el("button", "overview-resize-handle", "resize");
+      resize.type = "button";
+      resize.setAttribute("aria-label", `Resize ${module.label}`);
+      resize.title = "Drag to resize this module";
+      const size = el("span", "overview-size-label", `${entry.span}/12 columns`);
+      resize.append(size);
+      resize.addEventListener("pointerdown", (event) => startOverviewResize(event, module.id, card, size));
+      card.append(resize);
+    }
+    target.append(card);
+  }
 }
 
 /* ---- the instance strip -------------------------------------------------- */
@@ -445,7 +893,7 @@ function readRoute() {
 
   const instance = parts[0] === "i" && parts.length >= 2 ? parts[1] : null;
   const rest = instance ? parts.slice(2) : parts;
-  const tab = rest[0] || "dispatch";
+  const tab = rest[0] || "overview";
 
   /* Only a route with no sub-tab can have moved: `#/players/access` is a
    * current route that happens to start with a name that also used to mean
@@ -479,7 +927,7 @@ function activeSub(tab) {
 function applyRoute() {
   const route = readRoute();
   const known = TAB_LOADERS[route.tab] || document.getElementById(`tab-${route.tab}`);
-  const tab = known ? route.tab : "dispatch";
+  const tab = known ? route.tab : "overview";
   if (route.instance && route.instance !== selectedInstance
       && knownInstances.some((entry) => entry.id === route.instance)) {
     selectInstance(route.instance, tab, route.sub);
@@ -577,6 +1025,7 @@ function tablistKey(event) {
  * A sub-tab is keyed `tab/sub` and is loaded when it is shown, so opening
  * Players does not fetch the allowlist of a panel nobody is looking at. */
 const TAB_LOADERS = {
+  overview: { what: "status", into: null, run: () => refreshStatus() },
   records: { what: "documents", into: "#documents", run: () => loadDocuments() },
   database: { what: "the database", into: "#tables", run: () => loadDatabase() },
   settings: {
@@ -1521,8 +1970,10 @@ async function refreshStatus() {
   renderAddresses(data.addresses);
   renderAntiCheat(data.anti_cheat);
   renderWebAuth(data.web_auth);
+  renderTailscaleWeb(data.web_tailscale);
   const access = data.access || {};
   setLamp($("#stat-access"), access.invite_only ? "up" : "wait", access.invite_only ? "invite-only" : "public");
+  renderOverviewCards();
 }
 
 /* Which server the console below belongs to, said in full.
@@ -1620,6 +2071,40 @@ function renderWebAuth(auth) {
     target.className = "notice up";
     target.textContent = `Password authentication is configured for ${text(auth.bind)}.`;
   }
+}
+
+function renderTailscaleWeb(details) {
+  const policy = $("#tailscale-web-policy");
+  const toggle = $("#tailscale-web-toggle");
+  if (!policy || !toggle || !details) return;
+  policy.replaceChildren();
+  const facts = [
+    ["configured", details.configured ? "automatic" : "off"],
+    ["listener", details.bind || "not detected"],
+    ["password", details.password_configured ? "configured" : "required"],
+  ];
+  for (const [label, value] of facts) {
+    const item = el("div");
+    item.append(el("span", "muted small", label));
+    item.append(el("strong", null, value));
+    policy.append(item);
+  }
+  toggle.disabled = !details.bind;
+  toggle.textContent = details.enabled ? "Disable Tailscale web access" : "Enable Tailscale web access";
+  toggle.onclick = async () => {
+    toggle.disabled = true;
+    const response = await fetch("/api/web/tailscale", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: !details.enabled }),
+    });
+    const data = await response.json().catch(() => ({}));
+    $("#tailscale-web-notice").textContent = response.ok
+      ? `Tailscale web access ${data.enabled ? "enabled" : "disabled"}.`
+      : text(data.error || "Cellar could not change Tailscale web access.");
+    if (response.ok) refreshStatus();
+    else toggle.disabled = false;
+  };
 }
 
 async function refreshBuildHealth() {
@@ -1885,7 +2370,7 @@ function appendLine(kind, at, who, message, live = false, level = "info", catego
   if (!node) return;
 
   const console_ = $("#console");
-  const pinned = consoleAutoScroll || console_.scrollTop + console_.clientHeight >= console_.scrollHeight - 40;
+  const pinned = consoleAutoScroll;
   console_.append(node);
   while (console_.children.length > 1500) console_.firstChild.remove();
   if (pinned) console_.scrollTop = console_.scrollHeight;
@@ -2639,7 +3124,14 @@ async function start() {
       await loadInstances();
     }
   });
-  showTab(document.getElementById(`tab-${route.tab}`) ? route.tab : "dispatch", false, route.sub);
+  $("#overview-customize")?.addEventListener("click", () => setOverviewEditMode(!overviewEditMode));
+  $("#overview-reset")?.addEventListener("click", resetOverviewLayout);
+  window.addEventListener("resize", () => {
+    if (!overviewResize && !overviewDragId) renderOverviewCards();
+  });
+  renderOverviewEditor();
+  renderOverviewCards();
+  showTab(document.getElementById(`tab-${route.tab}`) ? route.tab : "overview", false, route.sub);
   window.addEventListener("hashchange", applyRoute);
   // Null: a failure here must not replace the console, which is where the
   // operator is reading the very lines that explain the failure.

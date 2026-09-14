@@ -25,6 +25,15 @@ use axum::http::request::Parts;
 
 use cellar_core::config::WebAuthMode;
 
+pub fn password_required(state: &crate::state::AppState) -> bool {
+    !cellar_core::config::binds_loopback(&state.web_bind)
+        || match state.web_auth {
+            WebAuthMode::Password => true,
+            WebAuthMode::None => false,
+            WebAuthMode::Auto => state.web_password().is_some(),
+        }
+}
+
 /// How long a session lasts without being used.
 const SESSION_TTL: Duration = Duration::from_secs(12 * 3600);
 const SESSION_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -257,13 +266,7 @@ where
         use axum::extract::FromRef;
         let state = std::sync::Arc::<crate::state::AppState>::from_ref(state);
 
-        let requires_password = match state.web_auth {
-            WebAuthMode::Password => true,
-            WebAuthMode::None => false,
-            WebAuthMode::Auto => state.web_password().is_some(),
-        };
-
-        if !requires_password {
+        if !password_required(&state) {
             return Ok(Operator {
                 name: "local".to_owned(),
             });

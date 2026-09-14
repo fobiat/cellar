@@ -64,25 +64,26 @@
        config, where a selector with one option is noise. -->
   <nav class="instances" id="instance-strip" role="tablist" aria-label="servers" hidden></nav>
 
-  <div class="strip" aria-live="off">
-    <div class="stat"><div class="label">Server</div><div class="value lamp wait" id="stat-state">…</div></div>
-    <div class="stat"><div class="label">Players</div><div class="value" id="stat-players">—</div></div>
-    <div class="stat"><div class="label">Uptime</div><div class="value" id="stat-uptime">—</div></div>
-    <div class="stat"><div class="label">Memory</div><div class="value" id="stat-memory">—</div></div>
-    <div class="stat"><div class="label">CPU</div><div class="value" id="stat-cpu">—</div></div>
-    <div class="stat"><div class="label">Console</div><div class="value lamp wait" id="stat-console">…</div></div>
-    <div class="stat"><div class="label">Bridge</div><div class="value lamp wait" id="stat-bridge">…</div></div>
-    <div class="stat"><div class="label">Database</div><div class="value lamp wait" id="stat-mariadb">…</div></div>
-    <div class="stat"><div class="label">Backups</div><div class="value lamp wait" id="stat-backup">…</div></div>
-    <div class="stat"><div class="label">Persistence</div><div class="value lamp wait" id="stat-persistence">…</div></div>
-    <div class="stat"><div class="label">Map</div><div class="value lamp wait" id="stat-map">…</div></div>
-    <div class="stat"><div class="label">Access</div><div class="value lamp wait" id="stat-access">…</div></div>
-    <div class="stat"><div class="label">Build</div><div class="value lamp wait" id="stat-build">…</div></div>
-    <div class="stat"><div class="label">Anti-cheat</div><div class="value lamp wait" id="stat-anti-cheat">…</div></div>
+  <div class="strip" aria-live="off" role="region" aria-label="server status overview">
+    <div class="stat" data-priority="core"><div class="label">Server</div><div class="value lamp wait" id="stat-state">…</div></div>
+    <div class="stat" data-priority="core"><div class="label">Players</div><div class="value" id="stat-players">—</div></div>
+    <div class="stat" data-priority="core"><div class="label">Uptime</div><div class="value" id="stat-uptime">—</div></div>
+    <div class="stat" data-priority="core"><div class="label">Memory</div><div class="value" id="stat-memory">—</div></div>
+    <div class="stat" data-priority="core"><div class="label">CPU</div><div class="value" id="stat-cpu">—</div></div>
+    <div class="stat" data-priority="core"><div class="label">Console</div><div class="value lamp wait" id="stat-console">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Bridge</div><div class="value lamp wait" id="stat-bridge">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Database</div><div class="value lamp wait" id="stat-mariadb">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Backups</div><div class="value lamp wait" id="stat-backup">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Persistence</div><div class="value lamp wait" id="stat-persistence">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Map</div><div class="value lamp wait" id="stat-map">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Access</div><div class="value lamp wait" id="stat-access">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Build</div><div class="value lamp wait" id="stat-build">…</div></div>
+    <div class="stat" data-priority="secondary"><div class="label">Anti-cheat</div><div class="value lamp wait" id="stat-anti-cheat">…</div></div>
   </div>
 
   <nav class="tabs" role="tablist" aria-label="sections">
-    <button role="tab" id="tabfor-dispatch" data-tab="dispatch" aria-controls="tab-dispatch" aria-selected="true" tabindex="0">Dispatch</button>
+    <button role="tab" id="tabfor-overview" data-tab="overview" aria-controls="tab-overview" aria-selected="true" tabindex="0">Overview</button>
+    <button role="tab" id="tabfor-dispatch" data-tab="dispatch" aria-controls="tab-dispatch" aria-selected="false" tabindex="-1">Dispatch</button>
     <button role="tab" id="tabfor-monitoring" data-tab="monitoring" aria-controls="tab-monitoring" aria-selected="false" tabindex="-1">Monitoring</button>
     <button role="tab" id="tabfor-players" data-tab="players" aria-controls="tab-players" aria-selected="false" tabindex="-1">Players</button>
     <button role="tab" id="tabfor-database" data-tab="database" aria-controls="tab-database" aria-selected="false" tabindex="-1">Database</button>
@@ -94,6 +95,31 @@
   </nav>
 
   <main id="main" tabindex="-1">
+
+    <section id="tab-overview" role="tabpanel" aria-labelledby="tabfor-overview" tabindex="-1">
+      <div class="panel" id="overview-control-panel">
+        <h2>Personal overview</h2>
+        <div class="body">
+          <div class="overview-toolbar">
+            <div>
+              <p class="overview-layout-status" id="overview-layout-status">6 modules shown</p>
+              <p class="muted small" id="overview-layout-hint">Your overview is ready. Customize it to arrange cards and choose what stays visible.</p>
+            </div>
+            <div class="overview-toolbar-actions">
+              <button class="action" id="overview-customize" type="button" aria-pressed="false">Edit layout</button>
+              <button class="chip" id="overview-reset" type="button" hidden>Reset default</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel" id="overview-editor-panel" hidden>
+        <h2>Choose overview modules</h2>
+        <div class="body">
+          <div id="overview-layout" class="overview-layout"></div>
+        </div>
+      </div>
+      <div id="overview-grid" class="overview-grid"></div>
+    </section>
 
     <!-- Dispatch: the live console. -->
     <section id="tab-dispatch" role="tabpanel" aria-labelledby="tabfor-dispatch" tabindex="-1">
@@ -545,6 +571,10 @@
         <h2>Web UI access</h2>
         <div class="body">
           <p id="web-auth-reminder" class="notice">Checking authentication posture…</p>
+          <div class="metric-grid" id="tailscale-web-policy"></div>
+          <p class="muted small">When Tailscale is available, Cellar can add a listener on this host's tailnet address. Tailnet traffic is encrypted, but the operator password still applies.</p>
+          <button class="action" id="tailscale-web-toggle" type="button" disabled>Checking Tailscale access…</button>
+          <p class="notice" id="tailscale-web-notice"></p>
         </div>
       </div>
 

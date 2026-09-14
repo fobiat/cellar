@@ -86,9 +86,7 @@ fn auth_notice(state: &AppState) -> String {
     }
 
     let reachable = !cellar_core::config::binds_loopback(&state.web_bind);
-    let password_ready = state.web_password().is_some();
-    let password_required = state.web_auth == WebAuthMode::Password
-        || (state.web_auth == WebAuthMode::Auto && password_ready);
+    let password_required = session::password_required(state);
 
     let (class, title, message) = if reachable && (!password_required || !state.web_secure_cookies)
     {
@@ -170,8 +168,7 @@ struct PasswordSetup {
 
 async fn auth_status(State(state): State<Arc<AppState>>) -> Response {
     let configured = state.web_password().is_some();
-    let password_required = state.web_auth == WebAuthMode::Password
-        || (state.web_auth == WebAuthMode::Auto && configured);
+    let password_required = session::password_required(&state);
     Json(serde_json::json!({
         "password_required": password_required,
         "password_configured": configured,
@@ -182,7 +179,7 @@ async fn auth_status(State(state): State<Arc<AppState>>) -> Response {
 
 async fn login(State(state): State<Arc<AppState>>, Json(login): Json<Login>) -> Response {
     let Some(hash) = state.web_password() else {
-        if state.web_auth == WebAuthMode::Password {
+        if session::password_required(&state) {
             return (
                 StatusCode::PRECONDITION_REQUIRED,
                 Json(serde_json::json!({ "ok": false, "setup_required": true })),

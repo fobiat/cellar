@@ -400,17 +400,19 @@ security claim is worse than an absent one.
 | --- | --- | --- |
 | `enabled` | `false` | Serve the dashboard and the control API. The shipped example turns this on. |
 | `bind` | `127.0.0.1:8081` | Listen address. |
-| `auth` | `password` | Requires the configured Argon2 password hash. On loopback, a fresh instance asks for the password in the browser and saves an owner-only hash. `none` is loopback-only, and `auto` is retained for explicit compatibility configurations. |
+| `auth` | `password` | Requires the configured Argon2 password hash. On loopback, a fresh instance asks for the password in the browser and saves an owner-only hash. `none` is loopback-only, and `auto` is retained for explicit compatibility configurations. The request boundary always requires a password session on a non-loopback listener. |
 | `allow_insecure_http` | `false` | Required for a non-loopback bind behind a TLS-terminating reverse proxy. |
 | `secure_cookies` | `false` | Required for a non-loopback bind so browser sessions are marked Secure. |
+| `tailscale.enabled` | `true` | When Tailscale is detected, `web.auth` is not `none`, and a web password is configured, add a listener on this host's Tailscale IPv4 address. The Settings tab can disable it for the current run. |
 | `password_hash` | from env | Argon2 hash from `cellar hash-password`. |
 
 `auth = "password"` accepts `CELLAR_WEB_PASSWORD_HASH` for automation. If it
 is absent on loopback, the first WebUI visit requires a password and saves the
 Argon2 hash in a hidden `.<config-name>.web-password` file with mode `0600`.
-`auth = "none"` is refused on a non-loopback bind. The console behind
-this page runs `ConVarSystem.Run` with `allowProtected: true`, which is full
-engine privilege.
+`auth = "none"` is refused on a non-loopback bind, and the request boundary
+enforces the same rule if an invalid runtime state reaches the server. The
+console behind this page runs `ConVarSystem.Run` with `allowProtected: true`,
+which is full engine privilege.
 
 `web.enabled` must be true for `cellar settings` to work at all, because those
 commands reach the running server through this API.
