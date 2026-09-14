@@ -126,6 +126,11 @@ test("covers the two instances, keyboard tabs, themes, mobile shell, and accessi
     scrollWidth: element.scrollWidth,
   }));
   expect(strip.scrollWidth).toBeLessThanOrEqual(strip.clientWidth + 1);
+  const tabs = await page.locator("nav.tabs").evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(tabs.scrollWidth).toBeLessThanOrEqual(tabs.clientWidth + 1);
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations.filter((violation) => ["serious", "critical"].includes(violation.impact))).toEqual([]);
 });
@@ -146,6 +151,7 @@ test("customizes the overview canvas and persists the layout", async ({ page }) 
 
   if ((page.viewportSize()?.width || 0) > 1100) {
     const healthResize = page.locator('[data-overview-id="health"] .overview-resize-handle');
+    await healthResize.scrollIntoViewIfNeeded();
     const box = await healthResize.boundingBox();
     if (!box) throw new Error("overview resize handle was not laid out");
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -162,13 +168,49 @@ test("customizes the overview canvas and persists the layout", async ({ page }) 
 
   await page.reload();
   await expect(page.locator('[data-overview-id="diagnostics"]')).toBeVisible();
+  await page.locator("#overview-customize").click();
+  await expect(page.locator('#overview-layout .overview-layout-row', { hasText: "Diagnostics" }).locator("input")).toBeChecked();
   if ((page.viewportSize()?.width || 0) > 1100) {
     await expect(page.locator('[data-overview-id="health"]')).not.toHaveAttribute("data-overview-span", "4");
   }
-  await page.locator("#overview-customize").click();
   await page.locator("#overview-reset").click();
   await expect(page.locator('[data-overview-id="diagnostics"]')).toHaveCount(0);
   await expect(page.locator('[data-overview-id="health"]')).toHaveAttribute("data-overview-span", "4");
+  await page.locator("#overview-customize").click();
+  await expect(page.locator("#overview-layout")).toBeHidden();
+  await expect(page.locator("#overview-customize")).toHaveText("Edit layout");
+});
+
+test("respects the console auto-scroll toggle", async ({ page }) => {
+  await page.goto("/#/dispatch");
+  const console = page.locator("#console");
+  await expect(page.locator("#connection-state")).toHaveText("live");
+  for (let index = 0; index < 24; index += 1) {
+    await page.locator("#command").fill(`scroll-test-${index}`);
+    await page.locator("#command").press("Enter");
+  }
+  await expect.poll(() => console.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+
+  const toggle = page.locator("#console-autoscroll");
+  await toggle.click();
+  await expect(toggle).toHaveText("auto-scroll off");
+  const before = await console.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    return element.scrollTop;
+  });
+  const lines = await console.locator(".line").count();
+  await page.locator("#command").fill("status");
+  await page.locator("#command").press("Enter");
+  await expect.poll(() => console.locator(".line").count()).toBeGreaterThan(lines);
+  await expect.poll(() => console.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(before + 1);
+
+  await toggle.click();
+  await expect(toggle).toHaveText("auto-scroll on");
+  const onLines = await console.locator(".line").count();
+  await page.locator("#command").fill("status");
+  await page.locator("#command").press("Enter");
+  await expect.poll(() => console.locator(".line").count()).toBeGreaterThan(onLines);
+  await expect.poll(() => console.evaluate((element) => element.scrollTop + element.clientHeight >= element.scrollHeight - 1)).toBe(true);
 });
 
 test("keeps destructive actions behind an explicit dialog", async ({ page }) => {

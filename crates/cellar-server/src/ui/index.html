@@ -97,7 +97,7 @@
   <main id="main" tabindex="-1">
 
     <section id="tab-overview" role="tabpanel" aria-labelledby="tabfor-overview" tabindex="-1">
-      <div class="panel">
+      <div class="panel" id="overview-control-panel">
         <h2>Personal overview</h2>
         <div class="body">
           <div class="overview-toolbar">
@@ -106,10 +106,15 @@
               <p class="muted small" id="overview-layout-hint">Your overview is ready. Customize it to arrange cards and choose what stays visible.</p>
             </div>
             <div class="overview-toolbar-actions">
-              <button class="action" id="overview-customize" type="button" aria-pressed="false">Customize layout</button>
+              <button class="action" id="overview-customize" type="button" aria-pressed="false">Edit layout</button>
               <button class="chip" id="overview-reset" type="button" hidden>Reset default</button>
             </div>
           </div>
+        </div>
+      </div>
+      <div class="panel" id="overview-editor-panel" hidden>
+        <h2>Choose overview modules</h2>
+        <div class="body">
           <div id="overview-layout" class="overview-layout"></div>
         </div>
       </div>

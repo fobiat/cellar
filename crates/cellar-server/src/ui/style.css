@@ -374,7 +374,7 @@ nav.tabs {
   padding: 0 12px;
   background: var(--aj-shell);
   border-bottom: 1px solid color-mix(in srgb, var(--aj-frost) 22%, transparent);
-  overflow-x: auto;
+  overflow: hidden;
 }
 
 nav.tabs button {
@@ -390,6 +390,10 @@ nav.tabs button {
   padding: 11px 14px;
   cursor: pointer;
   white-space: nowrap;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 nav.tabs button:hover { color: var(--aj-text); }
@@ -882,8 +886,8 @@ dialog.confirm input {
   .stat { padding: 8px 7px; }
   .stat .label { font-size: 8px; letter-spacing: 0.06em; }
   .stat .value { font-size: clamp(12px, 3.7vw, 16px); }
-  nav.tabs { position: sticky; top: 52px; z-index: 9; padding: 0 4px; }
-  nav.tabs button { padding: 10px 11px; font-size: 10px; }
+  nav.tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); position: sticky; top: 52px; z-index: 9; padding: 0 4px; }
+  nav.tabs button { padding: 9px 3px; font-size: 9px; letter-spacing: 0.04em; }
   main { padding: 12px 10px 34px; }
   .grid-2 { grid-template-columns: 1fr; gap: 10px; }
   .database-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }

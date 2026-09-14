@@ -340,14 +340,15 @@ function instanceId() {
 function renderOverviewEditor() {
   const target = $("#overview-layout");
   if (!target) return;
-  target.hidden = !overviewEditMode;
+  const editor = $("#overview-editor-panel");
+  if (editor) editor.hidden = !overviewEditMode;
   const customize = $("#overview-customize");
   const reset = $("#overview-reset");
   const hint = $("#overview-layout-hint");
   const status = $("#overview-layout-status");
   if (customize) {
     customize.setAttribute("aria-pressed", String(overviewEditMode));
-    customize.textContent = overviewEditMode ? "Done customizing" : "Customize layout";
+    customize.textContent = overviewEditMode ? "Done editing" : "Edit layout";
   }
   if (reset) reset.hidden = !overviewEditMode;
   if (hint) {
@@ -364,15 +365,14 @@ function renderOverviewEditor() {
     const label = el("label", "overview-layout-label");
     const checkbox = el("input");
     checkbox.type = "checkbox";
-    checkbox.checked = overviewLayout.includes(module.id);
+    checkbox.checked = overviewLayout.some((entry) => entry.id === module.id);
     checkbox.onchange = () => {
       if (checkbox.checked) overviewLayout.push({ id: module.id, span: 4 });
       else overviewLayout = overviewLayout.filter((entry) => entry.id !== module.id);
       overviewLayout = normaliseOverviewLayout(overviewLayout);
       saveOverviewLayout();
+      renderOverviewEditor();
       renderOverviewCards();
-      const status = $("#overview-layout-status");
-      if (status) status.textContent = `${overviewLayout.length} module${overviewLayout.length === 1 ? "" : "s"} shown`;
     };
     label.append(checkbox, el("span", null, module.label));
     row.append(label);
@@ -2370,7 +2370,7 @@ function appendLine(kind, at, who, message, live = false, level = "info", catego
   if (!node) return;
 
   const console_ = $("#console");
-  const pinned = consoleAutoScroll || console_.scrollTop + console_.clientHeight >= console_.scrollHeight - 40;
+  const pinned = consoleAutoScroll;
   console_.append(node);
   while (console_.children.length > 1500) console_.firstChild.remove();
   if (pinned) console_.scrollTop = console_.scrollHeight;
