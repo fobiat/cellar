@@ -72,6 +72,31 @@ pub async fn get(pool: &MySqlPool, scope: &str, key: &str) -> Result<Option<Docu
     }))
 }
 
+/// Read every current document in a scope for a persistence snapshot.
+pub async fn all(pool: &MySqlPool, scope: &str) -> Result<Vec<Document>, StoreError> {
+    let rows = sqlx::query(
+        "SELECT doc_key, body, revision, updated_at, updated_by
+         FROM aj_document
+         WHERE scope = ?
+         ORDER BY doc_key",
+    )
+    .bind(scope)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(Document {
+                key: row.try_get("doc_key")?,
+                body: decode_json(&row, "body")?,
+                revision: row.try_get::<u64, _>("revision")?,
+                updated_at: row.try_get("updated_at")?,
+                updated_by: row.try_get("updated_by")?,
+            })
+        })
+        .collect()
+}
+
 /// Whether a document exists, without reading it.
 pub async fn exists(pool: &MySqlPool, scope: &str, key: &str) -> Result<bool, StoreError> {
     let row = sqlx::query("SELECT 1 FROM aj_document WHERE scope = ? AND doc_key = ?")

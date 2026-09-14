@@ -421,6 +421,24 @@ Restoring stops every supervised server first and does not start them again.
 The gamemode writes through the bridge continuously, so a write landing
 mid-restore lands in a table that is about to be dropped.
 
+### Gamemode persistence snapshots
+
+When `[persistence].enabled = true`, Cellar can export the current bridge
+documents without taking ownership of their schema:
+
+```sh
+# The same actions are available in Settings in the web UI.
+curl -X POST http://127.0.0.1:8081/api/persistence/backup
+curl http://127.0.0.1:8081/api/persistence/backups
+```
+
+Snapshots are verified JSON files containing the active scope, document keys,
+and JSON bodies. `persistence.copy_to` writes a second copy to another mounted
+directory. Restore accepts only a filename returned by the listing, requires
+the operator to type `restore`, stops the supervised server, replaces the
+scope's current documents, and leaves the server stopped. The gamemode remains
+the authority for interpreting those documents.
+
 What actually matters inside it is `aj_document`. Everything with an `srv_`
 prefix is operational and regenerable, so a narrower dump is also reasonable:
 

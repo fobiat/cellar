@@ -48,6 +48,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/db/backups", get(db_backups))
         .route("/api/db/backup", post(db_backup))
         .route("/api/db/restore", post(db_restore))
+        .route("/api/persistence/backups", get(persistence_backups))
+        .route("/api/persistence/backup", post(persistence_backup))
+        .route("/api/persistence/restore", post(persistence_restore))
         .route("/api/settings", get(settings).post(set_setting))
         .route("/api/settings/export", get(export_settings))
         .route("/api/settings/import", post(import_settings))
@@ -1810,6 +1813,175 @@ async fn db_restore(
         }
         Err(why) => error(StatusCode::BAD_GATEWAY, why.to_string()),
     }
+}
+
+fn persistence_directory(state: &AppState) -> Option<std::path::PathBuf> {
+    state.persistence_config.directory.clone()
+}
+
+async fn persistence_backups(State(state): State<Arc<AppState>>, _: Operator) -> Response {
+    let policy = &state.persistence_config;
+    let entries = persistence_directory(&state)
+        .as_deref()
+        .map(crate::persistence::list)
+        .unwrap_or_default();
+    Json(serde_json::json!({
+        "enabled": policy.enabled,
+        "directory": policy.directory,
+        "copy_to": policy.copy_to,
+        "retain": policy.retain,
+        "verify": policy.verify,
+        "database_configured": state.pool.is_some(),
+        "scope": state.scope,
+        "snapshots": entries,
+    }))
+    .into_response()
+}
+
+async fn persistence_backup(State(state): State<Arc<AppState>>, operator: Operator) -> Response {
+    let policy = &state.persistence_config;
+    if !policy.enabled {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persistence.enabled is off",
+        );
+    }
+    if state.pool.is_none() {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persistence needs a database-backed bridge",
+        );
+    }
+    let Some(directory) = persistence_directory(&state) else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persistence.directory is unset",
+        );
+    };
+
+    let documents = match state.documents.snapshot(&state.scope).await {
+        Ok(documents) => documents,
+        Err(why) => return error(StatusCode::BAD_GATEWAY, why),
+    };
+    let scope = state.scope.clone();
+    let copy_to = policy.copy_to.clone();
+    let retain = policy.retain;
+    let verify = policy.verify;
+    let result = tokio::task::spawn_blocking(move || {
+        crate::persistence::create(
+            &directory,
+            copy_to.as_deref(),
+            retain,
+            verify,
+            &scope,
+            documents,
+        )
+    })
+    .await;
+
+    match result {
+        Ok(Ok(path)) => {
+            record_action(
+                &state,
+                &operator,
+                "persistence backup",
+                &path.display().to_string(),
+            )
+            .await;
+            Json(serde_json::json!({ "path": path })).into_response()
+        }
+        Ok(Err(why)) => error(StatusCode::BAD_GATEWAY, why),
+        Err(why) => error(StatusCode::INTERNAL_SERVER_ERROR, why.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct PersistenceRestoreRequest {
+    name: String,
+    confirm: String,
+}
+
+async fn persistence_restore(
+    State(state): State<Arc<AppState>>,
+    operator: Operator,
+    Json(request): Json<PersistenceRestoreRequest>,
+) -> Response {
+    if request.confirm != "restore" {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "type restore in confirm to replace the current bridge documents",
+        );
+    }
+    let policy = &state.persistence_config;
+    if !policy.enabled {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persistence.enabled is off",
+        );
+    }
+    let Some(directory) = persistence_directory(&state) else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persistence.directory is unset",
+        );
+    };
+    let Some(entry) = crate::persistence::list(&directory)
+        .into_iter()
+        .find(|entry| entry.name == request.name)
+    else {
+        return error(
+            StatusCode::NOT_FOUND,
+            format!("no persistence snapshot named '{}'", request.name),
+        );
+    };
+    let snapshot = match crate::persistence::verify_snapshot(&entry.path, &state.scope) {
+        Ok(snapshot) => snapshot,
+        Err(why) => return error(StatusCode::BAD_REQUEST, why),
+    };
+
+    let current = match state.documents.snapshot(&state.scope).await {
+        Ok(documents) => documents,
+        Err(why) => return error(StatusCode::BAD_GATEWAY, why),
+    };
+    if let Some(supervisor) = &state.supervisor {
+        supervisor.stop().await;
+    }
+
+    let wanted = snapshot
+        .documents
+        .iter()
+        .map(|document| document.key.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    for document in current {
+        if !wanted.contains(document.key.as_str())
+            && let Err(why) = state.documents.delete(&state.scope, &document.key).await
+        {
+            return error(StatusCode::BAD_GATEWAY, why);
+        }
+    }
+    for document in &snapshot.documents {
+        if let Err(why) = state
+            .documents
+            .put(
+                &state.scope,
+                &document.key,
+                &document.body,
+                Some(&operator.name),
+            )
+            .await
+        {
+            return error(StatusCode::BAD_GATEWAY, why);
+        }
+    }
+
+    record_action(&state, &operator, "persistence restore", &entry.name).await;
+    Json(serde_json::json!({
+        "restored": entry.name,
+        "documents": snapshot.documents.len(),
+        "server_stopped": state.supervisor.is_some(),
+        "detail": "The server was stopped before restore and has not been started again.",
+    }))
+    .into_response()
 }
 
 /// Why an instance cannot be talked to, in the words the config gave.

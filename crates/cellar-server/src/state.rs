@@ -107,6 +107,56 @@ impl Documents {
             }
         }
     }
+
+    pub async fn snapshot(&self, scope: &str) -> Result<Vec<SnapshotDocument>, String> {
+        match self {
+            Self::MySql(pool) => cellar_store::document::all(pool, scope)
+                .await
+                .map(|documents| {
+                    documents
+                        .into_iter()
+                        .map(|document| SnapshotDocument {
+                            key: document.key,
+                            body: document.body,
+                        })
+                        .collect()
+                })
+                .map_err(|e| e.to_string()),
+            Self::Memory(map) => {
+                let map = map
+                    .lock()
+                    .map_err(|_| "the memory store lock was poisoned".to_owned())?;
+                Ok(map
+                    .iter()
+                    .filter(|((document_scope, _), _)| document_scope == scope)
+                    .map(|((_, key), body)| SnapshotDocument {
+                        key: key.clone(),
+                        body: body.clone(),
+                    })
+                    .collect())
+            }
+        }
+    }
+
+    pub async fn delete(&self, scope: &str, key: &str) -> Result<bool, String> {
+        match self {
+            Self::MySql(pool) => cellar_store::document::delete(pool, scope, key)
+                .await
+                .map_err(|e| e.to_string()),
+            Self::Memory(map) => {
+                let mut map = map
+                    .lock()
+                    .map_err(|_| "the memory store lock was poisoned".to_owned())?;
+                Ok(map.remove(&(scope.to_owned(), key.to_owned())).is_some())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SnapshotDocument {
+    pub key: String,
+    pub body: serde_json::Value,
 }
 
 /// A fixed-window limiter, per process.
@@ -205,6 +255,7 @@ pub struct AppState {
     pub database_url: Option<cellar_core::Secret>,
     pub mariadb_config: cellar_core::config::MariaDbConfig,
     pub backup_config: cellar_core::config::BackupConfig,
+    pub persistence_config: cellar_core::config::PersistenceConfig,
     /// Argon2 hash of the web UI password, when the web UI is exposed.
     pub web_password_hash: Option<cellar_core::Secret>,
     /// Explicit web authentication policy.
@@ -313,6 +364,7 @@ impl AppState {
             database_url: None,
             mariadb_config: Default::default(),
             backup_config: Default::default(),
+            persistence_config: Default::default(),
             web_password_hash: None,
             web_auth: Default::default(),
             web_secure_cookies: false,

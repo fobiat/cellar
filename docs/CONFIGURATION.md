@@ -493,6 +493,29 @@ window are about.
 and the same directory run two loops with the same `retain`, so each prunes the
 other's dumps and neither keeps seven.
 
+## `[persistence]`
+
+Portable snapshots of the current documents the gamemode writes through
+Cellar's bridge. This is generic: Cellar stores the document keys and JSON
+bodies without knowing whether they represent characters, inventories, worlds,
+or another game concept. It is separate from a whole-database dump, so it can
+be moved between compatible Cellar databases or kept as a gamemode backup.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Allow the Persistence panel and snapshot endpoints. |
+| `directory` | unset | Where portable JSON snapshots are written. |
+| `copy_to` | unset | Optional second directory for an exported copy. |
+| `retain` | `7` | How many local snapshots to keep. |
+| `verify` | `true` | Read the snapshot back and check its format and scope before it counts. |
+
+The web UI exposes **Back up now** and a restore action under Settings. Restore
+requires typing `restore`, stops the supervised server first, replaces the
+current bridge documents for the configured scope, and leaves the server
+stopped for inspection. The source file is selected by its listed name, never
+by an arbitrary path. Keep `copy_to` on another disk or mounted backup share
+when the local machine is not the only place the data should exist.
+
 ---
 
 ## `[release]`
