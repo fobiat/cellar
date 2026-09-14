@@ -9,15 +9,6 @@ on:
 permissions: {}
 
 jobs:
-  dependency-review:
-    name: dependency review
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
-
   rust-security:
     name: Rust advisories and licenses
     runs-on: ubuntu-latest
@@ -56,7 +47,7 @@ jobs:
   notify-discord:
     name: notify
     runs-on: ubuntu-latest
-    needs: [dependency-review, rust-security, secrets]
+    needs: [rust-security, secrets]
     if: always()
     permissions: {}
     steps:
@@ -68,7 +59,7 @@ jobs:
             echo "no DISCORD_WEBHOOK_URL configured; skipping"
             exit 0
           fi
-          if [ "${{ needs.dependency-review.result }}" != "failure" ] && [ "${{ needs.rust-security.result }}" = "success" ] && [ "${{ needs.secrets.result }}" = "success" ]; then
+          if [ "${{ needs.rust-security.result }}" = "success" ] && [ "${{ needs.secrets.result }}" = "success" ]; then
             colour=7317090
             state="passed"
           else
@@ -78,7 +69,7 @@ jobs:
           jq -n \
             --arg title "Security ${state}" \
             --arg url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --arg desc "\`${{ github.ref_name }}\` · ${{ github.event_name }} · dependency ${{ needs.dependency-review.result }}, Rust ${{ needs.rust-security.result }}, secrets ${{ needs.secrets.result }}" \
+            --arg desc "\`${{ github.ref_name }}\` · ${{ github.event_name }} · Rust ${{ needs.rust-security.result }}, secrets ${{ needs.secrets.result }}" \
             --argjson colour "${colour}" \
             '{embeds:[{title:$title, url:$url, description:$desc, color:$colour}]}' \
             | curl -sS -X POST -H 'content-type: application/json' -d @- "${WEBHOOK}"

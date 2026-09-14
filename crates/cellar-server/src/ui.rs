@@ -310,6 +310,14 @@ mod tests {
     }
 
     #[test]
+    fn the_page_uses_cellar_branding_assets() {
+        let page = page();
+        assert!(page.contains(r#"class="brand-mark" src="/cellar-icon.svg""#));
+        assert!(page.contains("s&amp;box server control"));
+        assert!(!page.contains(r#"<span class="mark">★</span>"#));
+    }
+
+    #[test]
     fn the_palette_reaches_the_page_from_the_theme_module() {
         let page = page();
         // Applejack is blue by standing rule; the page must be serving that blue

@@ -7,6 +7,7 @@ cellar_bin=${CELLAR_BIN:-"$HOME/.local/bin/cellar"}
 config_file=${CELLAR_CONFIG:-"${XDG_CONFIG_HOME:-$HOME/.config}/cellar/cellar.toml"}
 web_url=${CELLAR_WEB_URL:-http://127.0.0.1:8081}
 script_path=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/$(basename -- "$0")
+icon_path=${CELLAR_ICON:-"$(dirname -- "$script_path")/cellar-icon.svg"}
 
 headers() {
     if [ -n "${CELLAR_SESSION:-}" ]; then
@@ -68,7 +69,12 @@ tray() {
         echo 'The Linux tray needs yad. Install it with your distribution package manager.' >&2
         exit 1
     }
-    yad --notification --image=utilities-system-monitor --text="Cellar: $(server_state)" \
+    if [ -f "$icon_path" ]; then
+        tray_image=$icon_path
+    else
+        tray_image=utilities-system-monitor
+    fi
+    yad --notification --image="$tray_image" --text="Cellar: $(server_state)" \
         --menu="Open web UI!$script_path --open-web|Open TUI!$script_path --open-tui|Start Cellar!$script_path --start|Restart server!$script_path --control restart|Stop server!$script_path --control stop|Exit Cellar!$script_path --control exit|Exit tray!quit" \
         --no-middle
 }

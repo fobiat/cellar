@@ -118,7 +118,12 @@ $exitTray = $menu.Items.Add('Exit tray')
 $exitTray.Add_Click({ $notify.Visible = $false; $notify.Dispose(); [System.Windows.Forms.Application]::Exit() })
 
 $notify = New-Object System.Windows.Forms.NotifyIcon
-$notify.Icon = [System.Drawing.SystemIcons]::Application
+$iconPath = Join-Path (Split-Path -Parent $Cellar) 'cellar-icon.ico'
+if (Test-Path -LiteralPath $iconPath) {
+    $notify.Icon = New-Object System.Drawing.Icon($iconPath)
+} else {
+    $notify.Icon = [System.Drawing.SystemIcons]::Application
+}
 $notify.Text = 'Cellar, s&box server'
 $notify.ContextMenuStrip = $menu
 $notify.Visible = $true

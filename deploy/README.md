@@ -12,6 +12,10 @@ dumps on persistent volumes. They expose `/healthz` for liveness and `/readyz`
 for serving readiness, and give Cellar 60 seconds to send the engine's graceful
 `quit` command before a forced container stop.
 
+The [published Cellar manual](https://fobiat.dev/applejack/docs/cellar/)
+carries the full operator guide, including remote access, secrets, persistence,
+Docker, and Kubernetes notes.
+
 For Docker Compose or Swarm:
 
 ```sh

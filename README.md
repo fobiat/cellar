@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="crates/cellar-server/src/ui/assets/cellar-logo-horizontal.svg" alt="Cellar">
+</p>
+
 # Cellar
 
 Cellar supervises dedicated [s&box](https://sbox.game) servers. It provides a
@@ -28,12 +32,22 @@ cellar status     # inspect a running Cellar instance
 | **[CLI reference](docs/CLI.md)** | Commands, flags, and output contracts. |
 | **[Architecture](docs/ARCHITECTURE.md)** | Process supervision, the pty, profiles, and the bridge. |
 | **[Operations](docs/OPERATIONS.md)** | Probes, updates, backups, notifications, and recovery. |
+| **[Branding](docs/BRANDING.md)** | Cellar logo assets and the shared AppleJack Framework visual language. |
 | **[Game database](docs/GAME_DATABASE.md)** | The gamemode-owned database contract. |
 | **[MCP integration](docs/MCP.md)** | Read-only tools and authenticated command access. |
 | **[Security and privacy](docs/SECURITY.md)** | Threat model, credentials, telemetry, and reporting. |
 | **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Common failures and evidence to collect. |
 | **[Facepunch Sandbox](docs/FACEPUNCH-SANDBOX.md)** | The shipped generic profile example. |
 | **[AppleJack Framework integration](docs/integrations/applejack-framework.md)** | Optional profile and workflow notes for AppleJack Framework. |
+
+The repository also carries a [fully populated AppleJack Framework Cellar
+config](configs/applejack-framework.toml) for reference. It defaults to native
+Linux, keeps secrets outside TOML, and shows persistence plus verified backup
+copies.
+
+The [published Cellar manual](https://fobiat.dev/applejack/docs/cellar/) is
+available on the AppleJack Framework documentation site for browsing and
+mobile use.
 
 The [docs/README.md](docs/README.md) explains the documentation layout. The
 AppleJack Framework page is an integration guide, not a Cellar dependency.
@@ -47,7 +61,8 @@ AppleJack Framework page is an integration guide, not a Cellar dependency.
 - Exposes the same state to the CLI, TUI, web UI, probes, and WebSocket clients.
 - Discovers and runs gamemode commands through the profile prefix without
   hardcoding a named gamemode.
-- Offers an AppleJack-inspired responsive operator UI with touch-sized controls,
+- Offers a responsive operator UI with the AppleJack Framework visual language,
+  touch-sized controls,
   dark surfaces, live status chips, and narrow-screen layouts.
 - Connects to a database supplied by the gamemode. Cellar can inspect it, but
   it does not own game tables or silently run game migrations.

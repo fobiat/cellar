@@ -1,6 +1,14 @@
+<p align="center">
+  <img src="../crates/cellar-server/src/ui/assets/cellar-logo-horizontal.svg" alt="Cellar">
+</p>
+
 # Cellar documentation
 
 An open-source dedicated server runner and manager for s&box.
+
+Read the [published Cellar manual](https://fobiat.dev/applejack/docs/cellar/)
+on the AppleJack Framework documentation site when you want the docs without
+the repository checkout.
 
 ## Start here
 
@@ -23,6 +31,7 @@ An open-source dedicated server runner and manager for s&box.
 | **[Security](SECURITY.md)** | Threat model, privacy, credentials, and release controls. |
 | **[Troubleshooting](TROUBLESHOOTING.md)** | Symptoms, causes and fixes, including the ones that look like something else. |
 | **[Architecture](ARCHITECTURE.md)** | How it is built and why, including the engine findings the design rests on. |
+| **[Branding](BRANDING.md)** | Cellar logo assets, shared AppleJack Framework visual language, and package usage. |
 | **[AppleJack Framework integration](integrations/applejack-framework.md)** | Optional profile and workflow notes for AppleJack Framework. |
 
 ## The one thing to know before anything else

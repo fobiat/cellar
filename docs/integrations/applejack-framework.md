@@ -9,6 +9,10 @@ This page records the framework integration contract in Cellar's documentation. 
 not make AppleJack Framework a Cellar default, and Cellar remains usable without the
 AppleJack Framework repository.
 
+The complete Cellar manual is also published at
+<https://fobiat.dev/applejack/docs/cellar/>. That copy is useful when operating
+Cellar from a phone or a machine without the source checkout.
+
 The package and repository identifiers still use the legacy `applejackrp` slug
 for compatibility with published s&box packages and existing installations.
 That slug is an identifier, not the product name.
@@ -45,6 +49,15 @@ Those checks are relative to the project directory and cannot read outside it.
 They are optional diagnostics, not Cellar's interpretation of the game.
 
 ## Local and published servers
+
+The repository includes a fully populated native-Linux reference at
+[`configs/applejack-framework.toml`](../../configs/applejack-framework.toml)
+and its profile at
+[`configs/profiles/applejack-framework.toml`](../../configs/profiles/applejack-framework.toml).
+Copy them into a deployment-specific directory, then change the `/srv` and
+`/mnt` paths, database URL file, release commands, and secret inputs. The
+reference enables persistence and verified off-disk copies so the backup and
+restore workflow is visible in one place.
 
 Use `server.project` for a local `.sbproj` and `server.game` for a published
 package. Give each mode the data directory that the running package reads.
