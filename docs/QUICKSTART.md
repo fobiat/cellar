@@ -60,8 +60,8 @@ The smallest config that does something useful:
 
 ```toml
 [server]
-executable = "/home/container/sbox/sbox-server"
-project    = "/home/container/projects/my-game/my-game.sbproj"
+executable = "/srv/sbox/sbox-server"
+project    = "/srv/projects/my-game/my-game.sbproj"
 launcher   = "native"        # use "wine" explicitly for a Windows binary
 hostname   = "S&box Server"
 

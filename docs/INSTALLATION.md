@@ -223,7 +223,7 @@ when needed, runs `cellar doctor`, and then starts `cellar run`:
 docker run -it \
   -e CELLAR_DATABASE_URL='mysql://cellar:secret@db/cellar' \
   -e CELLAR_WEB_PASSWORD_HASH='from-cellar-hash-password' \
-  -v /path/to/sbox:/home/container/sbox \
+  -v /path/to/sbox:/srv/sbox \
   -v /path/to/cellar.toml:/etc/cellar/cellar.toml \
   -p 8081:8081 \
   your-registry/your-sbox-server:latest
