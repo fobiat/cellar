@@ -11,7 +11,7 @@
 
 [server]
 # Linux, in a container or on a host:
-executable = "/home/container/sbox/sbox-server.exe"
+executable = "/home/container/sbox/sbox-server"
 project = "/home/container/projects/my-game/my-game.sbproj"
 # For a published package, use `game` instead of `project`:
 # game = "your-org.your-game"
@@ -47,7 +47,7 @@ query_port = 27016
 
 # The log line that means "serving". Usually left to the gamemode's [profile]
 # below; set it here only to override the profile for this one instance.
-# ready_pattern = "Lobby created - session is joinable"
+# ready_pattern = "Connected to Steam"
 
 # Note: no maxplayers. The engine has no such convar or launch switch; the real
 # ceiling is the project's Metadata.MaxPlayers.
@@ -61,20 +61,20 @@ query_port = 27016
 # returns 503 from /readyz forever while serving perfectly well. That is the
 # single most expensive thing to get wrong here.
 [profile]
-name = "AppleJackRP"
-ready_pattern = "Lobby created - session is joinable"
-convar_prefix = "applejack"
+name = "Example gamemode"
+ready_pattern = "Connected to Steam"
+convar_prefix = "example"
 
 [[profile.command]]
-group = "features"
-label = "List features"
-command = "applejack_features"
+group = "example"
+label = "List example commands"
+command = "example_list"
 
 [[profile.check]]
 name = "spawn validation"
-file = "Code/Characters/CharacterDirector.cs"
-contains = ["GroundedOrAuthored", "Scene.Trace"]
-reason = "players spawn inside geometry without it"
+file = "Code/Example.cs"
+contains = ["Example"]
+reason = "the example source file is missing"
 
 [supervisor]
 # never | always | on_failure
@@ -125,6 +125,16 @@ verify = true
 # A dump immediately before a game update is applied, which is the one moment a
 # rollback is most likely to be wanted and least likely to have been planned for.
 before_update = true
+
+# Optional, generic snapshots of the documents the gamemode stores through
+# Cellar's bridge. Cellar does not interpret the schema. Set this up when the
+# gamemode's persistence should have a portable export and restore path.
+[persistence]
+enabled = false
+# directory = "C:\\ProgramData\\Cellar\\persistence"
+retain = 7
+verify = true
+# copy_to = "Z:\\cellar-persistence"
 
 # Uncomment to have Cellar download, initialize and supervise its own MariaDB
 # instead of only connecting to one already running somewhere. `database.url`

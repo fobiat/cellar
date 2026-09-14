@@ -247,9 +247,8 @@ let lastStatus = null;
 let commandHistory = [];
 let historyCursor = 0;
 
-/* What Tab completes from: the gamemode's own palette, plus what has been
- * typed here before. Cellar keeps no list of a gamemode's commands, which is
- * the point of the profile. */
+/* What Tab completes from: the gamemode's declared and engine-discovered
+ * commands, plus what has been typed here before. */
 function completions() {
   const current = knownInstances.find((entry) => entry.id === selectedInstance) || knownInstances[0];
   const fromProfile = ((current && current.profile && current.profile.command) || [])
@@ -581,7 +580,11 @@ const TAB_LOADERS = {
   settings: {
     what: "Cellar's version",
     into: "#cellar-update",
-    run: async () => { await loadCellarUpdate(); await loadBackups(); },
+    run: async () => {
+      await loadCellarUpdate();
+      await loadBackups();
+      await loadPersistence();
+    },
   },
   monitoring: { what: "status", into: null, run: () => refreshStatus() },
   dispatch: {
@@ -807,9 +810,8 @@ async function loadActivity() {
 
 /* ---- the gamemode command palette --------------------------------------- */
 
-/* Was thirteen buttons in index.html naming one gamemode's convars. The
- * gamemode declares them now, so a server Cellar has never heard of gets a
- * palette, and AppleJackRP's lives in AppleJackRP's profile. */
+/* The gamemode declares its safe commands, and a running profile can add
+ * commands returned by the engine's own discovery command. */
 async function loadPalette() {
   const data = await api("/api/instances");
   const target = $("#precinct-palette");
@@ -827,8 +829,8 @@ async function loadPalette() {
 
   if (!commands.length) {
     target.append(el("p", "muted",
-      "This gamemode's profile declares no commands. Add [[command]] entries to it, or type "
-      + "into the console above."));
+      "This gamemode has not declared or exposed any commands. Type one into the console above, "
+      + "or add a profile command prefix for automatic discovery."));
     return;
   }
 
@@ -1215,6 +1217,85 @@ async function restoreBackup(dump) {
   }
   loadBackups();
   refreshStatus();
+}
+
+async function loadPersistence() {
+  const rows = $("#persistence-backups");
+  const policy = $("#persistence-policy");
+  rows.replaceChildren();
+  policy.replaceChildren();
+  const data = await api(forInstance("/api/persistence/backups"));
+  const fact = (label, value) => {
+    const cell = el("div");
+    cell.append(el("span", "muted small", label), el("strong", null, text(value)));
+    policy.append(cell);
+  };
+  fact("status", data.enabled ? "enabled" : "off");
+  fact("scope", data.scope);
+  fact("directory", data.directory || "not configured");
+  fact("export", data.copy_to || "none");
+  fact("retention", `${data.retain} snapshot(s)`);
+  fact("verification", data.verify ? "read back" : "off");
+
+  const snapshots = data.snapshots || [];
+  if (!snapshots.length) {
+    emptyRow(rows, 5, data.enabled
+      ? "No persistence snapshots yet. Back up the gamemode documents when the server is quiet."
+      : "Persistence snapshots are off. Set persistence.enabled = true to enable them.");
+    return;
+  }
+  for (const snapshot of snapshots) {
+    const row = el("tr");
+    const restore = el("button", "chip", "restore");
+    if (snapshot.verified && data.enabled) {
+      restore.onclick = () => restorePersistence(snapshot);
+    } else {
+      restore.disabled = true;
+      restore.title = text(snapshot.error || (data.enabled
+        ? "snapshot is not verified"
+        : "persistence is disabled"));
+    }
+    row.append(
+      el("td", null, snapshot.name),
+      el("td", null, snapshot.documents ?? "—"),
+      el("td", null, formatBytes(snapshot.bytes)),
+      el("td", null, el("span", `lamp ${snapshot.verified ? "up" : "down"}`,
+        snapshot.verified ? "verified" : text(snapshot.error || "unreadable"))),
+      el("td", null, restore),
+    );
+    rows.append(row);
+  }
+}
+
+async function backupPersistenceNow() {
+  try {
+    const result = await api(forInstance("/api/persistence/backup"), { method: "POST" });
+    showToast(`Persistence snapshot written: ${text(result.path)}`, "success");
+    await loadPersistence();
+  } catch (error) {
+    showToast(`Persistence backup failed: ${error.message}`, "error");
+  }
+}
+
+async function restorePersistence(snapshot) {
+  const going = await confirmAction({
+    title: `Restore ${snapshot.name}?`,
+    body: "This replaces every bridge document in the active scope, stops the supervised server, and leaves it stopped.",
+    typed: "restore",
+  });
+  if (!going) return;
+  try {
+    const result = await api(forInstance("/api/persistence/restore"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: snapshot.name, confirm: "restore" }),
+    });
+    showToast(`Restored ${text(result.documents)} document(s). ${text(result.detail)}`, "success");
+    await loadPersistence();
+    refreshStatus();
+  } catch (error) {
+    showToast(`Persistence restore failed: ${error.message}`, "error");
+  }
 }
 
 async function loadReleases() {
@@ -2627,7 +2708,7 @@ async function loadConfigs() {
     const button = el("button", `action ${profile?.active ? "live" : ""}`, profile ? label : `${label} unavailable`);
     button.disabled = !profile || profile.active || Boolean(profile.refusal);
     button.title = !profile
-      ? "Install or copy the matching AppleJackRP profile beside the active config"
+      ? "Install or copy the matching gamemode profile beside the active config"
       : profile.refusal || `Switch to ${profile.name}`;
     if (profile) button.onclick = () => activateConfig(profile.name);
     modeActions.append(button);
@@ -2653,8 +2734,7 @@ async function loadConfigs() {
   }
 }
 
-/* What the gamemode said about itself. Every row here was hardcoded to
- * AppleJackRP before `[profile]` existed. */
+/* What the gamemode said about itself. */
 async function loadGamemode() {
   const data = await api("/api/instances");
   const wanted = instanceId() || data.primary;
@@ -2786,6 +2866,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     load("diagnostics", $("#diagnostics-checks"), () => loadDiagnostics());
   $("#logout").onclick = signOut;
   $("#backup-now").onclick = backupNow;
+  $("#persistence-backup-now").onclick = backupPersistenceNow;
   $("#cellar-exit").onclick = exitCellar;
   $("#kill-cellar").onclick = emergencyKill;
   $("#run-query").onclick = runQuery;

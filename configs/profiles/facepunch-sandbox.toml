@@ -12,8 +12,8 @@ name = "Facepunch Sandbox"
 # The server is serving at that point, confirmed by A2S_INFO answering on the
 # query port with the configured hostname and a 32 player cap.
 #
-# So this is the honest readiness signal for this gamemode, and it is earlier
-# than AppleJackRP's: it means "discoverable", not "a session is joinable".
+# So this is the honest readiness signal for this gamemode: it means
+# "discoverable", not "a session is joinable".
 ready_pattern = "Connected to Steam"
 
 convar_prefix = "sbox"

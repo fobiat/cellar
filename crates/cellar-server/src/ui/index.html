@@ -585,6 +585,31 @@
         </div>
       </div>
 
+      <div class="panel">
+        <h2>Gamemode persistence</h2>
+        <div class="body">
+          <p class="muted small">
+            Portable snapshots of the JSON documents this gamemode stores through Cellar's bridge.
+            Cellar keeps the keys and data intact without interpreting the gamemode schema.
+          </p>
+          <div class="metric-grid" id="persistence-policy"></div>
+          <div class="scroll">
+            <table>
+              <thead><tr><th>Snapshot</th><th>Documents</th><th>Size</th><th>Verified</th><th></th></tr></thead>
+              <tbody id="persistence-backups"></tbody>
+            </table>
+          </div>
+          <p class="notice" id="persistence-notice"></p>
+          <div class="row">
+            <button class="action" id="persistence-backup-now" type="button">Back up persistence</button>
+          </div>
+          <p class="muted small" style="margin-top:12px">
+            Restore replaces every bridge document in this scope, stops the supervised server, and
+            leaves it stopped so the result can be checked before players return.
+          </p>
+        </div>
+      </div>
+
       <!-- POST /api/control/exit has existed and been unreachable from the UI.
            It stops every supervised server and ends the Cellar process, so it
            belongs at the bottom of Settings behind a typed confirmation, not

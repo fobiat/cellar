@@ -3,7 +3,7 @@
 //! Everything here is behind [`crate::session`], because the console it exposes
 //! runs at full engine privilege: `ConVarSystem.Run` from the dedicated console
 //! is called with `allowProtected: true`, so a caller reaching `/api/exec`
-//! reaches `quit`, `kick` and every `applejack_*` command. This is not an
+//! reaches `quit`, `kick` and every command exposed by the running game. This is not an
 //! observability endpoint with a console bolted on; it is a console.
 
 use std::sync::Arc;
@@ -48,6 +48,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/db/backups", get(db_backups))
         .route("/api/db/backup", post(db_backup))
         .route("/api/db/restore", post(db_restore))
+        .route("/api/persistence/backups", get(persistence_backups))
+        .route("/api/persistence/backup", post(persistence_backup))
+        .route("/api/persistence/restore", post(persistence_restore))
         .route("/api/settings", get(settings).post(set_setting))
         .route("/api/settings/export", get(export_settings))
         .route("/api/settings/import", post(import_settings))
@@ -61,6 +64,34 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/v1/configs", get(external_configs))
         .route("/api/v1/instances", get(external_instances))
         .route("/metrics", get(metrics))
+}
+
+async fn discovered_profile(entry: &crate::registry::Entry) -> cellar_core::GamemodeProfile {
+    let mut profile = entry.descriptor.profile.clone();
+    let Some(prefix) = profile.convar_prefix.as_deref() else {
+        return profile;
+    };
+    let Some(handle) = &entry.handle else {
+        return profile;
+    };
+
+    let command = format!("find {prefix}");
+    let Ok(reply) = handle.exec(&command, "cellar-discovery").await else {
+        return profile;
+    };
+    for discovered in
+        cellar_core::parse_discovered_commands(reply.iter().map(String::as_str), prefix)
+    {
+        if profile
+            .commands
+            .iter()
+            .any(|known| known.command == discovered.command)
+        {
+            continue;
+        }
+        profile.commands.push(discovered);
+    }
+    profile
 }
 
 async fn metrics(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response {
@@ -1784,6 +1815,175 @@ async fn db_restore(
     }
 }
 
+fn persistence_directory(state: &AppState) -> Option<std::path::PathBuf> {
+    state.persistence_config.directory.clone()
+}
+
+async fn persistence_backups(State(state): State<Arc<AppState>>, _: Operator) -> Response {
+    let policy = &state.persistence_config;
+    let entries = persistence_directory(&state)
+        .as_deref()
+        .map(crate::persistence::list)
+        .unwrap_or_default();
+    Json(serde_json::json!({
+        "enabled": policy.enabled,
+        "directory": policy.directory,
+        "copy_to": policy.copy_to,
+        "retain": policy.retain,
+        "verify": policy.verify,
+        "database_configured": state.pool.is_some(),
+        "scope": state.scope,
+        "snapshots": entries,
+    }))
+    .into_response()
+}
+
+async fn persistence_backup(State(state): State<Arc<AppState>>, operator: Operator) -> Response {
+    let policy = &state.persistence_config;
+    if !policy.enabled {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persistence.enabled is off",
+        );
+    }
+    if state.pool.is_none() {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persistence needs a database-backed bridge",
+        );
+    }
+    let Some(directory) = persistence_directory(&state) else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persistence.directory is unset",
+        );
+    };
+
+    let documents = match state.documents.snapshot(&state.scope).await {
+        Ok(documents) => documents,
+        Err(why) => return error(StatusCode::BAD_GATEWAY, why),
+    };
+    let scope = state.scope.clone();
+    let copy_to = policy.copy_to.clone();
+    let retain = policy.retain;
+    let verify = policy.verify;
+    let result = tokio::task::spawn_blocking(move || {
+        crate::persistence::create(
+            &directory,
+            copy_to.as_deref(),
+            retain,
+            verify,
+            &scope,
+            documents,
+        )
+    })
+    .await;
+
+    match result {
+        Ok(Ok(path)) => {
+            record_action(
+                &state,
+                &operator,
+                "persistence backup",
+                &path.display().to_string(),
+            )
+            .await;
+            Json(serde_json::json!({ "path": path })).into_response()
+        }
+        Ok(Err(why)) => error(StatusCode::BAD_GATEWAY, why),
+        Err(why) => error(StatusCode::INTERNAL_SERVER_ERROR, why.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct PersistenceRestoreRequest {
+    name: String,
+    confirm: String,
+}
+
+async fn persistence_restore(
+    State(state): State<Arc<AppState>>,
+    operator: Operator,
+    Json(request): Json<PersistenceRestoreRequest>,
+) -> Response {
+    if request.confirm != "restore" {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "type restore in confirm to replace the current bridge documents",
+        );
+    }
+    let policy = &state.persistence_config;
+    if !policy.enabled {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persistence.enabled is off",
+        );
+    }
+    let Some(directory) = persistence_directory(&state) else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persistence.directory is unset",
+        );
+    };
+    let Some(entry) = crate::persistence::list(&directory)
+        .into_iter()
+        .find(|entry| entry.name == request.name)
+    else {
+        return error(
+            StatusCode::NOT_FOUND,
+            format!("no persistence snapshot named '{}'", request.name),
+        );
+    };
+    let snapshot = match crate::persistence::verify_snapshot(&entry.path, &state.scope) {
+        Ok(snapshot) => snapshot,
+        Err(why) => return error(StatusCode::BAD_REQUEST, why),
+    };
+
+    let current = match state.documents.snapshot(&state.scope).await {
+        Ok(documents) => documents,
+        Err(why) => return error(StatusCode::BAD_GATEWAY, why),
+    };
+    if let Some(supervisor) = &state.supervisor {
+        supervisor.stop().await;
+    }
+
+    let wanted = snapshot
+        .documents
+        .iter()
+        .map(|document| document.key.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    for document in current {
+        if !wanted.contains(document.key.as_str())
+            && let Err(why) = state.documents.delete(&state.scope, &document.key).await
+        {
+            return error(StatusCode::BAD_GATEWAY, why);
+        }
+    }
+    for document in &snapshot.documents {
+        if let Err(why) = state
+            .documents
+            .put(
+                &state.scope,
+                &document.key,
+                &document.body,
+                Some(&operator.name),
+            )
+            .await
+        {
+            return error(StatusCode::BAD_GATEWAY, why);
+        }
+    }
+
+    record_action(&state, &operator, "persistence restore", &entry.name).await;
+    Json(serde_json::json!({
+        "restored": entry.name,
+        "documents": snapshot.documents.len(),
+        "server_stopped": state.supervisor.is_some(),
+        "detail": "The server was stopped before restore and has not been started again.",
+    }))
+    .into_response()
+}
+
 /// Why an instance cannot be talked to, in the words the config gave.
 fn unavailable(target: &Target) -> String {
     target
@@ -2056,17 +2256,22 @@ async fn run_job(
 
 async fn instances(State(state): State<Arc<AppState>>, _: Operator) -> Response {
     let primary = state.instances.primary().map(|entry| entry.id.to_string());
-    Json(serde_json::json!({
-        "primary": primary,
-        "instances": state.instances.iter().map(|entry| serde_json::json!({
+    let mut instances = Vec::new();
+    for entry in state.instances.iter() {
+        let profile = discovered_profile(entry).await;
+        instances.push(serde_json::json!({
             "id": entry.id.to_string(),
             "scope": entry.scope,
             "required": entry.required,
             "running": entry.handle.is_some(),
             "unavailable": entry.unavailable,
             "server": entry.descriptor,
-            "profile": entry.descriptor.profile,
-        })).collect::<Vec<_>>(),
+            "profile": profile,
+        }));
+    }
+    Json(serde_json::json!({
+        "primary": primary,
+        "instances": instances,
     }))
     .into_response()
 }

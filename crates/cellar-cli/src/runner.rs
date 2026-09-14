@@ -446,6 +446,7 @@ fn build_state(
     state.database_url = config.database.url.clone();
     state.mariadb_config = config.mariadb.clone();
     state.backup_config = config.backup.clone();
+    state.persistence_config = config.persistence.clone();
     state.web_password_hash = config.web.password_hash.clone();
     state.web_auth = config.web.auth;
     state.web_secure_cookies = config.web.secure_cookies;

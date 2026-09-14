@@ -51,6 +51,8 @@ pub struct Config {
     #[serde(default)]
     pub backup: BackupConfig,
     #[serde(default)]
+    pub persistence: PersistenceConfig,
+    #[serde(default)]
     pub release: ReleaseConfig,
 
     /// What gamemode every instance runs, unless one overrides it.
@@ -63,11 +65,8 @@ pub struct Config {
 
     /// Read `[profile]` out of this file instead, relative to this config.
     ///
-    /// Six shipped AppleJackRP profiles differ only in platform and mode, and a
-    /// gamemode's readiness line is the same in all of them. Inlining it would
-    /// be six copies of one fact, which is six chances for five of them to go
-    /// stale. It also lets a gamemode ship its own profile next to its
-    /// `.sbproj`, which is the arrangement this design is for.
+    /// A profile file keeps gamemode facts beside the config that uses them.
+    /// It also lets a gamemode ship its own profile next to its `.sbproj`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_file: Option<PathBuf>,
 }
@@ -198,10 +197,8 @@ impl Instance {
     /// The line that means this instance is serving.
     ///
     /// `server.ready_pattern` wins because it is the narrower statement, then
-    /// the profile, then AppleJackRP's line. That last fallback is not a
-    /// default anybody should rely on; it is there because nine shipped configs
-    /// and a Kubernetes ConfigMap depend on it and a silent change of readiness
-    /// semantics is how a healthy deployment starts failing `/readyz`.
+    /// the profile, then the empty default. An empty value means Cellar cannot
+    /// claim readiness until the operator supplies a line the gamemode logs.
     pub fn ready_pattern(&self) -> &str {
         self.server
             .ready_pattern
@@ -832,6 +829,32 @@ pub struct BackupConfig {
     pub before_update: bool,
 }
 
+/// Optional snapshots of the gamemode documents Cellar stores through the
+/// generic bridge. The format contains no gamemode schema, so any bridge
+/// client can export and restore its own documents without Cellar knowing what
+/// they mean.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PersistenceConfig {
+    pub enabled: bool,
+    pub directory: Option<PathBuf>,
+    pub copy_to: Option<PathBuf>,
+    pub retain: usize,
+    pub verify: bool,
+}
+
+impl Default for PersistenceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            directory: None,
+            copy_to: None,
+            retain: 7,
+            verify: true,
+        }
+    }
+}
+
 /// Optional project-local commands for building and publishing the game.
 ///
 /// Cellar never invents an s&box editor command. The editor owns the Steam
@@ -877,7 +900,7 @@ impl Default for MariaDbConfig {
 }
 
 fn default_hostname() -> String {
-    "AppleJackRP Dev".to_owned()
+    "Cellar Server".to_owned()
 }
 
 fn default_port() -> u16 {
@@ -1147,6 +1170,13 @@ impl Config {
         if self.backup.enabled && self.backup.retain == 0 {
             return Err(ConfigError::Invalid(
                 "backup.retain must be at least 1 when backups are enabled".into(),
+            ));
+        }
+
+        if self.persistence.enabled && self.persistence.retain == 0 {
+            return Err(ConfigError::Invalid(
+                "persistence.retain must be at least 1 when persistence snapshots are enabled"
+                    .into(),
             ));
         }
 
@@ -1565,6 +1595,7 @@ mod tests {
             update: UpdateConfig::default(),
             mariadb: MariaDbConfig::default(),
             backup: BackupConfig::default(),
+            persistence: PersistenceConfig::default(),
             release: ReleaseConfig::default(),
         }
     }
@@ -1699,12 +1730,7 @@ mod tests {
         }
     }
 
-    /// The defect the gamemode profile was written for, pinned.
-    ///
-    /// `facepunch.sandbox` never logs `Lobby created - session is joinable`, so
-    /// with AppleJackRP's line as the fallback it sat at `starting` and returned
-    /// 503 from `/readyz` against a server that was bound, Steam-connected and
-    /// answering A2S. In Kubernetes that configuration never passes readiness.
+    /// Every shipped profile must provide the line its gamemode actually logs.
     #[test]
     fn every_shipped_profile_resolves_a_ready_pattern_its_gamemode_actually_logs() {
         for (name, config) in shipped_profiles() {
@@ -1718,13 +1744,9 @@ mod tests {
 
                 let published = instance.server.game.as_deref().unwrap_or_default();
                 if published.starts_with("facepunch.") {
-                    assert_eq!(
-                        pattern, "Connected to Steam",
-                        "{name}/{}: a Facepunch gamemode never logs AppleJackRP's line",
-                        instance.id
-                    );
+                    assert_eq!(pattern, "Connected to Steam", "{name}/{}", instance.id);
                 } else {
-                    assert_eq!(pattern, DEFAULT_READY_PATTERN, "{name}/{}", instance.id);
+                    assert_ne!(pattern, DEFAULT_READY_PATTERN, "{name}/{}", instance.id);
                 }
             }
         }

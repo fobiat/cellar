@@ -38,7 +38,7 @@ serialisation path, so a config dump or a crash log cannot leak one.
 | --- | --- | --- |
 | `executable` | *required* | Path to `sbox-server.exe`. |
 | `project` | *required unless `game` is set* | Path to the local `.sbproj`. |
-| `game` | unset | Published package ident such as `fobiat.applejackrp`. |
+| `game` | unset | Published package ident such as `your-org.your-game`. |
 | `map` | unset | Map ident appended to a published game ident, such as `thieves.rpdowntown3t`. |
 | `launcher` | `wine` | `wine` or `native`. `native` on Windows. |
 | `wine_prefix` | inherited | The prefix this instance runs in, passed as `WINEPREFIX`. Concurrent instances on Linux need one each. |
@@ -57,7 +57,7 @@ Two deliberate omissions:
 
 - **No `maxplayers`.** The engine has no such convar and no such launch switch.
   The real ceiling is `Metadata.MaxPlayers` in the `.sbproj`. Setting
-  `+maxplayers` does nothing. AppleJackRP's Cellar config leaves it out.
+  `+maxplayers` does nothing. A Cellar config should leave it out.
 - **`-allowlocalhttp` is added automatically** when the bridge is enabled, and
   only then. Without it the engine refuses to call any private or loopback
   address and the gamemode silently cannot reach the bridge.
@@ -81,20 +81,20 @@ process. A config uses one or the other, never both.
 
 ```toml
 [instances.published]
-scope = "applejackrp-local"
+scope = "your-game-local"
 
 [instances.published.server]
 executable = "/srv/published/sbox-server.exe"
-game = "fobiat.applejackrp"
-data_dir = "/srv/published/data/fobiat/applejackrp"
+game = "your-org.your-game"
+data_dir = "/srv/published/data/your-org/your-game"
 
 [instances.dev]
 enabled = false
 
 [instances.dev.server]
 executable = "/srv/dev/sbox-server.exe"
-project = "/srv/dev/applejackrp.sbproj"
-data_dir = "/srv/dev/data/fobiat/applejackrp#local"
+project = "/srv/dev/your-game.sbproj"
+data_dir = "/srv/dev/data/your-org/your-game#local"
 ```
 
 | Key | Default | Meaning |
@@ -153,40 +153,38 @@ runtime installed into it; `cellar doctor` checks for it.
 ## `[profile]`
 
 What gamemode this Cellar is running, described by the gamemode rather than
-assumed by Cellar. Four things used to be hardcoded to AppleJackRP: the
-readiness line, the log category heuristic, a `cellar doctor` check that grepped
-one C# file by path, and thirteen command buttons in the web UI. All four come
-from here now.
+assumed by Cellar. The readiness line, log category heuristic, doctor checks,
+and command palette all come from the profile.
 
 ```toml
-profile_file = "profiles/applejackrp.toml"
+profile_file = "profiles/your-game.toml"
 ```
 
 or inline:
 
 ```toml
 [profile]
-name = "AppleJackRP"
-ready_pattern = "Lobby created - session is joinable"
-convar_prefix = "applejack"
+name = "Your gamemode"
+ready_pattern = "Connected to Steam"
+convar_prefix = "yourgame"
 
 [[profile.command]]
-group = "features"
-label = "List features"
-command = "applejack_features"
+group = "general"
+label = "List commands"
+command = "yourgame_list"
 
 [[profile.check]]
 name = "spawn validation"
-file = "Code/Characters/CharacterDirector.cs"
-contains = ["GroundedOrAuthored", "Scene.Trace"]
-reason = "players spawn inside geometry without it"
+file = "Code/Example.cs"
+contains = ["Example"]
+reason = "the example source file is missing"
 ```
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `name` | unset | Shown in the UI. Nothing routes on it. |
-| `ready_pattern` | AppleJackRP's line | The log line that means "serving". A substring match, not a regex. |
-| `convar_prefix` | unset | The prefix this gamemode's convars share. Drives the log category filter. |
+| `ready_pattern` | unset | The log line that means "serving". A substring match, not a regex. |
+| `convar_prefix` | unset | The prefix this gamemode's commands share. Drives discovery and the log category filter. |
 | `command` | `[]` | Array of tables: `label`, `command`, optional `group`, optional `confirm`. Becomes the command palette beside the console, and Ctrl-K entries. |
 | `check` | `[]` | Array of tables: `name`, `file`, `contains`, `reason`. Becomes `cellar doctor` checks named `gamemode: <name>`. |
 | `map` | `[]` | Map package idents this gamemode has. Checked against `server.map`. |
@@ -205,16 +203,20 @@ the project's own `Metadata.MapList`, so a local development instance gets the
 check without anybody writing a profile at all.
 
 `profile_file` is read relative to the config file's own directory, and a config
-may set it or `[profile]`, not both. Six shipped AppleJackRP configs point at
-one file rather than each carrying a copy, and a gamemode is welcome to ship a
-profile next to its `.sbproj`.
+may set it or `[profile]`, not both. A gamemode is welcome to ship a profile
+next to its `.sbproj`.
 
-**The readiness line is the field that matters.** `facepunch.sandbox` never logs
-AppleJackRP's line, so before profiles existed it sat at `starting` and returned
-503 from `/readyz` forever against a server that was bound, Steam-connected and
-answering A2S. In Kubernetes that configuration never passes readiness and the
-pod is killed and retried. `configs/profiles/facepunch-sandbox.toml` records
-what that gamemode actually logs, measured rather than guessed.
+When `convar_prefix` is set and the server is running, Cellar sends `find
+<convar_prefix>` through the server console. It accepts only command names with
+that prefix and safe command-name characters, merges them with declared
+`[[profile.command]]` entries, and shows the result in the web and terminal
+interfaces. Discovered commands require confirmation. A failed or unsupported
+`find` call leaves the declared profile intact.
+
+**The readiness line is the field that matters.** A server can bind its ports
+and connect to Steam while still being unable to accept players. Set the line
+to one the selected gamemode actually logs, or `/readyz` remains 503 by design.
+The shipped Facepunch Sandbox profile records its observed line as an example.
 
 **A check path is relative and may not climb out of the project directory.** A
 config file is not a licence to read arbitrary host files back through `cellar
@@ -490,6 +492,29 @@ window are about.
 **Only one process may own this.** Two Cellar processes with `enabled = true`
 and the same directory run two loops with the same `retain`, so each prunes the
 other's dumps and neither keeps seven.
+
+## `[persistence]`
+
+Portable snapshots of the current documents the gamemode writes through
+Cellar's bridge. This is generic: Cellar stores the document keys and JSON
+bodies without knowing whether they represent characters, inventories, worlds,
+or another game concept. It is separate from a whole-database dump, so it can
+be moved between compatible Cellar databases or kept as a gamemode backup.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Allow the Persistence panel and snapshot endpoints. |
+| `directory` | unset | Where portable JSON snapshots are written. |
+| `copy_to` | unset | Optional second directory for an exported copy. |
+| `retain` | `7` | How many local snapshots to keep. |
+| `verify` | `true` | Read the snapshot back and check its format and scope before it counts. |
+
+The web UI exposes **Back up now** and a restore action under Settings. Restore
+requires typing `restore`, stops the supervised server first, replaces the
+current bridge documents for the configured scope, and leaves the server
+stopped for inspection. The source file is selected by its listed name, never
+by an arbitrary path. Keep `copy_to` on another disk or mounted backup share
+when the local machine is not the only place the data should exist.
 
 ---
 
