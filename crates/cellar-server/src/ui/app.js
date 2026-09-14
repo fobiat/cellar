@@ -251,30 +251,77 @@ let historyCursor = 0;
 
 const OVERVIEW_MODULES = [
   { id: "health", label: "Server health", tab: "monitoring" },
+  { id: "identity", label: "Server identity", tab: "dispatch" },
   { id: "players", label: "Players", tab: "players" },
+  { id: "player-history", label: "Player history", tab: "players", sub: "history" },
+  { id: "access", label: "Access gate", tab: "players", sub: "access" },
   { id: "resources", label: "Resources", tab: "monitoring" },
+  { id: "timings", label: "Frame timings", tab: "monitoring" },
+  { id: "addresses", label: "Network addresses", tab: "monitoring" },
+  { id: "anti-cheat", label: "Anti-cheat", tab: "monitoring" },
   { id: "console", label: "Console", tab: "dispatch" },
+  { id: "commands", label: "Gamemode commands", tab: "dispatch" },
   { id: "storage", label: "Storage", tab: "database" },
+  { id: "documents", label: "Game documents", tab: "records" },
   { id: "activity", label: "Activity", tab: "activity" },
   { id: "diagnostics", label: "Diagnostics", tab: "diagnostics" },
-  { id: "config", label: "Configuration", tab: "config" },
+  { id: "jobs", label: "Scheduled jobs", tab: "diagnostics" },
+  { id: "profile", label: "Gamemode profile", tab: "config", sub: "profile" },
+  { id: "convars", label: "Gamemode settings", tab: "config", sub: "convars" },
+  { id: "build", label: "Build and updates", tab: "config", sub: "build" },
+  { id: "web-access", label: "Web access", tab: "settings" },
+  { id: "backups", label: "Database backups", tab: "settings" },
+  { id: "persistence", label: "Persistence backups", tab: "settings" },
 ];
-const DEFAULT_OVERVIEW_LAYOUT = ["health", "players", "resources", "console", "storage", "activity"];
+const OVERVIEW_LAYOUT_KEY = "cellar.overview.layout";
+const OVERVIEW_COLUMNS = 12;
+const OVERVIEW_MIN_SPAN = 3;
+const DEFAULT_OVERVIEW_LAYOUT = [
+  { id: "health", span: 4 },
+  { id: "players", span: 4 },
+  { id: "resources", span: 4 },
+  { id: "console", span: 8 },
+  { id: "storage", span: 4 },
+  { id: "activity", span: 4 },
+];
 let overviewLayout = readOverviewLayout();
+let overviewEditMode = false;
+let overviewDragId = null;
+let overviewResize = null;
+
+function overviewModule(id) {
+  return OVERVIEW_MODULES.find((module) => module.id === id);
+}
+
+function overviewSpan(value) {
+  const span = Number(value);
+  if (!Number.isFinite(span)) return 4;
+  return Math.max(OVERVIEW_MIN_SPAN, Math.min(OVERVIEW_COLUMNS, Math.round(span)));
+}
+
+function normaliseOverviewLayout(saved) {
+  if (!Array.isArray(saved)) return [...DEFAULT_OVERVIEW_LAYOUT.map((entry) => ({ ...entry }))];
+  const entries = saved.map((entry) => {
+    if (typeof entry === "string") return { id: entry, span: 4 };
+    return { id: entry?.id, span: overviewSpan(entry?.span) };
+  });
+  const valid = entries.filter((entry) => overviewModule(entry.id));
+  return valid.filter((entry, index) => valid.findIndex((candidate) => candidate.id === entry.id) === index);
+}
 
 function readOverviewLayout() {
   try {
-    const saved = JSON.parse(localStorage.getItem("cellar.overview.layout") || "null");
-    if (Array.isArray(saved)) {
-      const valid = saved.filter((id) => OVERVIEW_MODULES.some((module) => module.id === id));
-      return [...new Set(valid)];
-    }
+    const saved = JSON.parse(localStorage.getItem(OVERVIEW_LAYOUT_KEY) || "null");
+    if (Array.isArray(saved)) return normaliseOverviewLayout(saved);
+    if (Array.isArray(saved?.modules)) return normaliseOverviewLayout(saved.modules);
   } catch {}
-  return [...DEFAULT_OVERVIEW_LAYOUT];
+  return normaliseOverviewLayout(null);
 }
 
 function saveOverviewLayout() {
-  try { localStorage.setItem("cellar.overview.layout", JSON.stringify(overviewLayout)); } catch {}
+  try {
+    localStorage.setItem(OVERVIEW_LAYOUT_KEY, JSON.stringify({ version: 2, modules: overviewLayout }));
+  } catch {}
 }
 
 /* What Tab completes from: the gamemode's declared and engine-discovered
@@ -293,40 +340,63 @@ function instanceId() {
 function renderOverviewEditor() {
   const target = $("#overview-layout");
   if (!target) return;
+  target.hidden = !overviewEditMode;
+  const customize = $("#overview-customize");
+  const reset = $("#overview-reset");
+  const hint = $("#overview-layout-hint");
+  const status = $("#overview-layout-status");
+  if (customize) {
+    customize.setAttribute("aria-pressed", String(overviewEditMode));
+    customize.textContent = overviewEditMode ? "Done customizing" : "Customize layout";
+  }
+  if (reset) reset.hidden = !overviewEditMode;
+  if (hint) {
+    hint.textContent = overviewEditMode
+      ? "Drag a card to move it. Drag its resize handle to change its width."
+      : "Your overview is ready. Customize it to arrange cards and choose what stays visible.";
+  }
+  if (status) {
+    status.textContent = `${overviewLayout.length} module${overviewLayout.length === 1 ? "" : "s"} shown`;
+  }
   target.replaceChildren();
-  for (const [index, module] of OVERVIEW_MODULES.entries()) {
+  for (const module of OVERVIEW_MODULES) {
     const row = el("div", "overview-layout-row");
     const label = el("label", "overview-layout-label");
     const checkbox = el("input");
     checkbox.type = "checkbox";
     checkbox.checked = overviewLayout.includes(module.id);
     checkbox.onchange = () => {
-      if (checkbox.checked) overviewLayout.push(module.id);
-      else overviewLayout = overviewLayout.filter((id) => id !== module.id);
-      overviewLayout = [...new Set(overviewLayout)];
+      if (checkbox.checked) overviewLayout.push({ id: module.id, span: 4 });
+      else overviewLayout = overviewLayout.filter((entry) => entry.id !== module.id);
+      overviewLayout = normaliseOverviewLayout(overviewLayout);
       saveOverviewLayout();
-      renderOverviewEditor();
       renderOverviewCards();
+      const status = $("#overview-layout-status");
+      if (status) status.textContent = `${overviewLayout.length} module${overviewLayout.length === 1 ? "" : "s"} shown`;
     };
     label.append(checkbox, el("span", null, module.label));
     row.append(label);
-    const up = el("button", "chip", "up");
-    up.type = "button";
-    up.disabled = !overviewLayout.includes(module.id) || overviewLayout.indexOf(module.id) === 0;
-    up.onclick = () => moveOverviewModule(module.id, -1);
-    const down = el("button", "chip", "down");
-    down.type = "button";
-    down.disabled = !overviewLayout.includes(module.id)
-      || overviewLayout.indexOf(module.id) === overviewLayout.length - 1;
-    down.onclick = () => moveOverviewModule(module.id, 1);
-    row.append(up, down);
+    const entry = overviewLayout.find((candidate) => candidate.id === module.id);
+    if (entry && overviewEditMode) {
+      const position = overviewLayout.findIndex((candidate) => candidate.id === module.id);
+      const up = el("button", "chip", "earlier");
+      up.type = "button";
+      up.disabled = position === 0;
+      up.setAttribute("aria-label", `Move ${module.label} earlier`);
+      up.onclick = () => moveOverviewModule(module.id, -1);
+      const down = el("button", "chip", "later");
+      down.type = "button";
+      down.disabled = position === overviewLayout.length - 1;
+      down.setAttribute("aria-label", `Move ${module.label} later`);
+      down.onclick = () => moveOverviewModule(module.id, 1);
+      row.append(el("span", "overview-layout-size", `${entry.span}/12`), up, down);
+    }
     target.append(row);
-    if (index === OVERVIEW_MODULES.length - 1) row.classList.add("last");
   }
 }
 
 function moveOverviewModule(id, direction) {
-  const index = overviewLayout.indexOf(id);
+  const index = overviewLayout.findIndex((entry) => entry.id === id);
   const next = index + direction;
   if (index < 0 || next < 0 || next >= overviewLayout.length) return;
   [overviewLayout[index], overviewLayout[next]] = [overviewLayout[next], overviewLayout[index]];
@@ -335,10 +405,106 @@ function moveOverviewModule(id, direction) {
   renderOverviewCards();
 }
 
+function resetOverviewLayout() {
+  overviewLayout = normaliseOverviewLayout(null);
+  saveOverviewLayout();
+  renderOverviewEditor();
+  renderOverviewCards();
+}
+
+function setOverviewEditMode(enabled) {
+  overviewEditMode = enabled;
+  document.body.classList.toggle("overview-editing", enabled);
+  renderOverviewEditor();
+  renderOverviewCards();
+}
+
+function overviewGridStep(grid) {
+  const style = getComputedStyle(grid);
+  const gap = Number.parseFloat(style.columnGap) || 12;
+  const width = grid.getBoundingClientRect().width;
+  const columns = style.gridTemplateColumns.split(" ").filter(Boolean).length || OVERVIEW_COLUMNS;
+  return (width - gap * (columns - 1)) / columns + gap;
+}
+
+function overviewGridColumns() {
+  if (window.innerWidth <= 680) return 1;
+  if (window.innerWidth <= 1100) return 6;
+  return OVERVIEW_COLUMNS;
+}
+
+function overviewRenderSpan(span) {
+  const columns = overviewGridColumns();
+  if (columns === OVERVIEW_COLUMNS) return span;
+  if (columns === 1) return 1;
+  return Math.max(3, Math.min(columns, Math.round(span / 2)));
+}
+
+function updateOverviewResize(event) {
+  if (!overviewResize) return;
+  const columns = overviewGridColumns();
+  const delta = Math.round((event.clientX - overviewResize.startX) / overviewGridStep(overviewResize.grid));
+  const desktopDelta = columns === OVERVIEW_COLUMNS ? delta : delta * (OVERVIEW_COLUMNS / columns);
+  const span = overviewSpan(overviewResize.startSpan + desktopDelta);
+  const entry = overviewLayout.find((candidate) => candidate.id === overviewResize.id);
+  if (!entry) return;
+  entry.span = span;
+  overviewResize.card.style.setProperty("--overview-span", String(span));
+  overviewResize.label.textContent = `${span}/12 columns`;
+}
+
+function finishOverviewResize() {
+  if (!overviewResize) return;
+  window.removeEventListener("pointermove", updateOverviewResize);
+  window.removeEventListener("pointerup", finishOverviewResize);
+  document.body.classList.remove("overview-resizing");
+  saveOverviewLayout();
+  overviewResize = null;
+  renderOverviewEditor();
+  renderOverviewCards();
+}
+
+function startOverviewResize(event, id, card, label) {
+  if (!overviewEditMode) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const entry = overviewLayout.find((candidate) => candidate.id === id);
+  if (!entry) return;
+  overviewResize = { id, card, label, grid: $("#overview-grid"), startX: event.clientX, startSpan: entry.span };
+  document.body.classList.add("overview-resizing");
+  window.addEventListener("pointermove", updateOverviewResize);
+  window.addEventListener("pointerup", finishOverviewResize, { once: true });
+}
+
+function finishOverviewDrag() {
+  overviewDragId = null;
+  document.querySelectorAll(".overview-card.dragging, .overview-card.drag-over")
+    .forEach((card) => card.classList.remove("dragging", "drag-over"));
+}
+
+function reorderOverviewModule(targetId, event) {
+  if (!overviewDragId || overviewDragId === targetId) return;
+  const from = overviewLayout.findIndex((entry) => entry.id === overviewDragId);
+  const target = overviewLayout.findIndex((entry) => entry.id === targetId);
+  if (from < 0 || target < 0) return;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const before = event.clientY < rect.top + rect.height / 2
+    || (event.clientY <= rect.bottom && event.clientX < rect.left + rect.width / 2);
+  const [entry] = overviewLayout.splice(from, 1);
+  let insertion = overviewLayout.findIndex((candidate) => candidate.id === targetId);
+  if (!before) insertion += 1;
+  overviewLayout.splice(insertion, 0, entry);
+  saveOverviewLayout();
+  finishOverviewDrag();
+  renderOverviewEditor();
+  renderOverviewCards();
+}
+
 function renderOverviewCards() {
   const target = $("#overview-grid");
   if (!target) return;
   target.replaceChildren();
+  target.classList.toggle("is-editing", overviewEditMode);
   const data = lastStatus || {};
   const server = data.server;
   const modules = {
@@ -394,18 +560,152 @@ function renderOverviewCards() {
       body.append(el("p", "muted small", `${data.mode || "mode unknown"} · ${data.scope || "scope unknown"}`));
       return body;
     },
+    identity: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", server?.hostname || "No supervised server"));
+      body.append(el("p", "muted small", `${data.game || "gamemode unknown"} · ${data.scope || "scope unknown"}`));
+      return body;
+    },
+    "player-history": () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", `${playerHistory.size} tracked`));
+      body.append(el("p", "muted small", "Open Player history for joins, leaves, and playtime."));
+      return body;
+    },
+    access: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.access?.invite_only ? "Invite only" : "Public"));
+      body.append(el("p", "muted small", "Open Access gate to manage the allowlist."));
+      return body;
+    },
+    timings: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", timingHistory.length ? "Collecting" : "Waiting"));
+      body.append(el("p", "muted small", "Frame timing history is available in Monitoring."));
+      return body;
+    },
+    addresses: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", `${(data.addresses || []).length} addresses`));
+      body.append(el("p", "muted small", "Local, tailnet, game, and query endpoints."));
+      return body;
+    },
+    "anti-cheat": () => {
+      const body = el("div", "overview-reading");
+      const antiCheat = data.anti_cheat || {};
+      const lamp = antiCheat.state === "enabled" ? "up" : antiCheat.state === "disabled" ? "down" : "wait";
+      body.append(el("p", `overview-value lamp ${lamp}`, antiCheat.state || "unknown"));
+      body.append(el("p", "muted small", antiCheat.summary || "No anti-cheat signal found."));
+      return body;
+    },
+    commands: () => {
+      const body = el("div", "overview-reading");
+      const current = knownInstances.find((entry) => entry.id === selectedInstance) || knownInstances[0];
+      const profile = current?.profile || {};
+      body.append(el("p", "overview-value", `${(profile.command || []).length} available`));
+      body.append(el("p", "muted small", `${profile.name || "Gamemode"} commands from this instance profile.`));
+      return body;
+    },
+    documents: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.bridge?.enabled ? "Bridge available" : "Bridge off"));
+      body.append(el("p", "muted small", "Open Game documents to browse persistence data."));
+      return body;
+    },
+    jobs: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", "Scheduler"));
+      body.append(el("p", "muted small", "Open Diagnostics to inspect and run scheduled jobs."));
+      return body;
+    },
+    profile: () => {
+      const body = el("div", "overview-reading");
+      const current = knownInstances.find((entry) => entry.id === selectedInstance) || knownInstances[0];
+      body.append(el("p", "overview-value", current?.profile?.name || "Gamemode profile"));
+      body.append(el("p", "muted small", "Readiness, maps, checks, and command declarations."));
+      return body;
+    },
+    convars: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", "Live settings"));
+      body.append(el("p", "muted small", "Open Gamemode settings to inspect the live catalogue."));
+      return body;
+    },
+    build: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.cellar?.version || "Build unknown"));
+      body.append(el("p", "muted small", "Open Build and updates for version drift and release actions."));
+      return body;
+    },
+    "web-access": () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.web_auth?.password_configured ? "Password protected" : "Local only"));
+      body.append(el("p", "muted small", "Web UI authentication and Tailscale access."));
+      return body;
+    },
+    backups: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.backup?.enabled ? "Enabled" : "Off"));
+      body.append(el("p", "muted small", "Database backup and restore controls."));
+      return body;
+    },
+    persistence: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.persistence?.enabled ? "Enabled" : "Off"));
+      body.append(el("p", "muted small", "Document snapshot backup and restore controls."));
+      return body;
+    },
   };
-  for (const id of overviewLayout) {
-    const module = OVERVIEW_MODULES.find((candidate) => candidate.id === id);
-    if (!module || !modules[id]) continue;
+  for (const entry of overviewLayout) {
+    const module = overviewModule(entry.id);
+    if (!module || !modules[entry.id]) continue;
     const card = el("article", "panel overview-card");
+    card.dataset.overviewId = module.id;
+    card.style.setProperty("--overview-span", String(overviewRenderSpan(entry.span)));
+    card.dataset.overviewSpan = String(entry.span);
+    card.draggable = overviewEditMode;
+    card.addEventListener("dragstart", (event) => {
+      if (!overviewEditMode) return;
+      overviewDragId = module.id;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", module.id);
+      card.classList.add("dragging");
+    });
+    card.addEventListener("dragover", (event) => {
+      if (!overviewDragId || overviewDragId === module.id) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      card.classList.add("drag-over");
+    });
+    card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
+    card.addEventListener("drop", (event) => {
+      event.preventDefault();
+      reorderOverviewModule(module.id, event);
+    });
+    card.addEventListener("dragend", finishOverviewDrag);
     const heading = el("div", "overview-card-heading");
-    heading.append(el("h2", null, module.label));
+    const title = el("h2", null, module.label);
+    if (overviewEditMode) {
+      const dragHint = el("span", "overview-drag-hint", "drag to move");
+      dragHint.setAttribute("aria-hidden", "true");
+      title.append(" ", dragHint);
+    }
+    heading.append(title);
     const open = el("button", "chip", "open");
     open.type = "button";
-    open.onclick = () => showTab(module.tab, true);
+    open.onclick = () => showTab(module.tab, true, module.sub);
     heading.append(open);
-    card.append(heading, el("div", "body", modules[id]()));
+    card.append(heading, el("div", "body", modules[entry.id]()));
+    if (overviewEditMode) {
+      const resize = el("button", "overview-resize-handle", "resize");
+      resize.type = "button";
+      resize.setAttribute("aria-label", `Resize ${module.label}`);
+      resize.title = "Drag to resize this module";
+      const size = el("span", "overview-size-label", `${entry.span}/12 columns`);
+      resize.append(size);
+      resize.addEventListener("pointerdown", (event) => startOverviewResize(event, module.id, card, size));
+      card.append(resize);
+    }
     target.append(card);
   }
 }
@@ -2823,6 +3123,11 @@ async function start() {
       selectedInstance = route.instance;
       await loadInstances();
     }
+  });
+  $("#overview-customize")?.addEventListener("click", () => setOverviewEditMode(!overviewEditMode));
+  $("#overview-reset")?.addEventListener("click", resetOverviewLayout);
+  window.addEventListener("resize", () => {
+    if (!overviewResize && !overviewDragId) renderOverviewCards();
   });
   renderOverviewEditor();
   renderOverviewCards();

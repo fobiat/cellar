@@ -121,11 +121,62 @@ a { color: var(--aj-azure); }
 
 .overview-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 12px;
 }
 
 .overview-grid .panel { margin-bottom: 0; }
+
+.overview-card {
+  grid-column: span var(--overview-span, 4);
+  min-width: 0;
+  min-height: 150px;
+  position: relative;
+  transition: border-color 140ms ease, opacity 140ms ease, transform 140ms ease;
+}
+
+.overview-grid.is-editing .overview-card {
+  cursor: grab;
+  border-color: color-mix(in srgb, var(--aj-azure) 46%, var(--aj-frost));
+}
+
+.overview-grid.is-editing .overview-card:active { cursor: grabbing; }
+.overview-card.dragging { opacity: 0.45; transform: scale(0.99); }
+.overview-card.drag-over { border-color: var(--aj-azure); box-shadow: 0 0 0 2px color-mix(in srgb, var(--aj-azure) 24%, transparent); }
+.overview-drag-hint { color: var(--aj-azure); font-size: 10px; font-weight: 400; letter-spacing: 0.04em; }
+
+.overview-resize-handle {
+  align-items: center;
+  background: color-mix(in srgb, var(--aj-azure) 12%, var(--aj-shell));
+  border: 1px solid color-mix(in srgb, var(--aj-azure) 52%, var(--aj-frost));
+  border-radius: 4px;
+  bottom: 8px;
+  color: var(--aj-azure);
+  cursor: ew-resize;
+  display: flex;
+  font-size: 10px;
+  gap: 7px;
+  min-height: 32px;
+  padding: 4px 8px;
+  position: absolute;
+  right: 8px;
+  touch-action: none;
+}
+
+.overview-resize-handle::before { content: "↔"; font-size: 14px; }
+.overview-resize-handle:hover { background: color-mix(in srgb, var(--aj-azure) 22%, var(--aj-shell)); }
+
+.overview-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.overview-toolbar p { margin: 0; }
+.overview-layout-status { color: var(--aj-text); font-weight: 600; }
+.overview-toolbar-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 
 .overview-card-heading {
   display: flex;
@@ -143,8 +194,9 @@ a { color: var(--aj-azure); }
 
 .overview-layout {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 6px 18px;
+  gap: 8px 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 14px;
 }
 
 .overview-layout-row {
@@ -155,6 +207,9 @@ a { color: var(--aj-azure); }
 }
 
 .overview-layout-label { display: flex; align-items: center; gap: 8px; flex: 1; }
+.overview-layout-size { color: var(--aj-text-muted); font-size: 11px; min-width: 30px; text-align: right; }
+
+body.overview-resizing { cursor: ew-resize; user-select: none; }
 
 /* A lamp: a glyph and a colour, never a colour alone.
  *
@@ -838,6 +893,16 @@ dialog.confirm input {
   .panel { margin-bottom: 10px; }
   .panel > .body { padding: 12px; }
   .row > .action, .row > .chip { flex: 1 1 150px; }
+  .overview-toolbar { align-items: flex-start; flex-direction: column; }
+  .overview-toolbar-actions { justify-content: flex-start; }
+  .overview-layout { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .overview-grid { grid-template-columns: 1fr; }
+  .overview-card { grid-column: span 1; }
+  .overview-resize-handle { bottom: 6px; right: 6px; }
+}
+
+@media (min-width: 681px) and (max-width: 1100px) {
+  .overview-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 }
 
 /* A finger is not a mouse pointer. The tab bar was about 30px tall on a

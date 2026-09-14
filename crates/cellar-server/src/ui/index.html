@@ -100,7 +100,16 @@
       <div class="panel">
         <h2>Personal overview</h2>
         <div class="body">
-          <p class="muted small">Choose the live modules you want here and move them into your preferred order. Your layout stays in this browser.</p>
+          <div class="overview-toolbar">
+            <div>
+              <p class="overview-layout-status" id="overview-layout-status">6 modules shown</p>
+              <p class="muted small" id="overview-layout-hint">Your overview is ready. Customize it to arrange cards and choose what stays visible.</p>
+            </div>
+            <div class="overview-toolbar-actions">
+              <button class="action" id="overview-customize" type="button" aria-pressed="false">Customize layout</button>
+              <button class="chip" id="overview-reset" type="button" hidden>Reset default</button>
+            </div>
+          </div>
           <div id="overview-layout" class="overview-layout"></div>
         </div>
       </div>
