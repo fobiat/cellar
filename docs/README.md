@@ -21,6 +21,7 @@ An open-source dedicated server runner and manager for s&box.
 | **[Operations](OPERATIONS.md)** | Running it for real: health probes, graceful shutdown, webhooks, updates, backups. |
 | **[Troubleshooting](TROUBLESHOOTING.md)** | Symptoms, causes and fixes, including the ones that look like something else. |
 | **[Architecture](ARCHITECTURE.md)** | How it is built and why, including the engine findings the design rests on. |
+| **[AppleJackRP integration](integrations/applejackrp.md)** | Optional profile and workflow notes for AppleJackRP. |
 
 ## The one thing to know before anything else
 

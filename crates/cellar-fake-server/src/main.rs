@@ -94,7 +94,7 @@ fn main() -> std::process::ExitCode {
 
     // The line AppleJackRP's NetworkBootstrap logs, and Cellar's default
     // readiness pattern.
-    emit(&mut log, "Bootstrap", "Lobby created - session is joinable");
+    emit(&mut log, "Bootstrap", "Server is ready");
 
     for index in 0..options.players {
         let steam_id = 76561198000000000u64 + index as u64;
