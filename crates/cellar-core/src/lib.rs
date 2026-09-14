@@ -32,5 +32,5 @@ pub const HEALTH_HEADER: &str = "x-cellar";
 pub use config::{AuthMode, Config, ConfigError, Launcher};
 pub use event::{Event, Level, LogLine, Origin, ResourceSample, StatusBar, SteamId};
 pub use lifecycle::{BackoffPolicy, Decision, RestartPolicy, RestartTracker, State};
-pub use profile::{GamemodeProfile, ProfileCheck, ProfileCommand};
+pub use profile::{GamemodeProfile, ProfileCheck, ProfileCommand, parse_discovered_commands};
 pub use secret::Secret;

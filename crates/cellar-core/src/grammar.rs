@@ -37,11 +37,9 @@ const LEFT_SUFFIX: &str = " disconnected";
 
 /// The readiness line Cellar watches for by default.
 ///
-/// AppleJackRP's `Code/NetworkBootstrap.cs` logs this once the lobby exists and
-/// the session will accept joins, which is the earliest honest "serving" signal
-/// available without a query protocol. Configurable, because a different
-/// gamemode logs something different.
-pub const DEFAULT_READY_PATTERN: &str = "Lobby created - session is joinable";
+/// An empty default means readiness is unknown until the profile or server
+/// config supplies a line the running gamemode actually logs.
+pub const DEFAULT_READY_PATTERN: &str = "";
 
 /// One line, already stripped of terminal control sequences, with the channel
 /// it arrived on.
@@ -227,7 +225,7 @@ pub fn infer_level(parsed: &Parsed) -> Level {
 ///
 /// Takes the gamemode profile because two of the decisions here are its: which
 /// line means "serving", and which category a log line falls into. Both used to
-/// be hardcoded to AppleJackRP, and the category rule additionally existed a
+/// be hardcoded to one gamemode, and the category rule additionally existed a
 /// second time in `app.js`.
 pub fn classify(
     parsed: &Parsed,
@@ -443,10 +441,11 @@ mod tests {
 
     #[test]
     fn classify_recognises_readiness() {
+        let ready_pattern = "Server is ready";
         let parsed = Parsed {
             at: None,
             logger: Some("Bootstra".to_owned()),
-            message: DEFAULT_READY_PATTERN.to_owned(),
+            message: ready_pattern.to_owned(),
             exception: None,
             continuation: false,
         };
@@ -454,7 +453,7 @@ mod tests {
             classify(
                 &parsed,
                 Origin::Console,
-                DEFAULT_READY_PATTERN,
+                ready_pattern,
                 &crate::profile::GamemodeProfile::default(),
             ),
             Event::ServerReady { .. }

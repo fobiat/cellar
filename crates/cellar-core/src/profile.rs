@@ -1,10 +1,8 @@
 //! What a gamemode tells Cellar about itself.
 //!
-//! Four places used to assume AppleJackRP: the `ready_pattern` default, the log
-//! category heuristic, a doctor check that grepped one C# file by path, and
-//! thirteen hardcoded command chips in the web UI. Each is now a line in this
-//! table, and a gamemode Cellar has never heard of gets all four by writing
-//! twenty lines of TOML.
+//! A profile is the optional adapter between Cellar and a gamemode. Cellar
+//! does not own a gamemode's readiness line, command names, maps or source
+//! layout. A gamemode can declare those details without a Cellar code change.
 //!
 //! Deliberately small, and it must stay that way. This is not a Pterodactyl
 //! egg. No install script, no config-rewrite language, no per-gamemode UI
@@ -37,8 +35,8 @@ pub struct GamemodeProfile {
 
     /// The prefix this gamemode's convars share, without a trailing underscore.
     ///
-    /// Drives `find <prefix>` in the palette and the log category heuristic,
-    /// which used to test for the literal `applejack`.
+    /// Drives automatic `find <prefix>` discovery and the log category
+    /// heuristic. The prefix is data supplied by the gamemode profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub convar_prefix: Option<String>,
 
@@ -101,6 +99,51 @@ pub struct ProfileCommand {
     /// `applejack_wipe` is destructive and the gamemode can say so.
     #[serde(default)]
     pub confirm: bool,
+}
+
+/// Parse command names returned by the engine's `find <prefix>` command.
+///
+/// The console has changed the decoration around this output over time, so
+/// Cellar accepts a command token at the start of each line and ignores the
+/// rest. A command is shown only when it starts with the requested prefix and
+/// contains characters that can safely be sent as one command name.
+pub fn parse_discovered_commands<'a, I>(lines: I, prefix: &str) -> Vec<ProfileCommand>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let prefix = format!("{prefix}_");
+    let mut commands = Vec::new();
+
+    for line in lines {
+        let token = line
+            .trim()
+            .trim_start_matches(['>', '-', '*', '|'])
+            .split_whitespace()
+            .next()
+            .unwrap_or_default();
+        if !token.starts_with(&prefix)
+            || token.len() == prefix.len()
+            || !token.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.-".contains(&byte)
+            })
+        {
+            continue;
+        }
+        if commands
+            .iter()
+            .any(|command: &ProfileCommand| command.command == token)
+        {
+            continue;
+        }
+        commands.push(ProfileCommand {
+            label: token.to_owned(),
+            command: token.to_owned(),
+            group: Some("Discovered".to_owned()),
+            confirm: true,
+        });
+    }
+
+    commands
 }
 
 /// A file in the gamemode's source tree that must contain given strings.
@@ -306,13 +349,13 @@ mod tests {
     fn an_array_of_tables_reads_as_commands_and_checks() {
         let parsed = profile(
             r#"
-            name = "AppleJackRP"
+            name = "Example gamemode"
             ready_pattern = "Lobby created - session is joinable"
-            convar_prefix = "applejack"
+            convar_prefix = "example"
 
             [[command]]
             label = "List features"
-            command = "applejack_features"
+            command = "example_features"
 
             [[check]]
             name = "spawn validation"
@@ -322,9 +365,9 @@ mod tests {
             "#,
         );
 
-        assert_eq!(parsed.name.as_deref(), Some("AppleJackRP"));
+        assert_eq!(parsed.name.as_deref(), Some("Example gamemode"));
         assert_eq!(parsed.commands.len(), 1);
-        assert_eq!(parsed.commands[0].command, "applejack_features");
+        assert_eq!(parsed.commands[0].command, "example_features");
         assert!(!parsed.commands[0].confirm);
         assert_eq!(parsed.checks.len(), 1);
         parsed.validate().expect("valid");
@@ -374,7 +417,7 @@ mod tests {
     fn a_convar_prefix_that_could_not_be_typed_is_refused() {
         let parsed = profile(r#"convar_prefix = "Apple Jack""#);
         assert!(parsed.validate().is_err());
-        assert!(profile(r#"convar_prefix = "applejack""#).validate().is_ok());
+        assert!(profile(r#"convar_prefix = "example""#).validate().is_ok());
         assert!(profile(r#"convar_prefix = "sbox_2""#).validate().is_ok());
     }
 
@@ -397,22 +440,20 @@ mod tests {
             r#"
             [[command]]
             label = ""
-            command = "applejack_features"
+            command = "example_features"
             "#,
         );
         assert!(parsed.validate().is_err());
     }
 
-    /// The defect this replaced: `logs.rs` tested for the literal `applejack`,
-    /// so a gamemode with any other convar prefix had all its own chatter
-    /// bucketed as "other".
+    /// A gamemode's own prefix determines which gameplay chatter it owns.
     #[test]
     fn a_gamemode_line_is_gameplay_only_for_the_declared_prefix() {
-        let applejack = profile(r#"convar_prefix = "applejack""#);
+        let example = profile(r#"convar_prefix = "example""#);
         let sandbox = profile(r#"convar_prefix = "sbox""#);
 
         assert_eq!(
-            applejack.category("AppleJack", "spawned a citizen"),
+            example.category("Example", "spawned a citizen"),
             Category::Gameplay
         );
         assert_eq!(
@@ -442,6 +483,30 @@ mod tests {
             let back: Category = serde_json::from_str(&json).expect("parses");
             assert_eq!(back, category);
         }
+    }
+
+    #[test]
+    fn discovery_accepts_decorated_prefixed_commands_only() {
+        let commands = parse_discovered_commands(
+            [
+                "> example_spawn - Spawn a player",
+                "example_spawn - duplicate",
+                "  example_settings",
+                "other_command",
+                "example_",
+                "example_bad$name",
+            ],
+            "example",
+        );
+
+        assert_eq!(
+            commands
+                .iter()
+                .map(|command| command.command.as_str())
+                .collect::<Vec<_>>(),
+            ["example_spawn", "example_settings"]
+        );
+        assert!(commands.iter().all(|command| command.confirm));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! Everything here is behind [`crate::session`], because the console it exposes
 //! runs at full engine privilege: `ConVarSystem.Run` from the dedicated console
 //! is called with `allowProtected: true`, so a caller reaching `/api/exec`
-//! reaches `quit`, `kick` and every `applejack_*` command. This is not an
+//! reaches `quit`, `kick` and every command exposed by the running game. This is not an
 //! observability endpoint with a console bolted on; it is a console.
 
 use std::sync::Arc;
@@ -61,6 +61,34 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/v1/configs", get(external_configs))
         .route("/api/v1/instances", get(external_instances))
         .route("/metrics", get(metrics))
+}
+
+async fn discovered_profile(entry: &crate::registry::Entry) -> cellar_core::GamemodeProfile {
+    let mut profile = entry.descriptor.profile.clone();
+    let Some(prefix) = profile.convar_prefix.as_deref() else {
+        return profile;
+    };
+    let Some(handle) = &entry.handle else {
+        return profile;
+    };
+
+    let command = format!("find {prefix}");
+    let Ok(reply) = handle.exec(&command, "cellar-discovery").await else {
+        return profile;
+    };
+    for discovered in
+        cellar_core::parse_discovered_commands(reply.iter().map(String::as_str), prefix)
+    {
+        if profile
+            .commands
+            .iter()
+            .any(|known| known.command == discovered.command)
+        {
+            continue;
+        }
+        profile.commands.push(discovered);
+    }
+    profile
 }
 
 async fn metrics(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response {
@@ -2056,17 +2084,22 @@ async fn run_job(
 
 async fn instances(State(state): State<Arc<AppState>>, _: Operator) -> Response {
     let primary = state.instances.primary().map(|entry| entry.id.to_string());
-    Json(serde_json::json!({
-        "primary": primary,
-        "instances": state.instances.iter().map(|entry| serde_json::json!({
+    let mut instances = Vec::new();
+    for entry in state.instances.iter() {
+        let profile = discovered_profile(entry).await;
+        instances.push(serde_json::json!({
             "id": entry.id.to_string(),
             "scope": entry.scope,
             "required": entry.required,
             "running": entry.handle.is_some(),
             "unavailable": entry.unavailable,
             "server": entry.descriptor,
-            "profile": entry.descriptor.profile,
-        })).collect::<Vec<_>>(),
+            "profile": profile,
+        }));
+    }
+    Json(serde_json::json!({
+        "primary": primary,
+        "instances": instances,
     }))
     .into_response()
 }

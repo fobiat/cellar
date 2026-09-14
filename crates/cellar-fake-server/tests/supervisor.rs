@@ -32,13 +32,13 @@ fn config(log_file: PathBuf, extra: &[&str]) -> Instance {
         profile: Default::default(),
         server: ServerConfig {
             executable: PathBuf::from(FAKE_SERVER),
-            project: PathBuf::from("/tmp/applejackrp.sbproj"),
+            project: PathBuf::from("/tmp/example-game.sbproj"),
             launcher: Launcher::Native,
             log_file: Some(log_file.clone()),
-            hostname: "AppleJackRP Dev".to_owned(),
+            hostname: "Example Server".to_owned(),
             port: 27015,
             query_port: 27016,
-            ready_pattern: Some(cellar_core::grammar::DEFAULT_READY_PATTERN.to_owned()),
+            ready_pattern: Some("Server is ready".to_owned()),
             extra_args: {
                 let mut args = vec!["--log-file".to_owned(), log_file.display().to_string()];
                 args.extend(extra.iter().map(|s| (*s).to_owned()));

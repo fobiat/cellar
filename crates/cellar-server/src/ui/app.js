@@ -247,9 +247,8 @@ let lastStatus = null;
 let commandHistory = [];
 let historyCursor = 0;
 
-/* What Tab completes from: the gamemode's own palette, plus what has been
- * typed here before. Cellar keeps no list of a gamemode's commands, which is
- * the point of the profile. */
+/* What Tab completes from: the gamemode's declared and engine-discovered
+ * commands, plus what has been typed here before. */
 function completions() {
   const current = knownInstances.find((entry) => entry.id === selectedInstance) || knownInstances[0];
   const fromProfile = ((current && current.profile && current.profile.command) || [])
@@ -807,9 +806,8 @@ async function loadActivity() {
 
 /* ---- the gamemode command palette --------------------------------------- */
 
-/* Was thirteen buttons in index.html naming one gamemode's convars. The
- * gamemode declares them now, so a server Cellar has never heard of gets a
- * palette, and AppleJackRP's lives in AppleJackRP's profile. */
+/* The gamemode declares its safe commands, and a running profile can add
+ * commands returned by the engine's own discovery command. */
 async function loadPalette() {
   const data = await api("/api/instances");
   const target = $("#precinct-palette");
@@ -827,8 +825,8 @@ async function loadPalette() {
 
   if (!commands.length) {
     target.append(el("p", "muted",
-      "This gamemode's profile declares no commands. Add [[command]] entries to it, or type "
-      + "into the console above."));
+      "This gamemode has not declared or exposed any commands. Type one into the console above, "
+      + "or add a profile command prefix for automatic discovery."));
     return;
   }
 
@@ -2627,7 +2625,7 @@ async function loadConfigs() {
     const button = el("button", `action ${profile?.active ? "live" : ""}`, profile ? label : `${label} unavailable`);
     button.disabled = !profile || profile.active || Boolean(profile.refusal);
     button.title = !profile
-      ? "Install or copy the matching AppleJackRP profile beside the active config"
+      ? "Install or copy the matching gamemode profile beside the active config"
       : profile.refusal || `Switch to ${profile.name}`;
     if (profile) button.onclick = () => activateConfig(profile.name);
     modeActions.append(button);
@@ -2653,8 +2651,7 @@ async function loadConfigs() {
   }
 }
 
-/* What the gamemode said about itself. Every row here was hardcoded to
- * AppleJackRP before `[profile]` existed. */
+/* What the gamemode said about itself. */
 async function loadGamemode() {
   const data = await api("/api/instances");
   const wanted = instanceId() || data.primary;
