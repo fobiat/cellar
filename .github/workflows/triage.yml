@@ -1,0 +1,42 @@
+---
+name: Triage
+
+"on":
+  issues:
+    types: [opened, reopened]
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  label:
+    name: label incoming work
+    runs-on: ubuntu-latest
+    steps:
+      - name: mark for triage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: >-
+            ${{ github.event.issue.number || github.event.pull_request.number }}
+          API_URL: >-
+            https://api.github.com/repos/${{ github.repository }}/issues
+        run: |
+          set -eu
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${API_URL}/${NUMBER}/labels" \
+            -d '{"labels":["triage"]}'
+
+      - name: label pull requests by changed paths
+        if: github.event_name == 'pull_request_target'
+        uses: actions/labeler@b8dd2d9be0f68b860e7dae5dae7d772984eacd6d  # v6
+        with:
+          repo-token: ${{ github.token }}
+          sync-labels: false

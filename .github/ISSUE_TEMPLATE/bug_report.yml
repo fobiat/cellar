@@ -1,5 +1,7 @@
+---
 name: Bug report
-description: Something Cellar does that it should not, or does not do that it should.
+description: >-
+  Something Cellar does that it should not, or does not do that it should.
 labels: [bug]
 body:
   - type: markdown
@@ -47,6 +49,8 @@ body:
     attributes:
       label: Platform
       options:
+        - Linux, native, on a host
+        - Linux, native, in a container
         - Linux, under Wine, in a container
         - Linux, under Wine, on a host
         - Linux, in Kubernetes
@@ -78,5 +82,7 @@ body:
     attributes:
       label: Before submitting
       options:
-        - label: I have removed any database URL, GSLT, webhook URL or password from what I pasted.
+        - label: >-
+            I have removed any database URL, GSLT, webhook URL or password from
+            what I pasted.
           required: true

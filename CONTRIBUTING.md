@@ -11,6 +11,11 @@ Never include credentials, database URLs, Steam tokens, webhook URLs, player
 data, or private server addresses. Use the security reporting process for a
 vulnerability.
 
+New issues and pull requests are marked for triage automatically. Pull
+requests are routed to the repository owner for review, and the issue forms
+collect the platform, version, reproduction, and doctor output needed to
+investigate Cellar without asking reporters to expose secrets.
+
 ## Development checks
 
 From the repository root:

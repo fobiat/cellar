@@ -1,0 +1,3 @@
+# Keep the repository owner in the review loop for every change. GitHub sends
+# the review request through the account's configured notification channels.
+* @fobiat

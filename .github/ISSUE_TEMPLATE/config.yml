@@ -1,3 +1,4 @@
+---
 blank_issues_enabled: false
 contact_links:
   - name: Something security-sensitive
@@ -15,4 +16,5 @@ contact_links:
   - name: Hosted database contract
     url: https://github.com/fobiat/cellar/blob/main/docs/GAME_DATABASE.md
     about: >-
-      How Cellar connects to a gamemode-owned database without owning its schema.
+      How Cellar connects to a gamemode-owned database without owning its
+      schema.

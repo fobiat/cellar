@@ -9,7 +9,6 @@ import { expect, test } from "@playwright/test";
 const root = join(import.meta.dirname, "..", "..");
 const cellar = join(root, "target", "debug", "cellar");
 const fake = join(root, "target", "debug", "cellar-fake-server");
-const port = 18081;
 
 let state;
 
@@ -17,7 +16,7 @@ function tomlString(value) {
   return JSON.stringify(value);
 }
 
-async function writeFixture() {
+async function writeFixture(port) {
   const directory = await mkdtemp(join(tmpdir(), "cellar-browser-"));
   const alphaLog = join(directory, "alpha.log");
   const betaLog = join(directory, "beta.log");
@@ -82,8 +81,9 @@ function startCellar(configPath) {
   return child;
 }
 
-test.beforeAll(async () => {
-  state = await writeFixture();
+test.beforeAll(async ({}, testInfo) => {
+  const port = Number(new URL(testInfo.project.use.baseURL).port);
+  state = await writeFixture(port);
   state.child = startCellar(state.configPath);
   await waitFor(`http://127.0.0.1:${port}/healthz`);
   await waitFor(`http://127.0.0.1:${port}/api/status`);

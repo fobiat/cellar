@@ -1,3 +1,4 @@
+---
 name: Feature request
 description: Something Cellar should be able to do.
 labels: [enhancement]
@@ -8,7 +9,8 @@ body:
       label: The problem
       description: |
         What you are trying to do, and what stops you. The problem is more
-        useful than a proposed solution, because it leaves room for a better one.
+        useful than a proposed solution, because it leaves room for a better
+        one.
     validations:
       required: true
 

@@ -18,7 +18,21 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [
-    { name: "desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } } },
-    { name: "mobile", use: { ...devices["Pixel 7"], viewport: { width: 412, height: 915 } } },
+    {
+      name: "desktop",
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: "http://127.0.0.1:18081",
+        viewport: { width: 1280, height: 900 },
+      },
+    },
+    {
+      name: "mobile",
+      use: {
+        ...devices["Pixel 7"],
+        baseURL: "http://127.0.0.1:18082",
+        viewport: { width: 412, height: 915 },
+      },
+    },
   ],
 });
