@@ -61,7 +61,7 @@ The smallest config that does something useful:
 [server]
 executable = "/home/container/sbox/sbox-server.exe"
 project    = "/home/container/projects/my-game/my-game.sbproj"
-launcher   = "wine"          # "native" on Windows
+launcher   = "native"        # use "wine" explicitly for a Windows binary
 hostname   = "S&box Server"
 
 [database]

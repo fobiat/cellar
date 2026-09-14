@@ -105,9 +105,9 @@ sets `TimeoutStopSec=60`, because the engine installs no SIGTERM handler and
 systemd's default would kill it before its own shutdown finished.
 
 **x86_64 only.** No arm64 build is published, and the installer says so rather
-than downloading something that will not run. The dedicated server is a Windows
-x86_64 binary under Wine, so an arm64 host cannot run what Cellar supervises
-anyway. Build the CLI from source if you want it there.
+than downloading something that will not run. The public dedicated server is
+an x86_64 build, so an arm64 host cannot run what Cellar supervises anyway.
+Build the CLI from source if you want it there.
 
 ### A bare host, including what Cellar supervises
 
@@ -127,7 +127,8 @@ failing the run.
 
 | Flag | What it adds |
 | --- | --- |
-| (default) | curl, tar, rsync, Wine, then Cellar itself |
+| (default) | curl, tar, rsync, then Cellar itself |
+| `--with-wine` | Wine for an explicit Windows-binary fallback |
 | `--with-steamcmd` | steamcmd, which is how `sbox-server.exe` reaches the host |
 | `--with-dotnet` | the Windows .NET runtime, inside the Wine prefix |
 | `--with-mariadb` | MariaDB, for `[database]` and the web UI's history |

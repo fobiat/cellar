@@ -10,13 +10,15 @@
 #   CELLAR_WEBHOOK_URL          generic JSON notifications
 
 [server]
-# Linux, in a container or on a host:
+# Linux, in a container or on a host. Native is the default.
 executable = "/home/container/sbox/sbox-server"
 project = "/home/container/projects/my-game/my-game.sbproj"
 # For a published package, use `game` instead of `project`:
 # game = "your-org.your-game"
 # map = "thieves.rpdowntown3t"
-launcher = "wine"
+launcher = "native"
+# For a Windows-only server binary, opt into the compatibility fallback:
+# launcher = "wine"
 
 # Windows, natively:
 # executable = 'C:\sbox\sbox-server.exe'

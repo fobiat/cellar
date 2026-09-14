@@ -60,7 +60,7 @@ cellar doctor
 ```
 
 Verifies the executable exists and is runnable, the project file parses, Wine is
-present when `launcher = "wine"`, the log path is writable, the database is
+present only when the explicit `launcher = "wine"` fallback is selected, the log path is writable, the database is
 reachable when enabled, and the bind addresses are free. Run it first, every
 time; it turns a confusing startup failure into a sentence.
 

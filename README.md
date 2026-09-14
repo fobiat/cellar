@@ -107,9 +107,9 @@ command = "status"
 ```
 
 For local development, set `server.project` to the `.sbproj` instead of
-`server.game`. On Linux, use `launcher = "wine"` only when the installed
-dedicated server is a Windows executable and the Wine runtime is ready. The
-native path is the default for a native server binary.
+`server.game`. Native is the default on Linux and Windows. Set
+`launcher = "wine"` explicitly only when the installed dedicated server is a
+Windows binary and the Wine runtime is ready.
 
 ## Development
 

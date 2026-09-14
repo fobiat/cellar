@@ -202,8 +202,8 @@ releases page or re-run the current installer script.
 No arm64 build is published, and the installer says so rather than downloading
 something that will not run.
 
-The dedicated server is a Windows x86_64 binary run under Wine, so an arm64 host
-cannot run what Cellar supervises. Build the CLI from source with
+The dedicated server is an x86_64 binary, so an arm64 host cannot run what
+Cellar supervises. Build the CLI from source with
 `cargo build --release` if you want it on an arm64 box for its own sake.
 
 ---

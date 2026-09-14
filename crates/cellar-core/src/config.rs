@@ -303,7 +303,8 @@ pub struct ServerConfig {
     #[serde(default)]
     pub map: Option<String>,
 
-    /// Launcher. `Native` on Windows, `Wine` on Linux.
+    /// Launcher. Native is the default on Linux and Windows; Wine is an
+    /// explicit compatibility fallback for Windows binaries.
     #[serde(default)]
     pub launcher: Launcher,
 
@@ -484,24 +485,14 @@ impl ServerConfig {
 }
 
 /// How the executable gets launched.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Launcher {
     /// Run the executable directly. Windows.
+    #[default]
     Native,
-    /// Run it under Wine. Linux, which is the only option there: Facepunch's
-    /// Linux dedicated server is roadmapped, not shipped.
+    /// Run a Windows server binary under Wine as an explicit fallback.
     Wine,
-}
-
-impl Default for Launcher {
-    fn default() -> Self {
-        if cfg!(windows) {
-            Self::Native
-        } else {
-            Self::Wine
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1614,6 +1605,12 @@ mod tests {
     #[test]
     fn a_minimal_config_is_valid() {
         minimal().validate().unwrap();
+    }
+
+    #[test]
+    fn native_is_the_cross_platform_launcher_default() {
+        assert_eq!(Launcher::default(), Launcher::Native);
+        assert_eq!(ServerConfig::default().launcher, Launcher::Native);
     }
 
     fn minimal_server() -> ServerConfig {

@@ -40,7 +40,7 @@ serialisation path, so a config dump or a crash log cannot leak one.
 | `project` | *required unless `game` is set* | Path to the local `.sbproj`. |
 | `game` | unset | Published package ident such as `your-org.your-game`. |
 | `map` | unset | Map ident appended to a published game ident, such as `thieves.rpdowntown3t`. |
-| `launcher` | `wine` | `wine` or `native`. `native` on Windows. |
+| `launcher` | `native` | `native` or explicit `wine` compatibility fallback. |
 | `wine_prefix` | inherited | The prefix this instance runs in, passed as `WINEPREFIX`. Concurrent instances on Linux need one each. |
 | `hostname` | `"S&box Server"` | Server name, and what the status bar shows. |
 | `working_dir` | inherited | Working directory for the child. It does **not** decide where the engine writes; see below. |
@@ -142,7 +142,7 @@ Cellar itself, with no graceful stop anywhere. It is registered ahead of
 `/api/control/{action}`, needs the same operator session as the rest, and is
 reached from the dashboard's Kill everything or from `cellar kill`.
 
-**On Linux each also needs its own `server.wine_prefix`.** Every Wine process in
+**When Wine is selected, each Linux instance needs its own `server.wine_prefix`.** Every Wine process in
 a prefix shares one `wineserver` that jointly holds all their sockets, and
 `wineserver -k` is prefix-scoped, so with one prefix neither instance can be
 dealt with without reaching the other. A prefix needs the Windows .NET 10
