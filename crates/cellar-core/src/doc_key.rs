@@ -1,6 +1,6 @@
 //! What a document key may be.
 //!
-//! A direct port of AppleJackRP's `Code/Storage/DocumentKeys.cs`, which is the
+//! A direct port of AppleJack Framework's `Code/Storage/DocumentKeys.cs`, which is the
 //! authority. Both halves of the bridge have to agree on this exactly: the
 //! gamemode refuses an illegal key before it ever reaches the wire, so a key
 //! this module accepts but the C# would not is a key that can never arrive, and

@@ -23,7 +23,7 @@ An open-source dedicated server runner and manager for s&box.
 | **[Security](SECURITY.md)** | Threat model, privacy, credentials, and release controls. |
 | **[Troubleshooting](TROUBLESHOOTING.md)** | Symptoms, causes and fixes, including the ones that look like something else. |
 | **[Architecture](ARCHITECTURE.md)** | How it is built and why, including the engine findings the design rests on. |
-| **[AppleJackRP integration](integrations/applejackrp.md)** | Optional profile and workflow notes for AppleJackRP. |
+| **[AppleJack Framework integration](integrations/applejack-framework.md)** | Optional profile and workflow notes for AppleJack Framework. |
 
 ## The one thing to know before anything else
 

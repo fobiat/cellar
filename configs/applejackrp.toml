@@ -1,4 +1,4 @@
-# Cellar v0.1.11 configuration for a local AppleJackRP Windows server.
+# Cellar configuration for a local AppleJack Framework Windows server.
 #
 # Copy this file to the machine's Cellar config location, then adjust the
 # engine and runtime paths when the project is not under the default Windows
@@ -11,7 +11,7 @@ executable = 'C:\AppleJackServer\sbox\sbox-server.exe'
 project = 'C:\AppleJackServer\applejackrp-runtime\applejackrp.sbproj'
 launcher = "native"
 working_dir = 'C:\AppleJackServer\sbox'
-hostname = "AppleJackRP Dev"
+hostname = "AppleJack Framework Dev"
 data_dir = 'C:\AppleJackServer\sbox\data\fobiat\applejackrp#local'
 log_file = 'C:\AppleJackServer\sbox\logs\sbox-server.log'
 direct_connect = false

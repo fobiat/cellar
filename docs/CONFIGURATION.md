@@ -287,7 +287,7 @@ The recommended setup is a hosted game database owned by the gamemode. See
 [Game database](GAME_DATABASE.md). The browser is read-only and should use a
 database account with a matching `SELECT` grant.
 
-For a published game that does not use AppleJackRP's database contract, see
+For a published game that does not use AppleJack Framework's database contract, see
 the [Facepunch Sandbox profile](FACEPUNCH-SANDBOX.md). It leaves the database
 and bridge disabled while retaining Cellar's process supervision and dashboard.
 
@@ -353,7 +353,7 @@ for the full walkthrough.
 
 ## `[bridge]`
 
-The half of AppleJackRP's storage contract that nothing implemented until now.
+The half of AppleJack Framework's storage contract that nothing implemented until now.
 See [The bridge](BRIDGE.md) for the protocol.
 
 | Key | Default | Meaning |

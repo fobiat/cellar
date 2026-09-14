@@ -617,7 +617,7 @@ mod tests {
         }
     }
 
-    /// The UI half of the AppleJackRP coupling, pinned.
+    /// The UI half of the AppleJack Framework coupling, pinned.
     ///
     /// The Precinct tab was thirteen `data-command="applejack_*"` buttons in
     /// markup, so every other gamemode's operator got a panel of commands their

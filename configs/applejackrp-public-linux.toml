@@ -1,4 +1,4 @@
-# Cellar published AppleJackRP profile for Linux under Wine.
+# Cellar published AppleJack Framework profile for Linux under Wine.
 
 profile_file = "profiles/applejackrp.toml"
 
@@ -8,7 +8,7 @@ game = "fobiat.applejackrp"
 map = "thieves.rpdowntown3t"
 launcher = "wine"
 working_dir = '/home/container/sbox'
-hostname = "AppleJackRP Dev"
+hostname = "AppleJack Framework Dev"
 data_dir = '/home/container/sbox/data/fobiat/applejackrp'
 log_file = '/home/container/sbox/logs/sbox-server.log'
 direct_connect = false

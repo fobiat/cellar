@@ -1,6 +1,6 @@
 # The bridge
 
-AppleJackRP's `Documentation/Design/20_PERSISTENCE.md` §6.3 specifies an HTTP
+AppleJack Framework's `Documentation/Design/20_PERSISTENCE.md` §6.3 specifies an HTTP
 document store the gamemode talks to instead of local JSON files. The gamemode's
 client half is written, tested and shipped: `Code/Storage/HostedDocumentStore.cs`,
 `HostedDocumentProtocol.cs`, `HostingConfigStore.cs`, and their rule tests.
@@ -143,7 +143,7 @@ of §3.4's revision-conflict machinery or §7.2's cross-server isolation is buil
 
 ---
 
-## Wiring it to AppleJackRP
+## Wiring it to AppleJack Framework
 
 `HostingConfigStore` reads `hosting.json` from `FileSystem.Data` and **refuses
 malformed input loudly** rather than falling back to local storage. That is

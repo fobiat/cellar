@@ -147,7 +147,7 @@ mod tests {
             wine_prefix: None,
             working_dir: None,
             log_file: None,
-            hostname: "AppleJackRP Dev".to_owned(),
+            hostname: "AppleJack Framework Dev".to_owned(),
             gslt: None,
             direct_connect: false,
             port: 27015,

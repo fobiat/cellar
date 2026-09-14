@@ -1,6 +1,6 @@
 -- Cellar's schema. Two halves that share a database and nothing else.
 --
--- `aj_*` is the bridge: the documents AppleJackRP's HostedDocumentStore reads
+-- `aj_*` is the bridge: the documents AppleJack Framework's HostedDocumentStore reads
 -- and writes over `/v1/doc/{key}`. `srv_*` is Cellar's own operations record.
 -- They are kept apart by prefix on purpose: one is the gamemode's data and
 -- outlives Cellar, the other is Cellar's observations and does not.

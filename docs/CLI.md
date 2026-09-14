@@ -147,7 +147,7 @@ cellar version [--json]
 
 Reports Cellar's own version, the gamemode's build stamp, the git remote's HEAD,
 and the installed Steam build id, side by side. The stale-stamp problem in
-AppleJackRP was found exactly this way: the stamp said one commit, the remote
+AppleJack Framework was found exactly this way: the stamp said one commit, the remote
 said another.
 
 ---

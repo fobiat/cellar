@@ -343,13 +343,13 @@ mod tests {
     #[test]
     fn the_masthead_names_the_gamemode_and_the_server_it_is_about() {
         let mut app = App::new();
-        app.gamemode = Some("AppleJackRP".to_owned());
+        app.gamemode = Some("AppleJack Framework".to_owned());
         // Set only when there is more than one server it could have followed.
         // A `quit` typed at the prompt goes to this one.
         app.instance = Some("published".to_owned());
 
         let screen = render(&app, 100, 30);
-        assert!(screen.contains("APPLEJACKRP"), "{screen}");
+        assert!(screen.contains("APPLEJACK FRAMEWORK"), "{screen}");
         assert!(screen.contains("[published]"), "{screen}");
     }
 

@@ -1,5 +1,5 @@
 # Cellar profile for testing a published Facepunch Sandbox game.
-# This profile has no AppleJackRP project, database, or document bridge.
+# This profile has no AppleJack Framework project, database, or document bridge.
 # Keep the data and logs outside any source checkout.
 
 profile_file = "profiles/facepunch-sandbox.toml"

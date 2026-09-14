@@ -1,11 +1,11 @@
-# The AppleJackRP gamemode, as Cellar sees it.
+# The AppleJack Framework profile, as Cellar sees it.
 #
 # Referenced by profile_file from every applejackrp*.toml in the directory
 # above, so a change to the readiness line or the palette is one edit rather
 # than six. A gamemode is welcome to ship a file like this next to its .sbproj
 # instead; nothing here is Cellar-specific except the field names.
 
-name = "AppleJackRP"
+name = "AppleJack Framework"
 
 # Code/NetworkBootstrap.cs logs this once the lobby exists and the session will
 # accept joins. It was Cellar's hardcoded default until 2026-09-01, which is why

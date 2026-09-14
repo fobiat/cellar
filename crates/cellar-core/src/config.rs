@@ -463,7 +463,7 @@ impl ServerConfig {
     /// the data directory after the ident, so a profile carrying the other
     /// mode's leaf still starts: `hosting.json` goes where nothing reads it, and
     /// neither mode can see the other's characters, permissions or features.
-    /// Every AppleJackRP profile shipped with the `#local` leaf, published ones
+    /// Every AppleJack Framework profile shipped with the `#local` leaf, published ones
     /// included, until 2026-08-28.
     pub fn data_dir_mode_mismatch(&self) -> Option<String> {
         let leaf = self.data_dir.as_ref()?.file_name()?.to_str()?;
@@ -1703,7 +1703,7 @@ mod tests {
         assert!(minimal_server().data_dir_mode_mismatch().is_none());
     }
 
-    /// Every AppleJackRP profile shipped with the `#local` leaf, published ones
+    /// Every AppleJack Framework profile shipped with the `#local` leaf, published ones
     /// included, until 2026-08-28, and the published Facepunch Sandbox profiles
     /// slipped past the first version of this test because it only read
     /// `applejackrp*` files. Reading the files is the only way to catch any of
@@ -1749,7 +1749,7 @@ mod tests {
         }
     }
 
-    /// Six AppleJackRP configs point at one profile file, so this asserts the
+    /// Six AppleJack Framework configs point at one profile file, so this asserts the
     /// link resolves rather than silently reading as "no profile".
     #[test]
     fn a_profile_file_is_read_relative_to_the_config_that_names_it() {

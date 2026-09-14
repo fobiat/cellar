@@ -1,4 +1,4 @@
-//! The `/v1/doc/{key}` service AppleJackRP's `HostedDocumentStore` already has a
+//! The `/v1/doc/{key}` service AppleJack Framework's `HostedDocumentStore` already has a
 //! client for.
 //!
 //! Every status code here is load-bearing, because the client maps them onto

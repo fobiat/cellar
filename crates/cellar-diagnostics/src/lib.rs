@@ -502,10 +502,10 @@ fn project(instance: &Instance, report: &mut Report) {
 
 /// Assertions the gamemode's own profile asked for.
 ///
-/// This used to be one hardcoded check that grepped AppleJackRP's
+/// This used to be one hardcoded check that grepped AppleJack Framework's
 /// `Code/Characters/CharacterDirector.cs` for two identifiers. It is now
 /// whatever `[[profile.check]]` declares, so a gamemode Cellar has never heard
-/// of gets the same treatment, and AppleJackRP's check lives in AppleJackRP's
+/// of gets the same treatment, and AppleJack Framework's check lives in AppleJack Framework's
 /// profile where somebody who changes that file will find it.
 fn check_profile(instance: &Instance, report: &mut Report) {
     // Relative to the project directory, which is where the check it replaced

@@ -343,7 +343,7 @@ Three guards, all on by default:
 
 `cellar version` shows the gamemode's build stamp, the git remote's HEAD and the
 Steam build id side by side. That comparison is how the stale
-`BuildVersion.g.cs` stamp in AppleJackRP was noticed.
+`BuildVersion.g.cs` stamp in AppleJack Framework was noticed.
 
 Engine updates through SteamCMD are off by default and need `steam_dir` and
 `steamcmd` set.
@@ -502,7 +502,7 @@ browser.
 Settings snapshots can be imported from the Config tab, Convars. Select a TOML or YAML
 file, preview the planned changes, then apply them. Cellar sends only the named
 changes through the live gamemode catalogue and never writes the source file or
-the AppleJackRP checkout.
+the AppleJack Framework checkout.
 
 ## Five useful features to add next
 

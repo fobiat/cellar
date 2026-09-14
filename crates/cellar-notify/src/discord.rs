@@ -184,7 +184,7 @@ mod tests {
             },
         ];
 
-        let payload = payload(&batch, "AppleJackRP Dev");
+        let payload = payload(&batch, "AppleJack Framework Dev");
         let embed = &payload["embeds"][0];
 
         assert_eq!(embed["title"], "2 player(s) joined");

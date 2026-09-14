@@ -1,6 +1,6 @@
-# Cellar profile for the published AppleJackRP lobby.
+# Cellar profile for the published AppleJack Framework lobby.
 # This profile runs the published package and advertises its map to the lobby.
-# It does not read or write the AppleJackRP checkout.
+# It does not read or write the AppleJack Framework checkout.
 
 profile_file = "profiles/applejackrp.toml"
 
@@ -10,7 +10,7 @@ game = "fobiat.applejackrp"
 map = "thieves.rpdowntown3t"
 launcher = "native"
 working_dir = 'C:\AppleJackServer\sbox'
-hostname = "AppleJackRP Dev"
+hostname = "AppleJack Framework Dev"
 data_dir = 'C:\AppleJackServer\sbox\data\fobiat\applejackrp'
 log_file = 'C:\AppleJackServer\sbox\logs\sbox-server.log'
 direct_connect = false

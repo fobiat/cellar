@@ -33,10 +33,10 @@ cellar status     # inspect a running Cellar instance
 | **[Security and privacy](docs/SECURITY.md)** | Threat model, credentials, telemetry, and reporting. |
 | **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Common failures and evidence to collect. |
 | **[Facepunch Sandbox](docs/FACEPUNCH-SANDBOX.md)** | The shipped generic profile example. |
-| **[AppleJackRP integration](docs/integrations/applejackrp.md)** | Optional profile and workflow notes for AppleJackRP. |
+| **[AppleJack Framework integration](docs/integrations/applejack-framework.md)** | Optional profile and workflow notes for AppleJack Framework. |
 
 The [docs/README.md](docs/README.md) explains the documentation layout. The
-AppleJackRP page is an integration guide, not a Cellar dependency.
+AppleJack Framework page is an integration guide, not a Cellar dependency.
 
 ## What Cellar does
 

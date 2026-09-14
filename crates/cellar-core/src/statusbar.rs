@@ -269,7 +269,7 @@ mod tests {
 
     fn bar() -> StatusBar {
         StatusBar {
-            hostname: "AppleJackRP".into(),
+            hostname: "AppleJack Framework".into(),
             players: 3,
             max_players: 64,
             uptime_seconds: 3661,
@@ -287,7 +287,7 @@ mod tests {
 
         // The right half sits flush against `width`, which is what the
         // engine's `PadLeft(width)` then overwrite-from-the-left produces.
-        assert!(a.starts_with("AppleJackRP (3/64) [1:01:01] "));
+        assert!(a.starts_with("AppleJack Framework (3/64) [1:01:01] "));
         assert!(a.ends_with("Network 0.42ms"));
         assert!(b.starts_with("Physics 1.10ms, NavMesh 0.05ms, Animation 0.31ms "));
         assert!(b.ends_with("Update 3.75ms"));
@@ -385,7 +385,7 @@ mod tests {
         // `topLeft.Length < lineA.Length` is false once the left half fills the
         // width, and the engine then drops the right half entirely.
         let [a, _] = render(&bar(), 10);
-        assert_eq!(a, "AppleJackRP (3/64) [1:01:01]");
+        assert_eq!(a, "AppleJack Framework (3/64) [1:01:01]");
         assert!(!a.contains("Network"));
     }
 
