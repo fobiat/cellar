@@ -45,6 +45,10 @@ config](configs/applejack-framework.toml) for reference. It defaults to native
 Linux, keeps secrets outside TOML, and shows persistence plus verified backup
 copies.
 
+The [published Cellar manual](https://fobiat.dev/applejack/docs/cellar/) is
+available on the AppleJack Framework documentation site for browsing and
+mobile use.
+
 The [docs/README.md](docs/README.md) explains the documentation layout. The
 AppleJack Framework page is an integration guide, not a Cellar dependency.
 

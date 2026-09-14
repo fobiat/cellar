@@ -9,6 +9,10 @@ This page records the framework integration contract in Cellar's documentation. 
 not make AppleJack Framework a Cellar default, and Cellar remains usable without the
 AppleJack Framework repository.
 
+The complete Cellar manual is also published at
+<https://fobiat.dev/applejack/docs/cellar/>. That copy is useful when operating
+Cellar from a phone or a machine without the source checkout.
+
 The package and repository identifiers still use the legacy `applejackrp` slug
 for compatibility with published s&box packages and existing installations.
 That slug is an identifier, not the product name.

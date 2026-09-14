@@ -6,6 +6,10 @@
 
 An open-source dedicated server runner and manager for s&box.
 
+Read the [published Cellar manual](https://fobiat.dev/applejack/docs/cellar/)
+on the AppleJack Framework documentation site when you want the docs without
+the repository checkout.
+
 ## Start here
 
 | | |
