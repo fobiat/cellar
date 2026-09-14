@@ -11,6 +11,7 @@ pub mod view;
 use futures_util::StreamExt;
 use serde::Deserialize;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use std::collections::VecDeque;
 use std::io;
@@ -394,11 +395,17 @@ async fn remote_drive<B: ratatui::backend::Backend>(
         ));
     };
     let ws_url = format!("{ws_base}/api/events{query}");
-    let mut request = tokio_tungstenite::tungstenite::http::Request::builder()
-        .uri(ws_url)
-        .header("User-Agent", "cellar-tui")
-        .body(())
+    // `connect_async` validates a supplied request rather than filling in the
+    // handshake. Build it through tungstenite so the mandatory key is present.
+    let mut request = ws_url
+        .into_client_request()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    request.headers_mut().insert(
+        "User-Agent",
+        "cellar-tui"
+            .parse()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
+    );
     if let Some(session) = session {
         request.headers_mut().insert(
             "Cookie",
@@ -556,6 +563,14 @@ async fn drive<B: ratatui::backend::Backend>(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn websocket_client_request_has_a_handshake_key() {
+        let request = "ws://127.0.0.1:8081/api/events"
+            .into_client_request()
+            .expect("valid websocket URL");
+        assert!(request.headers().contains_key("Sec-WebSocket-Key"));
+    }
 
     #[test]
     fn enter_submits_a_command_and_clears_the_line() {

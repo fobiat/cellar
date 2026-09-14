@@ -134,6 +134,32 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     if config.web.enabled {
         let router = cellar_server::web_router(state.clone());
         servers.push(bind(&config.web.bind, router, "web ui").await?);
+
+        if config.web.tailscale.enabled
+            && config.web.auth != cellar_core::config::WebAuthMode::None
+            && state.web_password().is_some()
+            && let Some(ip) = cellar_server::tailscale::ip().await
+            && let Some((_, port)) = config.web.bind.rsplit_once(':')
+        {
+            let tailscale_bind = format!("{ip}:{port}");
+            let router = cellar_server::tailscale_web_router(state.clone());
+            match bind(&tailscale_bind, router, "web ui over Tailscale").await {
+                Ok(server) => {
+                    if let Ok(mut current) = state.web_tailscale_bind.lock() {
+                        *current = Some(tailscale_bind.clone());
+                    }
+                    tracing::info!("web ui available over Tailscale at http://{tailscale_bind}");
+                    servers.push(server);
+                }
+                Err(error) => tracing::warn!(
+                    "could not bind web ui over Tailscale at {tailscale_bind}: {error}"
+                ),
+            }
+        } else if config.web.tailscale.enabled && state.web_password().is_none() {
+            tracing::warn!(
+                "Tailscale web exposure is disabled until a web UI password is configured"
+            );
+        }
     }
 
     // One merged stream, tagged with which server each event came from.
@@ -466,6 +492,11 @@ fn build_state(
     }
     state.web_auth = config.web.auth;
     state.web_secure_cookies = config.web.secure_cookies;
+    state.web_tailscale_configured = config.web.tailscale.enabled;
+    state.web_tailscale_enabled.store(
+        config.web.tailscale.enabled,
+        std::sync::atomic::Ordering::Relaxed,
+    );
     state.external_api_token = cellar_core::Secret::from_env("CELLAR_API_TOKEN");
     state.update_config = config.update.clone();
     state.program_update = Arc::new(tokio::sync::RwLock::new(ProgramUpdateStatus::new(

@@ -64,7 +64,7 @@
        config, where a selector with one option is noise. -->
   <nav class="instances" id="instance-strip" role="tablist" aria-label="servers" hidden></nav>
 
-  <div class="strip" aria-live="off">
+  <div class="strip" aria-live="off" role="region" aria-label="server status overview" tabindex="0">
     <div class="stat"><div class="label">Server</div><div class="value lamp wait" id="stat-state">…</div></div>
     <div class="stat"><div class="label">Players</div><div class="value" id="stat-players">—</div></div>
     <div class="stat"><div class="label">Uptime</div><div class="value" id="stat-uptime">—</div></div>
@@ -82,7 +82,8 @@
   </div>
 
   <nav class="tabs" role="tablist" aria-label="sections">
-    <button role="tab" id="tabfor-dispatch" data-tab="dispatch" aria-controls="tab-dispatch" aria-selected="true" tabindex="0">Dispatch</button>
+    <button role="tab" id="tabfor-overview" data-tab="overview" aria-controls="tab-overview" aria-selected="true" tabindex="0">Overview</button>
+    <button role="tab" id="tabfor-dispatch" data-tab="dispatch" aria-controls="tab-dispatch" aria-selected="false" tabindex="-1">Dispatch</button>
     <button role="tab" id="tabfor-monitoring" data-tab="monitoring" aria-controls="tab-monitoring" aria-selected="false" tabindex="-1">Monitoring</button>
     <button role="tab" id="tabfor-players" data-tab="players" aria-controls="tab-players" aria-selected="false" tabindex="-1">Players</button>
     <button role="tab" id="tabfor-database" data-tab="database" aria-controls="tab-database" aria-selected="false" tabindex="-1">Database</button>
@@ -94,6 +95,17 @@
   </nav>
 
   <main id="main" tabindex="-1">
+
+    <section id="tab-overview" role="tabpanel" aria-labelledby="tabfor-overview" tabindex="-1">
+      <div class="panel">
+        <h2>Personal overview</h2>
+        <div class="body">
+          <p class="muted small">Choose the live modules you want here and move them into your preferred order. Your layout stays in this browser.</p>
+          <div id="overview-layout" class="overview-layout"></div>
+        </div>
+      </div>
+      <div id="overview-grid" class="overview-grid"></div>
+    </section>
 
     <!-- Dispatch: the live console. -->
     <section id="tab-dispatch" role="tabpanel" aria-labelledby="tabfor-dispatch" tabindex="-1">
@@ -545,6 +557,10 @@
         <h2>Web UI access</h2>
         <div class="body">
           <p id="web-auth-reminder" class="notice">Checking authentication posture…</p>
+          <div class="metric-grid" id="tailscale-web-policy"></div>
+          <p class="muted small">When Tailscale is available, Cellar can add a listener on this host's tailnet address. Tailnet traffic is encrypted, but the operator password still applies.</p>
+          <button class="action" id="tailscale-web-toggle" type="button" disabled>Checking Tailscale access…</button>
+          <p class="notice" id="tailscale-web-notice"></p>
         </div>
       </div>
 

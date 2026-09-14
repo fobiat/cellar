@@ -34,7 +34,7 @@ let consoleRecords = [];
 let consolePaused = false;
 let consoleAutoScroll = true;
 let buildDriftState = "";
-let activeTab = "dispatch";
+let activeTab = "overview";
 let serviceWorker = null;
 
 /* A queue, not a single slot. Killing a server produces several failures at
@@ -249,6 +249,34 @@ let databaseDirectControl = false;
 let commandHistory = [];
 let historyCursor = 0;
 
+const OVERVIEW_MODULES = [
+  { id: "health", label: "Server health", tab: "monitoring" },
+  { id: "players", label: "Players", tab: "players" },
+  { id: "resources", label: "Resources", tab: "monitoring" },
+  { id: "console", label: "Console", tab: "dispatch" },
+  { id: "storage", label: "Storage", tab: "database" },
+  { id: "activity", label: "Activity", tab: "activity" },
+  { id: "diagnostics", label: "Diagnostics", tab: "diagnostics" },
+  { id: "config", label: "Configuration", tab: "config" },
+];
+const DEFAULT_OVERVIEW_LAYOUT = ["health", "players", "resources", "console", "storage", "activity"];
+let overviewLayout = readOverviewLayout();
+
+function readOverviewLayout() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("cellar.overview.layout") || "null");
+    if (Array.isArray(saved)) {
+      const valid = saved.filter((id) => OVERVIEW_MODULES.some((module) => module.id === id));
+      return [...new Set(valid)];
+    }
+  } catch {}
+  return [...DEFAULT_OVERVIEW_LAYOUT];
+}
+
+function saveOverviewLayout() {
+  try { localStorage.setItem("cellar.overview.layout", JSON.stringify(overviewLayout)); } catch {}
+}
+
 /* What Tab completes from: the gamemode's declared and engine-discovered
  * commands, plus what has been typed here before. */
 function completions() {
@@ -260,6 +288,126 @@ function completions() {
 
 function instanceId() {
   return selectedInstance;
+}
+
+function renderOverviewEditor() {
+  const target = $("#overview-layout");
+  if (!target) return;
+  target.replaceChildren();
+  for (const [index, module] of OVERVIEW_MODULES.entries()) {
+    const row = el("div", "overview-layout-row");
+    const label = el("label", "overview-layout-label");
+    const checkbox = el("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = overviewLayout.includes(module.id);
+    checkbox.onchange = () => {
+      if (checkbox.checked) overviewLayout.push(module.id);
+      else overviewLayout = overviewLayout.filter((id) => id !== module.id);
+      overviewLayout = [...new Set(overviewLayout)];
+      saveOverviewLayout();
+      renderOverviewEditor();
+      renderOverviewCards();
+    };
+    label.append(checkbox, el("span", null, module.label));
+    row.append(label);
+    const up = el("button", "chip", "up");
+    up.type = "button";
+    up.disabled = !overviewLayout.includes(module.id) || overviewLayout.indexOf(module.id) === 0;
+    up.onclick = () => moveOverviewModule(module.id, -1);
+    const down = el("button", "chip", "down");
+    down.type = "button";
+    down.disabled = !overviewLayout.includes(module.id)
+      || overviewLayout.indexOf(module.id) === overviewLayout.length - 1;
+    down.onclick = () => moveOverviewModule(module.id, 1);
+    row.append(up, down);
+    target.append(row);
+    if (index === OVERVIEW_MODULES.length - 1) row.classList.add("last");
+  }
+}
+
+function moveOverviewModule(id, direction) {
+  const index = overviewLayout.indexOf(id);
+  const next = index + direction;
+  if (index < 0 || next < 0 || next >= overviewLayout.length) return;
+  [overviewLayout[index], overviewLayout[next]] = [overviewLayout[next], overviewLayout[index]];
+  saveOverviewLayout();
+  renderOverviewEditor();
+  renderOverviewCards();
+}
+
+function renderOverviewCards() {
+  const target = $("#overview-grid");
+  if (!target) return;
+  target.replaceChildren();
+  const data = lastStatus || {};
+  const server = data.server;
+  const modules = {
+    health: () => {
+      const body = el("div", "overview-reading");
+      const lamp = { running: "up", starting: "wait", unhealthy: "warn", stopped: "down" }[server?.state] || "wait";
+      body.append(el("p", `overview-value lamp ${lamp}`, server ? stateLabel(server) : "waiting"));
+      body.append(el("p", "muted small", server?.hostname || "No supervised server"));
+      return body;
+    },
+    players: () => {
+      const players = server?.players || [];
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", `${players.length}/${server?.max_players || "—"}`));
+      body.append(el("p", "muted small", players.slice(0, 4).map((player) => player.name).join(", ") || "No connected players"));
+      return body;
+    },
+    resources: () => {
+      const resource = server?.resources;
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", resource ? `${formatBytes(resource.memory_bytes)} · ${processCpuAverage(resource).toFixed(0)}% CPU` : "waiting"));
+      body.append(el("p", "muted small", resource ? `${resource.cpu_core_count || "—"} logical cores · host ${percent(resource.host_memory_percent)} memory` : "No resource sample yet"));
+      return body;
+    },
+    console: () => {
+      const body = el("div", "overview-reading overview-console");
+      const lines = consoleRecords.slice(-3);
+      body.append(el("pre", null, lines.map((line) => `${line.who}: ${line.message}`).join("\n") || "No console output yet"));
+      return body;
+    },
+    storage: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.database ? "Database connected" : "Database off"));
+      body.append(el("p", "muted small", `Bridge ${data.bridge?.healthy ? "healthy" : "off"} · backups ${data.backup?.enabled ? "on" : "off"} · persistence ${data.persistence?.enabled ? "on" : "off"}`));
+      return body;
+    },
+    activity: () => {
+      const body = el("div", "overview-reading");
+      const latest = consoleRecords[consoleRecords.length - 1];
+      body.append(el("p", "overview-value", latest ? latest.kind : "quiet"));
+      body.append(el("p", "muted small", latest ? `${latest.who}: ${latest.message}` : "No recent activity"));
+      return body;
+    },
+    diagnostics: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value lamp up", data.health ? "Live checks available" : "Waiting"));
+      body.append(el("p", "muted small", "Open Diagnostics for the complete preflight and runtime report."));
+      return body;
+    },
+    config: () => {
+      const body = el("div", "overview-reading");
+      body.append(el("p", "overview-value", data.game || "Gamemode unknown"));
+      body.append(el("p", "muted small", `${data.mode || "mode unknown"} · ${data.scope || "scope unknown"}`));
+      return body;
+    },
+  };
+  for (const id of overviewLayout) {
+    const module = OVERVIEW_MODULES.find((candidate) => candidate.id === id);
+    if (!module || !modules[id]) continue;
+    const card = el("article", "panel overview-card");
+    const heading = el("div", "overview-card-heading");
+    heading.append(el("h2", null, module.label));
+    const open = el("button", "chip", "open");
+    open.type = "button";
+    open.onclick = () => showTab(module.tab, true);
+    heading.append(open);
+    card.append(heading, el("div", "body", modules[id]()));
+    target.append(card);
+  }
 }
 
 /* ---- the instance strip -------------------------------------------------- */
@@ -445,7 +593,7 @@ function readRoute() {
 
   const instance = parts[0] === "i" && parts.length >= 2 ? parts[1] : null;
   const rest = instance ? parts.slice(2) : parts;
-  const tab = rest[0] || "dispatch";
+  const tab = rest[0] || "overview";
 
   /* Only a route with no sub-tab can have moved: `#/players/access` is a
    * current route that happens to start with a name that also used to mean
@@ -479,7 +627,7 @@ function activeSub(tab) {
 function applyRoute() {
   const route = readRoute();
   const known = TAB_LOADERS[route.tab] || document.getElementById(`tab-${route.tab}`);
-  const tab = known ? route.tab : "dispatch";
+  const tab = known ? route.tab : "overview";
   if (route.instance && route.instance !== selectedInstance
       && knownInstances.some((entry) => entry.id === route.instance)) {
     selectInstance(route.instance, tab, route.sub);
@@ -577,6 +725,7 @@ function tablistKey(event) {
  * A sub-tab is keyed `tab/sub` and is loaded when it is shown, so opening
  * Players does not fetch the allowlist of a panel nobody is looking at. */
 const TAB_LOADERS = {
+  overview: { what: "status", into: null, run: () => refreshStatus() },
   records: { what: "documents", into: "#documents", run: () => loadDocuments() },
   database: { what: "the database", into: "#tables", run: () => loadDatabase() },
   settings: {
@@ -1521,8 +1670,10 @@ async function refreshStatus() {
   renderAddresses(data.addresses);
   renderAntiCheat(data.anti_cheat);
   renderWebAuth(data.web_auth);
+  renderTailscaleWeb(data.web_tailscale);
   const access = data.access || {};
   setLamp($("#stat-access"), access.invite_only ? "up" : "wait", access.invite_only ? "invite-only" : "public");
+  renderOverviewCards();
 }
 
 /* Which server the console below belongs to, said in full.
@@ -1620,6 +1771,40 @@ function renderWebAuth(auth) {
     target.className = "notice up";
     target.textContent = `Password authentication is configured for ${text(auth.bind)}.`;
   }
+}
+
+function renderTailscaleWeb(details) {
+  const policy = $("#tailscale-web-policy");
+  const toggle = $("#tailscale-web-toggle");
+  if (!policy || !toggle || !details) return;
+  policy.replaceChildren();
+  const facts = [
+    ["configured", details.configured ? "automatic" : "off"],
+    ["listener", details.bind || "not detected"],
+    ["password", details.password_configured ? "configured" : "required"],
+  ];
+  for (const [label, value] of facts) {
+    const item = el("div");
+    item.append(el("span", "muted small", label));
+    item.append(el("strong", null, value));
+    policy.append(item);
+  }
+  toggle.disabled = !details.bind;
+  toggle.textContent = details.enabled ? "Disable Tailscale web access" : "Enable Tailscale web access";
+  toggle.onclick = async () => {
+    toggle.disabled = true;
+    const response = await fetch("/api/web/tailscale", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: !details.enabled }),
+    });
+    const data = await response.json().catch(() => ({}));
+    $("#tailscale-web-notice").textContent = response.ok
+      ? `Tailscale web access ${data.enabled ? "enabled" : "disabled"}.`
+      : text(data.error || "Cellar could not change Tailscale web access.");
+    if (response.ok) refreshStatus();
+    else toggle.disabled = false;
+  };
 }
 
 async function refreshBuildHealth() {
@@ -2639,7 +2824,9 @@ async function start() {
       await loadInstances();
     }
   });
-  showTab(document.getElementById(`tab-${route.tab}`) ? route.tab : "dispatch", false, route.sub);
+  renderOverviewEditor();
+  renderOverviewCards();
+  showTab(document.getElementById(`tab-${route.tab}`) ? route.tab : "overview", false, route.sub);
   window.addEventListener("hashchange", applyRoute);
   // Null: a failure here must not replace the console, which is where the
   // operator is reading the very lines that explain the failure.

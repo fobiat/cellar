@@ -403,6 +403,7 @@ security claim is worse than an absent one.
 | `auth` | `password` | Requires the configured Argon2 password hash. On loopback, a fresh instance asks for the password in the browser and saves an owner-only hash. `none` is loopback-only, and `auto` is retained for explicit compatibility configurations. |
 | `allow_insecure_http` | `false` | Required for a non-loopback bind behind a TLS-terminating reverse proxy. |
 | `secure_cookies` | `false` | Required for a non-loopback bind so browser sessions are marked Secure. |
+| `tailscale.enabled` | `true` | When Tailscale is detected and a web password is configured, add a listener on this host's Tailscale IPv4 address. The Settings tab can disable it for the current run. |
 | `password_hash` | from env | Argon2 hash from `cellar hash-password`. |
 
 `auth = "password"` accepts `CELLAR_WEB_PASSWORD_HASH` for automation. If it

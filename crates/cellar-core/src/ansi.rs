@@ -86,8 +86,7 @@ impl LineAssembler {
         let mut lines = Vec::new();
         while let Some(at) = self.buffer.iter().position(|b| *b == b'\n') {
             let raw: Vec<u8> = self.buffer.drain(..=at).collect();
-            let text = String::from_utf8_lossy(&raw);
-            let cleaned = clean(&text);
+            let cleaned = clean(&raw);
             if !cleaned.trim().is_empty() {
                 lines.push(cleaned);
             }
@@ -106,8 +105,7 @@ impl LineAssembler {
         }
 
         let raw = std::mem::take(&mut self.buffer);
-        let text = String::from_utf8_lossy(&raw);
-        let cleaned = clean(&text);
+        let cleaned = clean(&raw);
         (!cleaned.trim().is_empty()).then_some(cleaned)
     }
 
@@ -117,10 +115,71 @@ impl LineAssembler {
     }
 }
 
-fn clean(text: &str) -> String {
-    let stripped = strip_escapes(text);
+fn clean(bytes: &[u8]) -> String {
+    let stripped = strip_terminal_bytes(bytes);
     let trimmed = stripped.trim_end_matches(['\n', '\r']);
     collapse_carriage_returns(trimmed).to_owned()
+}
+
+fn strip_terminal_bytes(bytes: &[u8]) -> String {
+    let mut clean = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == 0x1b {
+            index += 1;
+            if bytes.get(index) == Some(&b'[') {
+                index += 1;
+                while let Some(&candidate) = bytes.get(index) {
+                    index += 1;
+                    if (0x40..=0x7e).contains(&candidate) {
+                        break;
+                    }
+                }
+            } else if bytes.get(index) == Some(&b']') {
+                index += 1;
+                skip_string_control(bytes, &mut index);
+            } else {
+                index += usize::from(index < bytes.len());
+            }
+            continue;
+        }
+        if byte == 0x9b {
+            index += 1;
+            while let Some(&candidate) = bytes.get(index) {
+                index += 1;
+                if (0x40..=0x7e).contains(&candidate) {
+                    break;
+                }
+            }
+            continue;
+        }
+        if matches!(byte, 0x90 | 0x98 | 0x9d | 0x9e | 0x9f) {
+            index += 1;
+            skip_string_control(bytes, &mut index);
+            continue;
+        }
+        if byte == 0x9c || (byte < 0x20 && !matches!(byte, b'\n' | b'\r' | b'\t')) {
+            index += 1;
+            continue;
+        }
+        clean.push(byte);
+        index += 1;
+    }
+    String::from_utf8_lossy(&clean).into_owned()
+}
+
+fn skip_string_control(bytes: &[u8], index: &mut usize) {
+    while let Some(&byte) = bytes.get(*index) {
+        *index += 1;
+        if byte == 0x07 || byte == 0x9c {
+            break;
+        }
+        if byte == 0x1b && bytes.get(*index) == Some(&b'\\') {
+            *index += 1;
+            break;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -145,6 +204,13 @@ mod tests {
     fn strips_an_osc_title_set() {
         assert_eq!(strip_escapes("\u{1b}]0;a title\u{7}text"), "text");
         assert_eq!(strip_escapes("\u{1b}]0;a title\u{1b}\\text"), "text");
+    }
+
+    #[test]
+    fn strips_c1_terminal_controls_before_utf8_decoding() {
+        let raw = b"\x9d0;engine status\x07reply\n";
+        let mut assembler = LineAssembler::new();
+        assert_eq!(assembler.push(raw), vec!["reply"]);
     }
 
     #[test]

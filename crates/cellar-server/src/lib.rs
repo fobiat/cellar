@@ -16,6 +16,7 @@ pub mod registry;
 pub mod security;
 pub mod session;
 pub mod state;
+pub mod tailscale;
 pub mod ui;
 pub mod ws;
 
@@ -23,6 +24,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Body;
+use axum::extract::State;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -52,6 +54,25 @@ pub fn web_router(state: Arc<AppState>) -> Router {
         .layer(middleware::from_fn(add_security_headers))
         .layer(middleware::from_fn(enforce_browser_origin))
         .with_state(state)
+}
+
+pub fn tailscale_web_router(state: Arc<AppState>) -> Router {
+    web_router(state.clone()).layer(middleware::from_fn_with_state(state, tailscale_web_access))
+}
+
+async fn tailscale_web_access(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if !state.web_tailscale_is_enabled() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Tailscale web access is disabled",
+        )
+            .into_response();
+    }
+    next.run(request).await
 }
 
 async fn add_security_headers(request: Request<Body>, next: Next) -> Response {

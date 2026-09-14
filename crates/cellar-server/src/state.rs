@@ -267,6 +267,9 @@ pub struct AppState {
     /// Explicit web authentication policy.
     pub web_auth: cellar_core::config::WebAuthMode,
     pub web_secure_cookies: bool,
+    pub web_tailscale_configured: bool,
+    pub web_tailscale_enabled: std::sync::atomic::AtomicBool,
+    pub web_tailscale_bind: Mutex<Option<String>>,
     /// Bearer token for read-only machine integrations under `/api/v1`.
     pub external_api_token: Option<cellar_core::Secret>,
     /// Live web sessions.
@@ -377,6 +380,9 @@ impl AppState {
             web_password_setup: Mutex::new(()),
             web_auth: Default::default(),
             web_secure_cookies: false,
+            web_tailscale_configured: false,
+            web_tailscale_enabled: std::sync::atomic::AtomicBool::new(false),
+            web_tailscale_bind: Mutex::new(None),
             external_api_token: None,
             sessions: crate::session::Sessions::new(),
             version_probe: None,
@@ -461,6 +467,17 @@ impl AppState {
             .lock()
             .ok()
             .and_then(|hash| hash.clone())
+    }
+
+    pub fn web_tailscale_bind(&self) -> Option<String> {
+        self.web_tailscale_bind
+            .lock()
+            .ok()
+            .and_then(|bind| bind.clone())
+    }
+
+    pub fn web_tailscale_is_enabled(&self) -> bool {
+        self.web_tailscale_enabled.load(Ordering::Relaxed)
     }
 
     pub fn set_web_password(&self, hash: cellar_core::Secret) -> bool {
