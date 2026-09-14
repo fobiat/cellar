@@ -23,6 +23,7 @@ mkdir -p "$out"
 
 docs=(cellar.toml.example README.md CHANGELOG.md LICENSE-MIT)
 launchers=(scripts/cellar-tray.sh scripts/Cellar-Tray.ps1)
+branding=(crates/cellar-server/src/ui/assets/cellar-icon.svg crates/cellar-server/src/ui/assets/cellar-logo-horizontal.svg crates/cellar-server/src/ui/assets/cellar-logo-horizontal-dark.svg)
 
 # ------------------------------------------------------------------- linux
 
@@ -37,6 +38,9 @@ if [[ "$host_os" != MINGW* && "$host_os" != MSYS* && "$host_os" != CYGWIN* ]] &&
         && cp "$root/target/release/cellar-fake-server" "$staging/"
     cp "${docs[@]}" "$staging/"
     cp "${launchers[@]}" "$staging/"
+    cp "${branding[@]}" "$staging/"
+    [ -f "$root/crates/cellar-server/src/ui/assets/cellar-icon.ico" ] \
+        && cp "$root/crates/cellar-server/src/ui/assets/cellar-icon.ico" "$staging/"
 
     tar -czf "$out/cellar-x86_64-unknown-linux.tar.gz" -C "$staging" .
     cp "$linux_bin" "$out/cellar-x86_64-unknown-linux"
@@ -56,6 +60,9 @@ if [ -f "$windows_bin" ]; then
         && cp "$root/dist/windows/cellar-fake-server.exe" "$staging/"
     cp "${docs[@]}" "$staging/"
     cp "${launchers[@]}" "$staging/"
+    cp "${branding[@]}" "$staging/"
+    [ -f "$root/crates/cellar-server/src/ui/assets/cellar-icon.ico" ] \
+        && cp "$root/crates/cellar-server/src/ui/assets/cellar-icon.ico" "$staging/"
 
     # zip, not tar: Windows expands a zip with no extra software, and
     # Expand-Archive is what install.ps1 calls.

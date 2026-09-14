@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Cellar branding.** The operator UI, TUI, notifications, tray launchers,
+  favicons, PWA manifest, and release packages now use the Cellar wordmark and
+  the AppleJack Framework mug mark instead of the placeholder star.
+
 - **An emergency kill.** `cellar kill`, and Kill everything under Settings in
   the dashboard, terminate every process Cellar started and then Cellar itself,
   deepest first and with no graceful stop: none of the engine's nine shutdown

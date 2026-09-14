@@ -1,15 +1,17 @@
-//! The Applejack palette, in one place.
+//! Cellar's operator palette, in one place.
 //!
 //! AppleJack Framework generates its colours from `Branding/palette.py` into
 //! `Branding/tokens/applejack-tokens.json`, and its `BRANDING.md` is explicit
 //! that a committed copy is a copy that goes stale. Cellar therefore states the
 //! tokens once, here, with the role each one carries, and the web UI and the
-//! TUI both derive from this rather than retyping hex.
+//! TUI both derive from this rather than retyping hex. The colours follow the
+//! AppleJack Framework visual language, while the mark and wordmark belong to
+//! Cellar.
 //!
 //! `cellar theme sync <path-to-applejack-tokens.json>` regenerates this file's
 //! constants, so a palette change upstream is one command rather than a hunt.
 //!
-//! Applejack is blue, by standing rule. Azure against Frost.
+//! Cellar is blue, by standing rule. Azure against Frost.
 
 use serde::{Deserialize, Serialize};
 
@@ -205,13 +207,13 @@ pub const TOKENS: &[Token] = &[
     LOG_CELLAR,
 ];
 
-/// The wordmark, as the TUI splash draws it.
-pub const WORDMARK: &str = "A P P L E J A C K";
+/// The wordmark, as the TUI splash and notifications draw it.
+pub const WORDMARK: &str = "C E L L A R";
 
-/// The mark: an apple in cross-section with its five-point seed star.
-pub const STAR: &str = "★";
+/// The mark used where a terminal cannot load the SVG logo.
+pub const MARK: &str = "🍺";
 
-pub const TAGLINE: &str = "city roleplay for s&box";
+pub const TAGLINE: &str = "s&box server control";
 
 /// Parse `#RRGGBB` into components, for the TUI which needs numbers.
 pub const fn rgb(hex: &str) -> (u8, u8, u8) {
@@ -405,5 +407,12 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(before, names.len());
+    }
+
+    #[test]
+    fn product_branding_is_cellar() {
+        assert_eq!(WORDMARK, "C E L L A R");
+        assert_eq!(MARK, "🍺");
+        assert_eq!(TAGLINE, "s&box server control");
     }
 }

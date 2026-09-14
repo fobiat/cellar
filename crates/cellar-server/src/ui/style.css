@@ -50,10 +50,11 @@ a { color: var(--aj-azure); }
   z-index: 10;
 }
 
-.mark {
-  color: var(--aj-azure);
-  font-size: 20px;
-  line-height: 1;
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  display: block;
 }
 
 .wordmark {
@@ -752,10 +753,7 @@ dialog.confirm input {
   body { font-size: 13px; }
   .masthead { gap: 9px; padding: 11px 12px; }
   .masthead .header-meta { display: none; }
-  /* The wordmark was flex-squashed to zero width once the theme select and
-     Sign out joined the row, which pushed the masthead to three lines and
-     140px tall. The star stays; it is the mark, and the page title carries
-     the name. */
+  /* Keep the logo mark visible when the narrow masthead hides its wordmark. */
   .masthead .wordmark { display: none; }
   .masthead .theme-select { padding: 6px; }
   .masthead .action { padding: 7px 9px; }

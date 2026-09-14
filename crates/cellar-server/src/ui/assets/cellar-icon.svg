@@ -1,8 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="96" fill="#0E0F11"/>
-  <rect x="28" y="28" width="456" height="456" rx="72" fill="none" stroke="#A6B4C7" stroke-opacity=".32" stroke-width="8"/>
-  <path d="m256 76 31 101 103 12-87 52 26 108-73-58-73 58 26-108-87-52 103-12 31-101Z" fill="#2F8FE0"/>
-  <path d="M256 124v264M151 201h210M174 332l164-164M338 332 174 168" fill="none" stroke="#E7EDF5" stroke-opacity=".68" stroke-width="10" stroke-linecap="round"/>
-  <circle cx="256" cy="256" r="31" fill="#DA5B4D"/>
-  <circle cx="256" cy="256" r="16" fill="#0E0F11"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100" role="img" aria-label="Cellar">
+<title>Cellar</title>
+<g transform="translate(0.000 0.000) scale(1.000000) translate(1.5808 2.0866) scale(0.919643)">
+<path d="M 65 44 C 80 44 80 68 65 68" fill="none" stroke="#175694" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 33.5 30 H 60.5 Q 65 30 65 34.5 V 79.5 Q 65 84 60.5 84 H 33.5 Q 29 84 29 79.5 V 34.5 Q 29 30 33.5 30 Z" fill="none" stroke="#175694" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 49 23.83 C 46.15 21.17 39.31 24.4 39.5 31.05 C 39.69 38.27 44.82 42.26 49 41.69 C 53.18 42.26 58.31 38.27 58.5 31.05 C 58.69 24.4 51.85 21.17 49 23.83 Z" fill="#175694"/>
+<path d="M 49 23.83 C 49.19 22.025 49.76 20.79 50.52 19.65" fill="none" stroke="#175694" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 43.8 28.5 a 1.7 1.7 0 1 0 3.4 0 a 1.7 1.7 0 1 0 -3.4 0 Z" fill="#F4F3F1"/>
+<path d="M 31 35.5 A 5.2 5.2 0 0 1 38.5 30 A 5.6 5.6 0 0 1 47 32 A 5.6 5.6 0 0 1 56 30 A 5.2 5.2 0 0 1 63 35.5 L 63 42.5 L 31 42.5 Z" fill="#E7EFF3" stroke="#457588" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 53.1 60 a 1.9 1.9 0 1 0 3.8 0 a 1.9 1.9 0 1 0 -3.8 0 Z M 48.5 70 a 1.5 1.5 0 1 0 3 0 a 1.5 1.5 0 1 0 -3 0 Z M 55.6 49 a 1.4 1.4 0 1 0 2.8 0 a 1.4 1.4 0 1 0 -2.8 0 Z M 40.7 55 a 1.3 1.3 0 1 0 2.6 0 a 1.3 1.3 0 1 0 -2.6 0 Z" fill="#175694"/>
+</g>
 </svg>

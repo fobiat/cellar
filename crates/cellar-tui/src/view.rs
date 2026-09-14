@@ -75,7 +75,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         .to_uppercase();
 
     let mut spans = vec![
-        Span::styled("★ ", theme::accent()),
+        Span::styled(format!("{} ", cellar_core::theme::MARK), theme::accent()),
         Span::styled(
             format!("{wordmark} "),
             Style::default()

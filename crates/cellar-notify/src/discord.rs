@@ -53,7 +53,7 @@ pub fn payload(batch: &[Event], hostname: &str) -> serde_json::Value {
     }
 
     serde_json::json!({
-        "username": format!("{} {}", theme::STAR, hostname),
+        "username": format!("{} {}", theme::MARK, hostname),
         "embeds": [{
             "title": title_for(batch),
             "description": description,
