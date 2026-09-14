@@ -238,6 +238,7 @@ pub struct ResourceSample {
     /// Logical host cores used to normalize process CPU.
     #[serde(default)]
     pub cpu_core_count: usize,
+    /// Process-tree memory in bytes, using Linux PSS to avoid shared-page double counting.
     pub memory_bytes: u64,
     pub process_count: usize,
     /// Host-wide CPU percentage, normalized to the whole machine.

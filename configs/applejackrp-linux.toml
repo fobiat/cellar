@@ -1,12 +1,12 @@
-# Cellar local AppleJack Framework development profile for Linux under Wine.
+# Cellar local AppleJack Framework development profile for native Linux.
 # Sync the checkout to the runtime copy before starting.
 
 profile_file = "profiles/applejackrp.toml"
 
 [server]
-executable = '/home/container/sbox/sbox-server.exe'
+executable = '/home/container/sbox/sbox-server'
 project = '/home/container/applejackrp-runtime/applejackrp.sbproj'
-launcher = "wine"
+launcher = "native"
 working_dir = '/home/container/sbox'
 hostname = "AppleJack Framework Dev"
 data_dir = '/home/container/sbox/data/fobiat/applejackrp#local'
@@ -20,6 +20,7 @@ ready_pattern = "Lobby created - session is joinable"
 restart = "on_failure"
 graceful_timeout_seconds = 30
 sample_interval_seconds = 2
+start_timeout_seconds = 900
 
 [supervisor.backoff]
 initial = 2
@@ -38,9 +39,7 @@ migrate_on_start = false
 event_retention_days = 90
 
 [mariadb]
-# Windows-only. The pinned archive is the winx64 build and every binary the
-# provisioner spawns is an .exe, so a Linux host uses a MariaDB it already
-# runs and points database.url_file at it.
+# Keep the external database contract for this deployment profile.
 managed = false
 version = "11.4.5"
 sha256 = "b7c11d38657f16b837e68199d73670510aadb78f42dfa5d5fdea31a7aab342e3"

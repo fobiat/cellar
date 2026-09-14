@@ -116,10 +116,10 @@ steamcmd's own progress is printed rather than swallowed: this is a
 multi-gigabyte download and a command that prints nothing for twenty minutes
 reads as a hang.
 
-The platform is forced to `windows`. On Linux a plain `app_update` takes the
-platform-neutral depots and silently skips the one holding every `.exe`, which
-looks like a complete install with no executable anywhere in it. If
-`bin/win64/sbox-server.exe` is missing afterwards, this command says so.
+The platform is selected for the host running Cellar. Linux installs the native
+`sbox-server`; Windows installs `sbox-server.exe`. This
+avoids SteamCMD's platform-neutral depot selection, which can look complete
+while omitting the server binary.
 
 ---
 
@@ -253,6 +253,13 @@ What restore does not undo: a dump carries `DROP TABLE IF EXISTS` before each
 `CREATE TABLE`, so tables the dump does not carry are left as they are. Applying
 an older dump over a newer schema can leave a table behind that the dump knows
 nothing about.
+
+### `cellar db execute <sql> --confirm EXECUTE`
+
+Applies one data or schema statement when `database.direct_control = true`.
+The same statement-shape checks as the web panel apply: DML and schema writes
+are accepted, while privilege, filesystem, database-administration, and
+multi-statement operations are refused. Take a verified backup first.
 
 ---
 
@@ -441,7 +448,9 @@ cellar hash-password
 
 Prompts without echoing, prints an argon2 hash. Put it in
 `CELLAR_WEB_PASSWORD_HASH`. Required before `web.bind` may be a non-loopback
-address.
+address. On a loopback listener, you can leave the hash unset and choose it on
+the first WebUI visit. Cellar saves that setup hash in a hidden owner-only
+file beside the selected config.
 
 The hash goes in the environment; the plain password goes in
 `CELLAR_WEB_PASSWORD` only if you want the CLI's live-server commands to log in

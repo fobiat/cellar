@@ -40,6 +40,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/db/info", get(db_info))
         .route("/api/db/table/{table}", get(db_browse))
         .route("/api/db/query", post(db_query))
+        .route("/api/db/execute", post(db_execute))
         .route("/api/instances", get(instances))
         .route("/api/activity", get(activity))
         .route("/api/diagnostics", get(diagnostics))
@@ -194,7 +195,7 @@ async fn metrics(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response
         gauge(
             &mut output,
             "cellar_process_memory_bytes",
-            "Supervised process tree memory",
+            "Supervised process tree proportional memory",
             resources.memory_bytes,
             &[("scope", scope.as_str())],
         );
@@ -857,13 +858,21 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator, target: Target)
             "restart_policy": restart_policy,
             "auto_restart_on_crash": matches!(restart_policy, "always" | "on_failure"),
         },
+        "backup": {
+            "enabled": state.backup_config.enabled,
+            "configured": backup_directory(&state).is_some(),
+        },
+        "persistence": {
+            "enabled": state.persistence_config.enabled,
+            "configured": persistence_directory(&state).is_some(),
+        },
         "addresses": addresses,
         "access": { "invite_only": invite_only },
         "anti_cheat": anti_cheat,
         "web_auth": {
             "bind": state.web_bind,
             "mode": state.web_auth,
-            "password_configured": state.web_password_hash.is_some(),
+            "password_configured": state.web_password().is_some(),
         },
     }))
     .into_response()
@@ -1621,6 +1630,7 @@ async fn db_info(State(state): State<Arc<AppState>>, _: Operator) -> Response {
         return Json(serde_json::json!({
             "connected": false,
             "schema_owner": state.database_schema_owner,
+            "direct_control": state.database_direct_control,
             "source": "disabled",
         }))
         .into_response();
@@ -1634,6 +1644,7 @@ async fn db_info(State(state): State<Arc<AppState>>, _: Operator) -> Response {
             "table_count": info.table_count,
             "bytes": info.bytes,
             "schema_owner": state.database_schema_owner,
+            "direct_control": state.database_direct_control,
             "source": database_source(&state),
         }))
         .into_response(),
@@ -2363,6 +2374,56 @@ async fn db_query(
 
     match cellar_store::admin::query(pool, &request.sql, cellar_store::admin::MAX_ROWS).await {
         Ok(result) => Json(result).into_response(),
+        Err(why) => error(StatusCode::BAD_REQUEST, why.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct ExecuteRequest {
+    sql: String,
+    confirm: String,
+}
+
+/// Apply one explicitly confirmed data or schema statement when enabled.
+async fn db_execute(
+    State(state): State<Arc<AppState>>,
+    operator: Operator,
+    Json(request): Json<ExecuteRequest>,
+) -> Response {
+    if !state.database_direct_control {
+        return error(
+            StatusCode::FORBIDDEN,
+            "database.direct_control is off; enable it explicitly before applying writes",
+        );
+    }
+    if request.confirm != "EXECUTE" {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "type EXECUTE in confirm to apply this statement",
+        );
+    }
+    let Some(pool) = &state.pool else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "no database is configured");
+    };
+    if let Err(why) = cellar_store::admin::is_write_allowed(&request.sql) {
+        return error(StatusCode::BAD_REQUEST, why);
+    }
+
+    match cellar_store::admin::execute(pool, &request.sql).await {
+        Ok((affected_rows, last_insert_id)) => {
+            record_action(
+                &state,
+                &operator,
+                "db execute",
+                &format!("{} statement, {} bytes", request.sql.len(), affected_rows),
+            )
+            .await;
+            Json(serde_json::json!({
+                "affected_rows": affected_rows,
+                "last_insert_id": last_insert_id,
+            }))
+            .into_response()
+        }
         Err(why) => error(StatusCode::BAD_REQUEST, why.to_string()),
     }
 }

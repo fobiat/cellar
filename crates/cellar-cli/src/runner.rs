@@ -442,12 +442,28 @@ fn build_state(
         DatabaseSchemaOwner::Gamemode => "gamemode".to_owned(),
         DatabaseSchemaOwner::Cellar => "cellar".to_owned(),
     };
+    state.database_direct_control = config.database.direct_control;
     state.mariadb = mariadb;
     state.database_url = config.database.url.clone();
     state.mariadb_config = config.mariadb.clone();
     state.backup_config = config.backup.clone();
     state.persistence_config = config.persistence.clone();
-    state.web_password_hash = config.web.password_hash.clone();
+    let password_path = cellar_server::session::password_path(config_path);
+    let password_hash = config.web.password_hash.clone().or_else(|| {
+        match cellar_server::session::load_password_hash(&password_path) {
+            Ok(hash) => hash.map(cellar_core::Secret::new),
+            Err(error) => {
+                tracing::warn!(path = %password_path.display(), %error, "could not load saved web password");
+                None
+            }
+        }
+    });
+    if let Ok(mut path) = state.web_password_path.lock() {
+        *path = Some(password_path);
+    }
+    if let Ok(mut stored) = state.web_password_hash.lock() {
+        *stored = password_hash;
+    }
     state.web_auth = config.web.auth;
     state.web_secure_cookies = config.web.secure_cookies;
     state.external_api_token = cellar_core::Secret::from_env("CELLAR_API_TOKEN");

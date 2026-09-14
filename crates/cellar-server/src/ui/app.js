@@ -32,6 +32,7 @@ let cpuHistory = [];
 let resourceHistory = [];
 let consoleRecords = [];
 let consolePaused = false;
+let consoleAutoScroll = true;
 let buildDriftState = "";
 let activeTab = "dispatch";
 let serviceWorker = null;
@@ -244,6 +245,7 @@ async function api(path, options) {
 let selectedInstance = null;
 let knownInstances = [];
 let lastStatus = null;
+let databaseDirectControl = false;
 let commandHistory = [];
 let historyCursor = 0;
 
@@ -499,7 +501,7 @@ function showTab(name, moveFocus, sub) {
     const selected = button.dataset.tab === name;
     button.setAttribute("aria-selected", String(selected));
     /* Roving tabindex: the tablist is one stop, and Left/Right move within it.
-     * Eleven separate tab stops before the content is why a keyboard user
+     * Nine separate tab stops before the content is why a keyboard user
      * would never reach the console. */
     button.tabIndex = selected ? 0 : -1;
   });
@@ -1510,6 +1512,11 @@ async function refreshStatus() {
 
   renderIdentity(data);
   const health = data.health || {};
+  setLamp($("#stat-console"), health.console ? "up" : "down", health.console ? "ready" : "missing");
+  const backup = data.backup || {};
+  setLamp($("#stat-backup"), backup.enabled ? (backup.configured ? "up" : "warn") : "wait", backup.enabled ? (backup.configured ? "ready" : "not configured") : "off");
+  const persistence = data.persistence || {};
+  setLamp($("#stat-persistence"), persistence.enabled ? (persistence.configured ? "up" : "warn") : "wait", persistence.enabled ? (persistence.configured ? "ready" : "not configured") : "off");
   setLamp($("#stat-map"), health.map ? "up" : "down", health.map ? "loaded" : "check needed");
   renderAddresses(data.addresses);
   renderAntiCheat(data.anti_cheat);
@@ -1878,7 +1885,7 @@ function appendLine(kind, at, who, message, live = false, level = "info", catego
   if (!node) return;
 
   const console_ = $("#console");
-  const pinned = console_.scrollTop + console_.clientHeight >= console_.scrollHeight - 40;
+  const pinned = consoleAutoScroll || console_.scrollTop + console_.clientHeight >= console_.scrollHeight - 40;
   console_.append(node);
   while (console_.children.length > 1500) console_.firstChild.remove();
   if (pinned) console_.scrollTop = console_.scrollHeight;
@@ -1931,7 +1938,7 @@ function renderConsole() {
     if (node) nodes.push(node);
   }
   console_.replaceChildren(...nodes.slice(-1500));
-  console_.scrollTop = console_.scrollHeight;
+  if (consoleAutoScroll) console_.scrollTop = console_.scrollHeight;
 }
 
 function renderAddresses(addresses) {
@@ -2312,6 +2319,9 @@ async function loadDatabase() {
   const response = await fetch("/api/db/info");
   const info = await response.json();
   if (response.ok) {
+    databaseDirectControl = info.direct_control === true;
+    const directPanel = $("#database-direct-control");
+    if (directPanel) directPanel.hidden = !databaseDirectControl;
     $("#db-connection").textContent = info.connected ? "connected" : "offline";
     $("#db-owner").textContent = text(info.schema_owner || "unknown");
     $("#db-table-count").textContent = text(info.table_count ?? "—");
@@ -2335,6 +2345,29 @@ async function loadDatabase() {
       : "";
   }
   loadTables();
+}
+
+async function executeWrite() {
+  const sql = $("#sql-write").value.trim();
+  if (!sql) return;
+  const going = await confirmAction({
+    title: "Apply database statement?",
+    body: "This changes the live gamemode database. Take a verified backup first and check the target schema.",
+    typed: "EXECUTE",
+  });
+  if (!going) return;
+
+  try {
+    const result = await api("/api/db/execute", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sql, confirm: "EXECUTE" }),
+    });
+    $("#db-notice").textContent = `Applied: ${text(result.affected_rows)} row(s) affected.`;
+    await loadDatabase();
+  } catch (error) {
+    $("#db-notice").textContent = `Write refused: ${error.message}`;
+  }
 }
 
 async function browseTable(name) {
@@ -2512,25 +2545,56 @@ function drawPercentChart(svg, series, compact = false) {
 
 /* ---- sign in ------------------------------------------------------------ */
 
-function showGate() {
+let passwordSetup = false;
+
+function showGate(setup = false) {
+  passwordSetup = setup;
   $("#gate").hidden = false;
   $("#app").hidden = true;
+  $("#login-copy").textContent = setup
+    ? "Choose the operator password for this Cellar instance. It is saved as an owner-only Argon2 hash."
+    : "Operator sign in. The console behind this runs at full engine privilege.";
+  $("#password-confirm-row").hidden = !setup;
+  $("#password").autocomplete = setup ? "new-password" : "current-password";
+  $("#login-submit").textContent = setup ? "Save password" : "Sign in";
+  $("#gate-notice").textContent = setup ? "First visit setup is required." : "";
 }
 
 async function signIn(event) {
   event.preventDefault();
-  const response = await fetch("/api/login", {
+  const password = $("#password").value;
+  const response = await fetch(passwordSetup ? "/api/setup-password" : "/api/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ password: $("#password").value }),
+    body: JSON.stringify(passwordSetup
+      ? { password, confirmation: $("#password-confirm").value }
+      : { password }),
   });
+
+  if (response.ok && passwordSetup) {
+    passwordSetup = false;
+    $("#password-confirm-row").hidden = true;
+    $("#login-submit").textContent = "Signing in…";
+    const login = await fetch("/api/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    if (!login.ok) {
+      $("#gate-notice").textContent = "Password saved. Sign in again to continue.";
+      $("#login-submit").textContent = "Sign in";
+      return;
+    }
+  }
 
   if (response.ok) {
     $("#gate").hidden = true;
     $("#app").hidden = false;
     start();
   } else {
-    $("#gate-notice").textContent = "That password was not accepted.";
+    const data = await response.json().catch(() => ({}));
+    $("#gate-notice").textContent = text(data.error)
+      || (passwordSetup ? "Password setup could not be completed." : "That password was not accepted.");
   }
 }
 
@@ -2563,6 +2627,7 @@ function watchForSilentFailures() {
 async function start() {
   if (started) return;
   started = true;
+  preparePanels();
   watchForSilentFailures();
   /* Before anything else: the route names an instance, and every later fetch
    * is about whichever one this settles on. */
@@ -2599,6 +2664,51 @@ async function start() {
       serviceWorker = registration;
     }).catch(() => showToast("Alerts could not be restored.", "warn"));
   }
+}
+
+function panelStateKey(panel, index) {
+  const section = panel.closest("[role=tabpanel]")?.id || "main";
+  const title = panel.querySelector(":scope > summary, :scope > h2")?.textContent.trim() || index;
+  return `cellar.panel.${section}.${panel.id || title}.${index}`;
+}
+
+function rememberPanel(panel, key) {
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved !== null) panel.open = saved === "open";
+    panel.addEventListener("toggle", () => localStorage.setItem(key, panel.open ? "open" : "closed"));
+  } catch {
+    // Disclosure still works when browser storage is unavailable.
+  }
+}
+
+function preparePanels() {
+  const dispatch = $("#tab-dispatch");
+  const consolePanel = $("#console")?.closest(".panel");
+  if (dispatch && consolePanel) dispatch.prepend(consolePanel);
+
+  [...document.querySelectorAll("main .panel")].forEach((panel, index) => {
+    const key = panelStateKey(panel, index);
+    if (panel instanceof HTMLDetailsElement) {
+      rememberPanel(panel, key);
+      return;
+    }
+    const heading = panel.querySelector(":scope > h2");
+    const body = panel.querySelector(":scope > .body");
+    if (!heading || !body) return;
+
+    const details = document.createElement("details");
+    details.className = panel.className;
+    details.id = panel.id;
+    details.hidden = panel.hidden;
+    details.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = heading.textContent.trim();
+    if (heading.id) summary.id = heading.id;
+    details.append(summary, body);
+    panel.replaceWith(details);
+    rememberPanel(details, key);
+  });
 }
 
 async function runRelease(action) {
@@ -2870,6 +2980,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("#cellar-exit").onclick = exitCellar;
   $("#kill-cellar").onclick = emergencyKill;
   $("#run-query").onclick = runQuery;
+  $("#execute-write").onclick = executeWrite;
   $("#release-build").onclick = () => runRelease("build");
   $("#release-publish").onclick = () => runRelease("publish");
   $("#access-add").onclick = () => {
@@ -2900,6 +3011,24 @@ document.addEventListener("DOMContentLoaded", async () => {
     $("#console-state").textContent = consolePaused ? "Paused view. Incoming lines are still retained." : "Live output.";
     renderConsole();
   };
+  try {
+    consoleAutoScroll = localStorage.getItem("cellar.console.autoscroll") !== "off";
+  } catch {
+    consoleAutoScroll = true;
+  }
+  const autoScroll = $("#console-autoscroll");
+  autoScroll.textContent = consoleAutoScroll ? "auto-scroll on" : "auto-scroll off";
+  autoScroll.setAttribute("aria-pressed", String(consoleAutoScroll));
+  autoScroll.onclick = () => {
+    consoleAutoScroll = !consoleAutoScroll;
+    autoScroll.textContent = consoleAutoScroll ? "auto-scroll on" : "auto-scroll off";
+    autoScroll.setAttribute("aria-pressed", String(consoleAutoScroll));
+    try { localStorage.setItem("cellar.console.autoscroll", consoleAutoScroll ? "on" : "off"); } catch {}
+    if (consoleAutoScroll) {
+      const console_ = $("#console");
+      console_.scrollTop = console_.scrollHeight;
+    }
+  };
   $("#console-scan").onclick = scanLogs;
   $("#console-clear").onclick = () => { consoleRecords = []; renderConsole(); };
   try {
@@ -2918,12 +3047,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     $("#" + sortId)?.addEventListener("change", applyTableTools);
   }
 
-  const probe = await fetch(forInstance("/api/status"));
-  if (probe.status === 401) {
-    showGate();
-  } else {
+  const auth = await fetch("/api/auth");
+  const authData = await auth.json().catch(() => ({}));
+  if (auth.ok && authData.setup_required) {
+    showGate(true);
+  } else if (auth.ok && authData.password_required) {
+    const probe = await fetch(forInstance("/api/status"));
+    if (probe.status === 401) showGate();
+    else {
+      $("#app").hidden = false;
+      start();
+    }
+  } else if (auth.ok) {
     $("#app").hidden = false;
     start();
+  } else {
+    showToast("Cellar could not report its authentication state.", "error");
   }
 });
 

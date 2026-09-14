@@ -64,9 +64,10 @@ package. Give each mode the data directory that the running package reads.
 Do not share one data directory between local and published modes unless the
 game explicitly supports that arrangement.
 
-On Linux, choose `launcher = "wine"` for a Windows dedicated-server binary and
-give each concurrent instance its own Wine prefix. On Windows, use the native
-launcher for a Windows binary. The platform choice belongs in the deployment
+On Linux, use the native `sbox-server` installed by `cellar install`.
+Choose `launcher = "wine"` only for a Windows `.exe` fallback, and give each
+concurrent instance its own Wine prefix. On Windows, use the native launcher
+for `sbox-server.exe`. The platform choice belongs in the deployment
 config, not in Cellar's AppleJack Framework integration code.
 
 ## Database and bridge

@@ -30,6 +30,7 @@ ready_pattern = "Lobby created - session is joinable"
 restart = "on_failure"
 graceful_timeout_seconds = 30
 sample_interval_seconds = 2
+start_timeout_seconds = 900
 
 [supervisor.backoff]
 initial = 2
@@ -47,6 +48,7 @@ url_file = 'C:\ProgramData\Cellar\external-database.url'
 max_connections = 8
 schema_owner = "gamemode"
 migrate_on_start = false
+direct_control = false
 event_retention_days = 90
 
 [mariadb]

@@ -1,14 +1,16 @@
 //! Who is allowed to use the web UI.
 //!
-//! A single operator password, argon2-hashed, exchanged for a random session
+//! A single operator password, Argon2-hashed, exchanged for a random session
 //! token held in a cookie. Not a user system: there is one operator, and
 //! pretending otherwise would be building an account model nobody asked for.
 //!
-//! The password gate is not optional on a reachable address. The config layer
-//! refuses to start an exposed web UI without a hash, because the console behind
-//! it runs at full engine privilege.
+//! A loopback listener may complete setup in the browser. A reachable listener
+//! still needs a pre-provisioned hash, because the console behind it runs at
+//! full engine privilege.
 
 use std::collections::HashMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -120,9 +122,94 @@ impl Sessions {
             tokens.remove(token);
         }
     }
+
+    pub fn destroy_all(&self) {
+        if let Ok(mut tokens) = self.tokens.lock() {
+            tokens.clear();
+        }
+    }
 }
 
-/// Hash a password for the config file.
+/// The default password file is beside the selected config, but hidden and
+/// separate from TOML so a config directory can be copied without copying a
+/// credential by accident.
+pub fn password_path(config_path: &Path) -> PathBuf {
+    let stem = config_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("cellar");
+    config_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!(".{stem}.web-password"))
+}
+
+/// Read a previously completed first-run setup, refusing files that are
+/// accessible to group or other users on Unix.
+pub fn load_password_hash(path: &Path) -> Result<Option<String>, String> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    if !metadata.is_file() {
+        return Err("password storage is not a regular file".to_owned());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("password storage permissions must be 0600".to_owned());
+        }
+    }
+    let hash = std::fs::read_to_string(path)
+        .map_err(|error| error.to_string())?
+        .trim()
+        .to_owned();
+    if hash.is_empty() {
+        return Err("password storage is empty".to_owned());
+    }
+    Ok(Some(hash))
+}
+
+/// Atomically save a first-run hash with owner-only permissions.
+pub fn save_password_hash(path: &Path, hash: &str) -> Result<(), String> {
+    if path.exists() {
+        return Err("password setup has already been completed".to_owned());
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("web-password");
+    let temporary = parent.join(format!(".{file_name}.tmp-{}", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&temporary)
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = file
+        .write_all(format!("{hash}\n").as_bytes())
+        .and_then(|_| file.sync_all())
+    {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
+/// Hash a password for configuration or first-run storage.
 ///
 /// `cellar hash-password` prints this, so a plaintext password never has to be
 /// typed into a file that might be committed.
@@ -173,7 +260,7 @@ where
         let requires_password = match state.web_auth {
             WebAuthMode::Password => true,
             WebAuthMode::None => false,
-            WebAuthMode::Auto => state.web_password_hash.is_some(),
+            WebAuthMode::Auto => state.web_password().is_some(),
         };
 
         if !requires_password {
@@ -219,6 +306,14 @@ mod tests {
     fn a_malformed_hash_verifies_nothing_rather_than_everything() {
         assert!(!verify_password("anything", "not-a-hash"));
         assert!(!verify_password("anything", ""));
+    }
+
+    #[test]
+    fn first_run_password_storage_uses_a_hidden_config_sibling() {
+        assert_eq!(
+            password_path(Path::new("/etc/cellar/cellar.toml")),
+            PathBuf::from("/etc/cellar/.cellar.web-password")
+        );
     }
 
     #[test]

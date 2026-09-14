@@ -61,6 +61,13 @@ The web UI Database panel provides:
 - one read-only query at a time, capped at 500 rows;
 - explicit ownership text so an operator knows Cellar is not the source of the schema.
 
+For deliberate live data or schema changes, set `database.direct_control = true`.
+The authenticated Database panel then exposes a separate write action that
+requires typing `EXECUTE`. It applies one DML or schema statement, blocks
+privilege, filesystem, database-admin, and multi-statement operations, and
+records the operator action without storing SQL values in the audit detail.
+Keep this off for normal operation and use a least-privilege database account.
+
 ## Prometheus and Grafana
 
 Cellar exposes the current operational metrics in Prometheus text format at

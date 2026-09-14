@@ -25,9 +25,12 @@
         <img class="brand-mark" src="/cellar-icon.svg" alt="">
         <span class="wordmark">C E L L A R</span>
       </div>
-      <p class="muted small">Operator sign in. The console behind this runs at full engine privilege.</p>
-      <label class="sr-only" for="password">Operator password</label><input type="password" id="password" placeholder="operator password" autocomplete="current-password" required>
-      <button class="action" type="submit">Sign in</button>
+      <p class="muted small" id="login-copy">Operator sign in. The console behind this runs at full engine privilege.</p>
+      <label class="sr-only" for="password">Operator password</label><input type="password" id="password" placeholder="operator password" autocomplete="current-password" minlength="12" required>
+      <div id="password-confirm-row" hidden>
+        <label class="sr-only" for="password-confirm">Confirm operator password</label><input type="password" id="password-confirm" placeholder="confirm password" autocomplete="new-password" minlength="12">
+      </div>
+      <button class="action" id="login-submit" type="submit">Sign in</button>
       <p class="notice" id="gate-notice"></p>
     </div>
   </form>
@@ -67,8 +70,11 @@
     <div class="stat"><div class="label">Uptime</div><div class="value" id="stat-uptime">—</div></div>
     <div class="stat"><div class="label">Memory</div><div class="value" id="stat-memory">—</div></div>
     <div class="stat"><div class="label">CPU</div><div class="value" id="stat-cpu">—</div></div>
+    <div class="stat"><div class="label">Console</div><div class="value lamp wait" id="stat-console">…</div></div>
     <div class="stat"><div class="label">Bridge</div><div class="value lamp wait" id="stat-bridge">…</div></div>
     <div class="stat"><div class="label">Database</div><div class="value lamp wait" id="stat-mariadb">…</div></div>
+    <div class="stat"><div class="label">Backups</div><div class="value lamp wait" id="stat-backup">…</div></div>
+    <div class="stat"><div class="label">Persistence</div><div class="value lamp wait" id="stat-persistence">…</div></div>
     <div class="stat"><div class="label">Map</div><div class="value lamp wait" id="stat-map">…</div></div>
     <div class="stat"><div class="label">Access</div><div class="value lamp wait" id="stat-access">…</div></div>
     <div class="stat"><div class="label">Build</div><div class="value lamp wait" id="stat-build">…</div></div>
@@ -77,13 +83,13 @@
 
   <nav class="tabs" role="tablist" aria-label="sections">
     <button role="tab" id="tabfor-dispatch" data-tab="dispatch" aria-controls="tab-dispatch" aria-selected="true" tabindex="0">Dispatch</button>
-    <button role="tab" id="tabfor-players" data-tab="players" aria-controls="tab-players" aria-selected="false" tabindex="-1">Players</button>
-    <button role="tab" id="tabfor-config" data-tab="config" aria-controls="tab-config" aria-selected="false" tabindex="-1">Config</button>
     <button role="tab" id="tabfor-monitoring" data-tab="monitoring" aria-controls="tab-monitoring" aria-selected="false" tabindex="-1">Monitoring</button>
-    <button role="tab" id="tabfor-records" data-tab="records" aria-controls="tab-records" aria-selected="false" tabindex="-1">Records</button>
+    <button role="tab" id="tabfor-players" data-tab="players" aria-controls="tab-players" aria-selected="false" tabindex="-1">Players</button>
     <button role="tab" id="tabfor-database" data-tab="database" aria-controls="tab-database" aria-selected="false" tabindex="-1">Database</button>
-    <button role="tab" id="tabfor-activity" data-tab="activity" aria-controls="tab-activity" aria-selected="false" tabindex="-1">Activity</button>
     <button role="tab" id="tabfor-diagnostics" data-tab="diagnostics" aria-controls="tab-diagnostics" aria-selected="false" tabindex="-1">Diagnostics</button>
+    <button role="tab" id="tabfor-activity" data-tab="activity" aria-controls="tab-activity" aria-selected="false" tabindex="-1">Activity</button>
+    <button role="tab" id="tabfor-records" data-tab="records" aria-controls="tab-records" aria-selected="false" tabindex="-1">Records</button>
+    <button role="tab" id="tabfor-config" data-tab="config" aria-controls="tab-config" aria-selected="false" tabindex="-1">Config</button>
     <button role="tab" id="tabfor-settings" data-tab="settings" aria-controls="tab-settings" aria-selected="false" tabindex="-1">Settings</button>
   </nav>
 
@@ -132,6 +138,7 @@
               <option value="other">other</option>
             </select>
             <button class="chip" id="console-pause" type="button">pause</button>
+            <button class="chip" id="console-autoscroll" type="button" aria-pressed="true" title="Keep live output pinned to the newest line">auto-scroll on</button>
             <button class="chip" id="console-scan" type="button">search full log</button>
             <button class="chip" id="console-clear" type="button">clear view</button>
           </div>
@@ -712,6 +719,18 @@
             <span class="muted small">SELECT, SHOW, DESCRIBE and EXPLAIN only.</span>
           </div>
           <p class="notice" id="db-notice"></p>
+        </div>
+      </div>
+
+      <div class="panel" id="database-direct-control" hidden>
+        <h2>Direct control</h2>
+        <div class="body">
+          <p class="notice warning">Enabled by <code>database.direct_control</code>. This applies one data or schema statement to the live database.</p>
+          <label class="sr-only" for="sql-write">Data or schema statement</label><textarea id="sql-write" spellcheck="false" placeholder="UPDATE game_state SET …"></textarea>
+          <div class="row" style="margin-top:10px">
+            <button class="action" id="execute-write">Apply statement</button>
+            <span class="muted small">Type EXECUTE in the confirmation.</span>
+          </div>
         </div>
       </div>
 

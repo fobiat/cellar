@@ -635,6 +635,9 @@ pub struct DatabaseConfig {
     /// Legacy opt-in for Cellar's operational migrations. It is ignored for a
     /// game-owned database and remains only for compatible v0.1 configs.
     pub migrate_on_start: bool,
+    /// Permit authenticated operators to apply one validated data or schema
+    /// statement through the database panel.
+    pub direct_control: bool,
     /// Keep this many days of `srv_event` rows. Zero keeps everything.
     pub event_retention_days: u32,
 }
@@ -659,6 +662,7 @@ impl Default for DatabaseConfig {
             max_connections: 8,
             schema_owner: DatabaseSchemaOwner::default(),
             migrate_on_start: false,
+            direct_control: false,
             event_retention_days: 90,
         }
     }
@@ -1171,6 +1175,12 @@ impl Config {
             ));
         }
 
+        if self.database.direct_control && !self.database.enabled {
+            return Err(ConfigError::Invalid(
+                "database.direct_control needs database.enabled".into(),
+            ));
+        }
+
         if self.bridge.enabled {
             if !self.database.enabled {
                 return Err(ConfigError::Invalid(
@@ -1225,9 +1235,10 @@ impl Config {
         if self.web.enabled
             && self.web.auth == WebAuthMode::Password
             && self.web.password_hash.is_none()
+            && !binds_loopback(&self.web.bind)
         {
             return Err(ConfigError::Invalid(
-                "web.auth = \"password\" needs CELLAR_WEB_PASSWORD_HASH".into(),
+                "web.auth = \"password\" needs CELLAR_WEB_PASSWORD_HASH or first-run setup on a loopback bind".into(),
             ));
         }
 
@@ -2377,13 +2388,7 @@ enabled = false
         let mut config = minimal();
         config.web.enabled = true;
         config.web.auth = WebAuthMode::Password;
-        assert!(
-            config
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("PASSWORD_HASH")
-        );
+        config.validate().unwrap();
 
         config.web.password_hash = Some(Secret::new("$argon2id$v=19$m=1,t=1,p=1$hash"));
         config.validate().unwrap();
@@ -2411,6 +2416,15 @@ enabled = false
             DatabaseSchemaOwner::Gamemode
         );
         assert!(!DatabaseConfig::default().migrate_on_start);
+        assert!(!DatabaseConfig::default().direct_control);
+    }
+
+    #[test]
+    fn direct_database_control_needs_a_database() {
+        let mut config = minimal();
+        config.database.direct_control = true;
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("database.direct_control needs database.enabled"));
     }
 
     #[test]

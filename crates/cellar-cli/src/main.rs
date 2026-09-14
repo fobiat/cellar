@@ -229,6 +229,14 @@ enum DbAction {
     Migrate,
     /// Show the schema and row counts.
     Status,
+    /// Apply one explicitly confirmed data or schema statement.
+    Execute {
+        /// One DML or schema statement to apply.
+        sql: String,
+        /// Confirm the destructive operation.
+        #[arg(long)]
+        confirm: String,
+    },
     /// Delete events older than the configured retention.
     Prune,
     /// Create a timestamped logical dump and prune old dumps.

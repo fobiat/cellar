@@ -20,6 +20,7 @@ ready_pattern = "Lobby created - session is joinable"
 restart = "on_failure"
 graceful_timeout_seconds = 30
 sample_interval_seconds = 2
+start_timeout_seconds = 900
 
 [supervisor.backoff]
 initial = 2

@@ -8,6 +8,12 @@ Cellar supervises dedicated [s&box](https://sbox.game) servers. It provides a
 CLI, a terminal dashboard, a responsive web control panel, health probes,
 restart policy, and an audited operator console.
 
+It turns an s&box process into an operated service: the real console, gamemode
+readiness, command discovery, database workflows, recovery controls, and live
+mobile-friendly views share one source of truth. See [Why Cellar?](docs/WHY-CELLAR.md)
+for the comparison with running s&box directly or using a general-purpose
+process manager.
+
 Cellar is gamemode-neutral. A profile supplies the readiness line, map list,
 optional checks, and safe command palette entries. When a profile declares a
 command prefix, Cellar also asks the running engine for `find <prefix>` and
@@ -27,6 +33,7 @@ cellar status     # inspect a running Cellar instance
 | | |
 | --- | --- |
 | **[Quickstart](docs/QUICKSTART.md)** | Start a local server and open the dashboard. |
+| **[Why Cellar?](docs/WHY-CELLAR.md)** | The practical advantages over direct s&box hosting and general-purpose managers. |
 | **[Installation](docs/INSTALLATION.md)** | Installers, Linux, Windows, containers, and services. |
 | **[Configuration](docs/CONFIGURATION.md)** | Every `cellar.toml` key and profile field. |
 | **[CLI reference](docs/CLI.md)** | Commands, flags, and output contracts. |

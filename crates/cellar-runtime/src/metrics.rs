@@ -66,7 +66,7 @@ impl Sampler {
         for pid in &members {
             if let Some(process) = self.system.process(*pid) {
                 cpu_percent += process.cpu_usage();
-                memory_bytes += process.memory();
+                memory_bytes += measured_memory(*pid, process);
             }
         }
 
@@ -119,6 +119,11 @@ impl Sampler {
     fn tree_of(&self, root: Pid) -> HashSet<Pid> {
         let mut children: HashMap<Pid, Vec<Pid>> = HashMap::new();
         for (pid, process) in self.system.processes() {
+            // Linux exposes each task in the process map. Tasks share the
+            // process memory mapping, so including them would multiply RSS/PSS.
+            if process.thread_kind().is_some() {
+                continue;
+            }
             if let Some(parent) = process.parent() {
                 children.entry(parent).or_default().push(*pid);
             }
@@ -141,6 +146,32 @@ impl Sampler {
 
         members
     }
+}
+
+#[cfg(target_os = "linux")]
+fn measured_memory(pid: Pid, process: &sysinfo::Process) -> u64 {
+    // RSS counts pages shared by Wine processes once per process. PSS assigns
+    // shared pages proportionally, which keeps the dashboard near real use.
+    std::fs::read_to_string(format!("/proc/{}/smaps_rollup", pid.as_u32()))
+        .ok()
+        .and_then(|contents| parse_pss_bytes(&contents))
+        .unwrap_or_else(|| process.memory())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn measured_memory(_pid: Pid, process: &sysinfo::Process) -> u64 {
+    process.memory()
+}
+
+#[cfg(target_os = "linux")]
+fn parse_pss_bytes(contents: &str) -> Option<u64> {
+    contents.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        (fields.next() == Some("Pss:"))
+            .then(|| fields.next()?.parse::<u64>().ok())
+            .flatten()
+            .map(|kilobytes| kilobytes.saturating_mul(1024))
+    })
 }
 
 /// Bytes as a short human string, for the TUI and the CLI.
@@ -287,6 +318,16 @@ mod tests {
         assert_eq!(format_bytes(2_000_000_000), "2.0 GB");
         // 1024 is no longer a boundary, so the old binary step reads as 1.0 KB.
         assert_eq!(format_bytes(1024), "1.0 KB");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_memory_parser_uses_proportional_set_size() {
+        assert_eq!(
+            parse_pss_bytes("Rss: 4096 kB\nPss: 1234 kB\n"),
+            Some(1_263_616)
+        );
+        assert_eq!(parse_pss_bytes("Rss: 4096 kB\n"), None);
     }
 
     #[test]

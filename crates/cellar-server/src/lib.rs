@@ -240,7 +240,11 @@ mod contract_tests {
         let mut state = AppState::new(Documents::memory(), Policy::Trusted, "test-scope");
         state.web_auth = cellar_core::config::WebAuthMode::Password;
         state.web_secure_cookies = true;
-        state.web_password_hash = Some(cellar_core::Secret::new(hash));
+        state
+            .web_password_hash
+            .lock()
+            .unwrap()
+            .replace(cellar_core::Secret::new(hash));
         let state = Arc::new(state);
 
         let login = web_router(state.clone())
@@ -278,6 +282,52 @@ mod contract_tests {
             .await
             .unwrap();
         assert_eq!(status.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn loopback_first_run_setup_saves_a_hash_and_cannot_run_twice() {
+        let path =
+            std::env::temp_dir().join(format!("cellar-web-password-test-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut state = AppState::new(Documents::memory(), Policy::Trusted, "test-scope");
+        state.web_auth = cellar_core::config::WebAuthMode::Password;
+        state.web_enabled = true;
+        state.web_bind = "127.0.0.1:8081".to_owned();
+        state
+            .web_password_path
+            .lock()
+            .unwrap()
+            .replace(path.clone());
+        let state = Arc::new(state);
+        let request = || {
+            Request::builder()
+                .method("POST")
+                .uri("/api/setup-password")
+                .header("Host", "cellar.example")
+                .header("Origin", "https://cellar.example")
+                .header("Sec-Fetch-Site", "same-origin")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    r#"{"password":"a sufficiently long password","confirmation":"a sufficiently long password"}"#,
+                ))
+                .unwrap()
+        };
+
+        let response = web_router(state.clone()).oneshot(request()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let hash = state.web_password().expect("setup stores a hash");
+        assert!(crate::session::verify_password(
+            "a sufficiently long password",
+            hash.expose()
+        ));
+        assert_eq!(
+            crate::session::load_password_hash(&path).unwrap(),
+            Some(hash.expose().to_owned())
+        );
+
+        let response = web_router(state).oneshot(request()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]

@@ -21,6 +21,21 @@ use crate::version::{SBOX_DEDICATED_APP_ID, Versions};
 /// The config lives in `cellar-core` so one `cellar.toml` deserialises whole.
 pub use cellar_core::config::{UpdateConfig, UpdatePolicy as Policy};
 
+#[cfg(target_os = "windows")]
+const STEAM_PLATFORM: &str = "windows";
+#[cfg(not(target_os = "windows"))]
+const STEAM_PLATFORM: &str = "linux";
+
+/// The server binary path in a SteamCMD dedicated-server install.
+pub fn server_executable_path(into: &std::path::Path) -> std::path::PathBuf {
+    let binary = if cfg!(target_os = "windows") {
+        "sbox-server.exe"
+    } else {
+        "sbox-server"
+    };
+    into.join(binary)
+}
+
 /// Timing and window arithmetic over the shared config.
 ///
 /// A free function rather than an inherent `impl`, because the type belongs to
@@ -231,7 +246,7 @@ pub async fn install_engine(
     validate: bool,
     stream: bool,
 ) -> Step {
-    let name = format!("steamcmd app_update {SBOX_DEDICATED_APP_ID}");
+    let name = format!("steamcmd app_update {SBOX_DEDICATED_APP_ID} ({STEAM_PLATFORM})");
 
     let mut command = tokio::process::Command::new(steamcmd);
     command
@@ -240,12 +255,8 @@ pub async fn install_engine(
             "1",
             "+@NoPromptForPassword",
             "1",
-            // The dedicated server is a Windows binary. On Linux a plain
-            // app_update takes the platform-neutral depots and silently skips
-            // the one holding every .exe, which looks like a complete install
-            // with no executable anywhere in it.
             "+@sSteamCmdForcePlatformType",
-            "windows",
+            STEAM_PLATFORM,
             "+force_install_dir",
         ])
         .arg(into)
@@ -480,6 +491,15 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(interval(&config), Duration::from_secs(5 * 60));
+    }
+
+    #[test]
+    fn steam_install_path_matches_this_host() {
+        let path = server_executable_path(std::path::Path::new("/srv/sbox"));
+        #[cfg(target_os = "windows")]
+        assert_eq!(path, std::path::PathBuf::from(r"/srv/sbox/sbox-server.exe"));
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(path, std::path::PathBuf::from("/srv/sbox/sbox-server"));
     }
 
     #[tokio::test]

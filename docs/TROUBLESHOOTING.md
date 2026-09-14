@@ -39,7 +39,8 @@ Cellar's *own* environment has no TTY to inherit.
 2. The same config file is passed to both. `-c` defaults to `./cellar.toml`, so
    two different working directories means two different servers.
 3. `CELLAR_WEB_PASSWORD` is set, if that server's web UI has a password. The
-   plain password, not the hash.
+   plain password, not the hash. A first-run browser setup password is not
+   available to CLI automation until you export the same plain password.
 
 ## Cellar refuses to start
 

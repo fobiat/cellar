@@ -77,7 +77,10 @@ bind    = "127.0.0.1:8081"
 auth    = "password"
 ```
 
-Create the operator password before running `doctor`:
+For a local first run, leave the hash unset. The first WebUI visit will ask you
+to choose the operator password and save only an owner-only Argon2 hash. For
+automation or a non-loopback listener, pre-provision it before running
+`doctor`:
 
 ```sh
 export CELLAR_WEB_PASSWORD_HASH="$(cellar hash-password)"

@@ -173,7 +173,7 @@ pub async fn install(path: &Path, into: Option<&Path>, validate: bool) -> Result
     }
 
     println!("\n{}", step.detail);
-    let executable = target.join("bin").join("win64").join("sbox-server.exe");
+    let executable = cellar_update::updater::server_executable_path(&target);
     if executable.exists() {
         println!("server.executable = \"{}\"", executable.display());
     } else {
@@ -382,6 +382,20 @@ pub async fn db(path: &Path, action: DbAction) -> Result<()> {
                     cellar_runtime::metrics::format_bytes(table.bytes)
                 );
             }
+        }
+        DbAction::Execute { sql, confirm } => {
+            if !config.database.direct_control {
+                anyhow::bail!(
+                    "database.direct_control is off; enable it explicitly before applying writes"
+                );
+            }
+            if confirm != "EXECUTE" {
+                anyhow::bail!("pass --confirm EXECUTE to apply this statement");
+            }
+            let (affected_rows, last_insert_id) = cellar_store::admin::execute(&pool, &sql).await?;
+            println!(
+                "Applied statement: {affected_rows} row(s) affected, last insert id {last_insert_id}."
+            );
         }
         DbAction::Prune => {
             let removed =
@@ -612,9 +626,6 @@ pub async fn doc(path: &Path, instance: Option<&str>, action: DocAction) -> Resu
             cellar_core::doc_key::check(&key).map_err(|e| anyhow::anyhow!("{e}"))?;
 
             let text = if file == Path::new("-") {
-                std::io::Read::read_to_string(&mut std::io::stdin(), &mut String::new())
-                    .map(|_| String::new())
-                    .ok();
                 std::io::read_to_string(std::io::stdin())?
             } else {
                 std::fs::read_to_string(&file)

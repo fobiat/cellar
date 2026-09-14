@@ -51,6 +51,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/service-worker.js", get(service_worker))
         .route("/manifest.webmanifest", get(manifest))
         .route("/api/login", post(login))
+        .route("/api/auth", get(auth_status))
+        .route("/api/setup-password", post(setup_password))
         .route("/api/logout", post(logout))
 }
 
@@ -84,7 +86,7 @@ fn auth_notice(state: &AppState) -> String {
     }
 
     let reachable = !cellar_core::config::binds_loopback(&state.web_bind);
-    let password_ready = state.web_password_hash.is_some();
+    let password_ready = state.web_password().is_some();
     let password_required = state.web_auth == WebAuthMode::Password
         || (state.web_auth == WebAuthMode::Auto && password_ready);
 
@@ -160,14 +162,30 @@ struct Login {
     password: String,
 }
 
+#[derive(Deserialize)]
+struct PasswordSetup {
+    password: String,
+    confirmation: String,
+}
+
+async fn auth_status(State(state): State<Arc<AppState>>) -> Response {
+    let configured = state.web_password().is_some();
+    let password_required = state.web_auth == WebAuthMode::Password
+        || (state.web_auth == WebAuthMode::Auto && configured);
+    Json(serde_json::json!({
+        "password_required": password_required,
+        "password_configured": configured,
+        "setup_required": password_required && !configured,
+    }))
+    .into_response()
+}
+
 async fn login(State(state): State<Arc<AppState>>, Json(login): Json<Login>) -> Response {
-    let Some(hash) = &state.web_password_hash else {
+    let Some(hash) = state.web_password() else {
         if state.web_auth == WebAuthMode::Password {
             return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(
-                    serde_json::json!({ "ok": false, "error": "password auth is not configured" }),
-                ),
+                StatusCode::PRECONDITION_REQUIRED,
+                Json(serde_json::json!({ "ok": false, "setup_required": true })),
             )
                 .into_response();
         }
@@ -215,6 +233,75 @@ async fn login(State(state): State<Arc<AppState>>, Json(login): Json<Login>) -> 
         header::HeaderValue::from_static("no-store"),
     );
     response
+}
+
+async fn setup_password(
+    State(state): State<Arc<AppState>>,
+    Json(setup): Json<PasswordSetup>,
+) -> Response {
+    if state.web_auth != WebAuthMode::Password {
+        return setup_error(
+            StatusCode::CONFLICT,
+            "password setup is disabled by web.auth",
+        );
+    }
+    if !cellar_core::config::binds_loopback(&state.web_bind) {
+        return setup_error(
+            StatusCode::FORBIDDEN,
+            "first-run password setup is only available on a loopback listener",
+        );
+    }
+    let Ok(_guard) = state.web_password_setup.lock() else {
+        return setup_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "password setup is unavailable",
+        );
+    };
+    if state.web_password().is_some() {
+        return setup_error(
+            StatusCode::CONFLICT,
+            "password setup has already been completed",
+        );
+    }
+    let password = setup.password.trim();
+    if password.chars().count() < 12 {
+        return setup_error(
+            StatusCode::BAD_REQUEST,
+            "choose a password with at least 12 characters",
+        );
+    }
+    if setup.password != setup.confirmation {
+        return setup_error(StatusCode::BAD_REQUEST, "passwords do not match");
+    }
+    let hash = match session::hash_password(&setup.password) {
+        Ok(hash) => hash,
+        Err(error) => return setup_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    let path = state
+        .web_password_path
+        .lock()
+        .ok()
+        .and_then(|path| path.clone());
+    let Some(path) = path else {
+        return setup_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "password storage is not configured",
+        );
+    };
+    if let Err(message) = session::save_password_hash(&path, &hash) {
+        return setup_error(StatusCode::SERVICE_UNAVAILABLE, message);
+    }
+    if !state.set_web_password(cellar_core::Secret::new(hash)) {
+        return setup_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "password setup is unavailable",
+        );
+    }
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+fn setup_error(status: StatusCode, message: impl Into<String>) -> Response {
+    (status, Json(serde_json::json!({ "error": message.into() }))).into_response()
 }
 
 async fn logout(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> Response {
@@ -271,6 +358,8 @@ mod tests {
         assert!(page.contains("id=\"config-mode-actions\""));
         assert!(page.contains("Development mode"));
         assert!(page.contains("Published mode"));
+        assert!(page.contains("id=\"password-confirm\""));
+        assert!(page.contains("/api/setup-password"));
     }
 
     #[test]

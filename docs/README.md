@@ -15,6 +15,7 @@ the repository checkout.
 | | |
 | --- | --- |
 | **[Quickstart](QUICKSTART.md)** | A server running in about ten minutes, on Windows or Linux. Start here. |
+| **[Why Cellar?](WHY-CELLAR.md)** | The practical case for using Cellar instead of direct hosting or a generic process manager. |
 | **[Installation](INSTALLATION.md)** | Every install path: installers, Docker, Kubernetes, from source, upgrading, uninstalling. |
 | **[Remote access](REMOTE-ACCESS.md)** | Safe LAN, Tailscale, reverse-proxy, and mobile browser access. |
 | **[Configuration](CONFIGURATION.md)** | Every `cellar.toml` key, its default, and what it does. |

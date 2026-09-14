@@ -281,11 +281,17 @@ over a month is fine, and one that restarted five times in a minute is not.
 | `max_connections` | `8` | Connection pool ceiling. |
 | `schema_owner` | `gamemode` | `gamemode` means Cellar only inspects the live schema. `cellar` retains the legacy operational migrations. |
 | `migrate_on_start` | `false` | Legacy opt-in. Ignored when `schema_owner = "gamemode"`. |
+| `direct_control` | `false` | Opt-in for authenticated operators to apply one confirmed data or schema statement through the Database panel. |
 | `event_retention_days` | `90` | What `cellar db prune` deletes. |
 
 The recommended setup is a hosted game database owned by the gamemode. See
-[Game database](GAME_DATABASE.md). The browser is read-only and should use a
-database account with a matching `SELECT` grant.
+[Game database](GAME_DATABASE.md). The browser is read-only by default and
+should use a database account with a matching `SELECT` grant. Direct control
+requires `direct_control = true`, an authenticated operator session, and the
+word `EXECUTE` typed into the confirmation. It accepts one DML or schema
+statement at a time and refuses database administration, privilege, file, and
+multi-statement operations. Use a database account whose grant matches the
+intended live control, and take a verified backup first.
 
 For a published game that does not use AppleJack Framework's database contract, see
 the [Facepunch Sandbox profile](FACEPUNCH-SANDBOX.md). It leaves the database
@@ -394,12 +400,14 @@ security claim is worse than an absent one.
 | --- | --- | --- |
 | `enabled` | `false` | Serve the dashboard and the control API. The shipped example turns this on. |
 | `bind` | `127.0.0.1:8081` | Listen address. |
-| `auth` | `password` | Requires the configured Argon2 password hash. `none` is loopback-only, and `auto` is retained for explicit compatibility configurations. |
+| `auth` | `password` | Requires the configured Argon2 password hash. On loopback, a fresh instance asks for the password in the browser and saves an owner-only hash. `none` is loopback-only, and `auto` is retained for explicit compatibility configurations. |
 | `allow_insecure_http` | `false` | Required for a non-loopback bind behind a TLS-terminating reverse proxy. |
 | `secure_cookies` | `false` | Required for a non-loopback bind so browser sessions are marked Secure. |
 | `password_hash` | from env | Argon2 hash from `cellar hash-password`. |
 
-`auth = "password"` requires `CELLAR_WEB_PASSWORD_HASH` even on loopback.
+`auth = "password"` accepts `CELLAR_WEB_PASSWORD_HASH` for automation. If it
+is absent on loopback, the first WebUI visit requires a password and saves the
+Argon2 hash in a hidden `.<config-name>.web-password` file with mode `0600`.
 `auth = "none"` is refused on a non-loopback bind. The console behind
 this page runs `ConVarSystem.Run` with `allowProtected: true`, which is full
 engine privilege.

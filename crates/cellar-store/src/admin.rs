@@ -175,6 +175,13 @@ pub async fn query(pool: &MySqlPool, sql: &str, limit: u32) -> Result<ResultSet,
     Ok(to_result_set(rows, limit))
 }
 
+/// Apply one operator-approved data or schema statement.
+pub async fn execute(pool: &MySqlPool, sql: &str) -> Result<(u64, u64), StoreError> {
+    is_write_allowed(sql).map_err(|why| StoreError::Database(sqlx::Error::Protocol(why)))?;
+    let result = sqlx::query(sql).execute(pool).await?;
+    Ok((result.rows_affected(), result.last_insert_id()))
+}
+
 fn to_result_set(rows: Vec<sqlx::mysql::MySqlRow>, limit: u32) -> ResultSet {
     let Some(first) = rows.first() else {
         return ResultSet::default();
@@ -286,14 +293,66 @@ pub fn is_read_only(sql: &str) -> Result<(), String> {
 
     // `SELECT ... INTO OUTFILE` writes a file on the server.
     let upper = trimmed.to_ascii_uppercase();
+    let normalized = upper.split_whitespace().collect::<Vec<_>>().join(" ");
     for forbidden in [
         "INTO OUTFILE",
         "INTO DUMPFILE",
         "FOR UPDATE",
         "LOCK IN SHARE MODE",
     ] {
-        if upper.contains(forbidden) {
+        if normalized.contains(forbidden) {
             return Err(format!("{forbidden} is not allowed here"));
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate the statements exposed by the opt-in operator write route.
+pub fn is_write_allowed(sql: &str) -> Result<(), String> {
+    let stripped = strip_comments(sql);
+    let statements: Vec<&str> = split_statements(&stripped)
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .collect();
+    let trimmed = match statements.as_slice() {
+        [] => return Err("empty statement".to_owned()),
+        [one] => one.trim(),
+        _ => return Err("one statement at a time".to_owned()),
+    };
+
+    let head = trimmed
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    const WRITES: [&str; 8] = [
+        "INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "ALTER", "DROP", "TRUNCATE",
+    ];
+    if !WRITES.contains(&head.as_str()) {
+        return Err(format!("{head} is not a data or schema write"));
+    }
+
+    let upper = trimmed.to_ascii_uppercase();
+    let normalized = upper.split_whitespace().collect::<Vec<_>>().join(" ");
+    for forbidden in [
+        "DROP DATABASE",
+        "CREATE DATABASE",
+        "ALTER DATABASE",
+        "CREATE USER",
+        "ALTER USER",
+        "DROP USER",
+        "GRANT ",
+        "REVOKE ",
+        "LOAD DATA",
+        "INTO OUTFILE",
+        "INTO DUMPFILE",
+        "INSTALL PLUGIN",
+        "UNINSTALL PLUGIN",
+        "SHUTDOWN",
+    ] {
+        if normalized.contains(forbidden) {
+            return Err(format!("{} is not allowed", forbidden.trim()));
         }
     }
 
@@ -427,6 +486,36 @@ mod tests {
             "CALL something()",
         ] {
             assert!(is_read_only(sql).is_err(), "{sql} must be refused");
+        }
+    }
+
+    #[test]
+    fn direct_control_allows_data_and_schema_writes() {
+        for sql in [
+            "INSERT INTO aj_document (scope, doc_key, body) VALUES ('x', 'y', '{}')",
+            "UPDATE srv_event SET kind = 'x' WHERE id = 1",
+            "DELETE FROM srv_event WHERE id = 1",
+            "CREATE TABLE game_state (id BIGINT PRIMARY KEY)",
+            "ALTER TABLE game_state ADD COLUMN name VARCHAR(64)",
+            "DROP TABLE game_state",
+            "TRUNCATE TABLE game_state",
+        ] {
+            is_write_allowed(sql).unwrap_or_else(|e| panic!("{sql} should be allowed: {e}"));
+        }
+    }
+
+    #[test]
+    fn direct_control_refuses_privilege_and_server_writes() {
+        for sql in [
+            "DROP DATABASE cellar",
+            "DROP\nDATABASE cellar",
+            "CREATE USER 'x'@'%' IDENTIFIED BY 'secret'",
+            "GRANT ALL ON *.* TO 'x'@'%'",
+            "LOAD DATA INFILE '/tmp/game.csv' INTO TABLE game_state",
+            "DELETE FROM game_state; DROP TABLE srv_event",
+            "CALL reset_everything()",
+        ] {
+            assert!(is_write_allowed(sql).is_err(), "{sql} must be refused");
         }
     }
 

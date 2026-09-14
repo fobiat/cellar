@@ -152,15 +152,18 @@ fn split_bracketed_logger(body: &str) -> (Option<String>, String) {
 }
 
 fn parse_console_line(text: &str) -> Parsed {
-    if text.len() >= CONSOLE_CONTINUATION_INDENT
-        && text[..CONSOLE_CONTINUATION_INDENT]
-            .bytes()
-            .all(|b| b == b' ')
+    if text
+        .as_bytes()
+        .get(..CONSOLE_CONTINUATION_INDENT)
+        .is_some_and(|prefix| prefix.iter().all(|b| *b == b' '))
     {
         return Parsed {
             at: None,
             logger: None,
-            message: text[CONSOLE_CONTINUATION_INDENT..].to_owned(),
+            message: text
+                .get(CONSOLE_CONTINUATION_INDENT..)
+                .unwrap_or_default()
+                .to_owned(),
             exception: None,
             continuation: true,
         };
@@ -182,11 +185,26 @@ fn parse_console_line(text: &str) -> Parsed {
         };
     }
 
-    let logger = text[9..9 + CONSOLE_LOGGER_WIDTH].trim_end().to_owned();
-    let message = text[CONSOLE_CONTINUATION_INDENT..]
-        .strip_prefix(' ')
-        .unwrap_or("")
-        .to_owned();
+    let Some(logger_field) = text.get(9..9 + CONSOLE_LOGGER_WIDTH) else {
+        return Parsed {
+            at: None,
+            logger: None,
+            message: text.to_owned(),
+            exception: None,
+            continuation: false,
+        };
+    };
+    let Some(message_field) = text.get(CONSOLE_CONTINUATION_INDENT..) else {
+        return Parsed {
+            at: None,
+            logger: None,
+            message: text.to_owned(),
+            exception: None,
+            continuation: false,
+        };
+    };
+    let logger = logger_field.trim_end().to_owned();
+    let message = message_field.strip_prefix(' ').unwrap_or("").to_owned();
 
     Parsed {
         at: None, // 12-hour and undated; the file channel is the one to trust for time.
@@ -386,6 +404,17 @@ mod tests {
         let parsed = parse_line(Line::console(&raw)).unwrap();
         assert!(parsed.continuation);
         assert_eq!(parsed.message, "second line of a stack trace");
+    }
+
+    #[test]
+    fn non_ascii_console_prefix_does_not_panic_the_parser() {
+        let continuation = format!("{}é", " ".repeat(15));
+        let parsed = parse_line(Line::console(&continuation)).unwrap();
+        assert_eq!(parsed.message, continuation);
+
+        let stamped = "02:04:11 1234567é";
+        let parsed = parse_line(Line::console(stamped)).unwrap();
+        assert_eq!(parsed.message, stamped);
     }
 
     #[test]

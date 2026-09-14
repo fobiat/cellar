@@ -245,6 +245,8 @@ pub struct AppState {
     pub pool: Option<MySqlPool>,
     /// Displayed in the database panel before an operator runs a query.
     pub database_schema_owner: String,
+    /// Explicit opt-in for authenticated direct data and schema control.
+    pub database_direct_control: bool,
     /// The locally-hosted MariaDB supervisor, when `[mariadb].managed` is on.
     /// Absent for a remote database, same as `pool` above but one layer up:
     /// this is about who is running the server, not how Cellar talks to it.
@@ -257,7 +259,11 @@ pub struct AppState {
     pub backup_config: cellar_core::config::BackupConfig,
     pub persistence_config: cellar_core::config::PersistenceConfig,
     /// Argon2 hash of the web UI password, when the web UI is exposed.
-    pub web_password_hash: Option<cellar_core::Secret>,
+    pub web_password_hash: Mutex<Option<cellar_core::Secret>>,
+    /// The private file used when the operator completes first-run setup.
+    pub web_password_path: Mutex<Option<PathBuf>>,
+    /// Serialises first-run setup requests inside this Cellar process.
+    pub web_password_setup: Mutex<()>,
     /// Explicit web authentication policy.
     pub web_auth: cellar_core::config::WebAuthMode,
     pub web_secure_cookies: bool,
@@ -360,12 +366,15 @@ impl AppState {
             supervisor: None,
             pool: None,
             database_schema_owner: "gamemode".to_owned(),
+            database_direct_control: false,
             mariadb: None,
             database_url: None,
             mariadb_config: Default::default(),
             backup_config: Default::default(),
             persistence_config: Default::default(),
-            web_password_hash: None,
+            web_password_hash: Mutex::new(None),
+            web_password_path: Mutex::new(None),
+            web_password_setup: Mutex::new(()),
             web_auth: Default::default(),
             web_secure_cookies: false,
             external_api_token: None,
@@ -445,6 +454,22 @@ impl AppState {
             .lock()
             .ok()
             .and_then(|path| path.as_ref()?.parent().map(Path::to_path_buf))
+    }
+
+    pub fn web_password(&self) -> Option<cellar_core::Secret> {
+        self.web_password_hash
+            .lock()
+            .ok()
+            .and_then(|hash| hash.clone())
+    }
+
+    pub fn set_web_password(&self, hash: cellar_core::Secret) -> bool {
+        let Ok(mut stored) = self.web_password_hash.lock() else {
+            return false;
+        };
+        *stored = Some(hash);
+        self.sessions.destroy_all();
+        true
     }
 }
 

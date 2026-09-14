@@ -16,8 +16,10 @@ bind = "127.0.0.1:8081"
 auth = "password"
 ```
 
-Open `http://127.0.0.1:8081` on the host. Generate the password hash with
-`cellar hash-password` and provide it as `CELLAR_WEB_PASSWORD_HASH`.
+Open `http://127.0.0.1:8081` on the host. On first visit, Cellar asks you to
+choose the operator password and saves only its owner-only Argon2 hash. For
+automation, generate the hash with `cellar hash-password` and provide it as
+`CELLAR_WEB_PASSWORD_HASH`.
 
 ## LAN access
 
