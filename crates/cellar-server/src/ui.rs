@@ -22,7 +22,7 @@ use serde::Deserialize;
 use cellar_core::config::WebAuthMode;
 
 use crate::session;
-use crate::state::AppState;
+use crate::state::{AppState, PasswordWorkError};
 
 const HTML: &str = include_str!("ui/index.html");
 const CSS: &str = include_str!("ui/style.css");
@@ -189,17 +189,28 @@ async fn login(State(state): State<Arc<AppState>>, Json(login): Json<Login>) -> 
         return Json(serde_json::json!({ "ok": true })).into_response();
     };
 
-    if !state.login_limiter.allow() {
+    let Some(attempt) = state.login_limiter.reserve() else {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             [(header::RETRY_AFTER, "60")],
             Json(serde_json::json!({ "ok": false, "error": "too many login attempts" })),
         )
             .into_response();
-    }
+    };
 
-    if !session::verify_password(&login.password, hash.expose()) {
-        state.login_limiter.record_failure();
+    let password = login.password;
+    let hash = hash.expose().to_owned();
+    let verified = match state
+        .password_work
+        .run(move || session::verify_password(&password, &hash))
+        .await
+    {
+        Ok(verified) => verified,
+        Err(error) => return password_work_error(error),
+    };
+
+    if !verified {
+        attempt.failed();
         // No detail: "wrong password" and "no operator configured" must look the
         // same from outside.
         return (
@@ -208,6 +219,7 @@ async fn login(State(state): State<Arc<AppState>>, Json(login): Json<Login>) -> 
         )
             .into_response();
     }
+    attempt.succeeded();
 
     let token = state.sessions.create("operator");
 
@@ -248,12 +260,7 @@ async fn setup_password(
             "first-run password setup is only available on a loopback listener",
         );
     }
-    let Ok(_guard) = state.web_password_setup.lock() else {
-        return setup_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "password setup is unavailable",
-        );
-    };
+    let _guard = state.web_password_setup.lock().await;
     if state.web_password().is_some() {
         return setup_error(
             StatusCode::CONFLICT,
@@ -270,10 +277,6 @@ async fn setup_password(
     if setup.password != setup.confirmation {
         return setup_error(StatusCode::BAD_REQUEST, "passwords do not match");
     }
-    let hash = match session::hash_password(&setup.password) {
-        Ok(hash) => hash,
-        Err(error) => return setup_error(StatusCode::INTERNAL_SERVER_ERROR, error),
-    };
     let path = state
         .web_password_path
         .lock()
@@ -285,9 +288,25 @@ async fn setup_password(
             "password storage is not configured",
         );
     };
-    if let Err(message) = session::save_password_hash(&path, &hash) {
-        return setup_error(StatusCode::SERVICE_UNAVAILABLE, message);
-    }
+    let password = setup.password;
+    let hash = match state
+        .password_work
+        .run(move || {
+            let hash = session::hash_password(&password).map_err(SetupFailure::Hash)?;
+            session::save_password_hash(&path, &hash).map_err(SetupFailure::Save)?;
+            Ok::<_, SetupFailure>(hash)
+        })
+        .await
+    {
+        Ok(Ok(hash)) => hash,
+        Ok(Err(SetupFailure::Hash(message))) => {
+            return setup_error(StatusCode::INTERNAL_SERVER_ERROR, message);
+        }
+        Ok(Err(SetupFailure::Save(message))) => {
+            return setup_error(StatusCode::SERVICE_UNAVAILABLE, message);
+        }
+        Err(error) => return password_work_error(error),
+    };
     if !state.set_web_password(cellar_core::Secret::new(hash)) {
         return setup_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -295,6 +314,29 @@ async fn setup_password(
         );
     }
     Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+enum SetupFailure {
+    Hash(String),
+    Save(String),
+}
+
+fn password_work_error(error: PasswordWorkError) -> Response {
+    let (status, retry_after) = match error {
+        PasswordWorkError::Busy => (StatusCode::TOO_MANY_REQUESTS, "1"),
+        PasswordWorkError::TimedOut | PasswordWorkError::WorkerFailed => {
+            (StatusCode::SERVICE_UNAVAILABLE, "5")
+        }
+    };
+    (
+        status,
+        [(header::RETRY_AFTER, retry_after)],
+        Json(serde_json::json!({
+            "ok": false,
+            "error": "password operation is temporarily unavailable"
+        })),
+    )
+        .into_response()
 }
 
 fn setup_error(status: StatusCode, message: impl Into<String>) -> Response {

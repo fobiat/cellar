@@ -253,32 +253,136 @@ pub struct RateLimiter {
 
 pub struct LoginLimiter {
     per_minute: u32,
-    window: Mutex<(Instant, u32)>,
+    window: Mutex<LoginWindow>,
+}
+
+struct LoginWindow {
+    started: Instant,
+    failures: u32,
+    in_flight: u32,
+    generation: u64,
+}
+
+pub(crate) struct LoginReservation<'a> {
+    limiter: &'a LoginLimiter,
+    generation: u64,
+    finished: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PasswordWorkError {
+    Busy,
+    TimedOut,
+    WorkerFailed,
+}
+
+const PASSWORD_WORK_TIMEOUT: Duration = Duration::from_secs(30);
+const PASSWORD_WORK_CAPACITY: usize = 2;
+
+pub(crate) struct PasswordWork {
+    permits: Arc<tokio::sync::Semaphore>,
+    timeout: Duration,
+}
+
+impl PasswordWork {
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self::with_timeout(capacity, PASSWORD_WORK_TIMEOUT)
+    }
+
+    fn with_timeout(capacity: usize, timeout: Duration) -> Self {
+        Self {
+            permits: Arc::new(tokio::sync::Semaphore::new(capacity)),
+            timeout,
+        }
+    }
+
+    pub(crate) async fn run<T, F>(&self, operation: F) -> Result<T, PasswordWorkError>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
+        let permit = self
+            .permits
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| PasswordWorkError::Busy)?;
+        let task = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            operation()
+        });
+
+        match tokio::time::timeout(self.timeout, task).await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(_)) => Err(PasswordWorkError::WorkerFailed),
+            Err(_) => Err(PasswordWorkError::TimedOut),
+        }
+    }
 }
 
 impl LoginLimiter {
     pub fn new(per_minute: u32) -> Self {
         Self {
             per_minute,
-            window: Mutex::new((Instant::now(), 0)),
+            window: Mutex::new(LoginWindow {
+                started: Instant::now(),
+                failures: 0,
+                in_flight: 0,
+                generation: 0,
+            }),
         }
     }
 
-    pub fn allow(&self) -> bool {
+    pub(crate) fn reserve(&self) -> Option<LoginReservation<'_>> {
         let Ok(mut window) = self.window.lock() else {
-            return false;
+            return None;
         };
 
-        if window.0.elapsed() >= Duration::from_secs(60) {
-            *window = (Instant::now(), 0);
+        if window.started.elapsed() >= Duration::from_secs(60) {
+            window.started = Instant::now();
+            window.failures = 0;
+            window.in_flight = 0;
+            window.generation = window.generation.wrapping_add(1);
         }
 
-        window.1 < self.per_minute
+        if window.failures.saturating_add(window.in_flight) >= self.per_minute {
+            return None;
+        }
+        window.in_flight = window.in_flight.saturating_add(1);
+        Some(LoginReservation {
+            limiter: self,
+            generation: window.generation,
+            finished: false,
+        })
     }
 
-    pub fn record_failure(&self) {
+    fn finish(&self, generation: u64, failed: bool) {
         if let Ok(mut window) = self.window.lock() {
-            window.1 = window.1.saturating_add(1);
+            if window.generation == generation {
+                window.in_flight = window.in_flight.saturating_sub(1);
+            }
+            if failed {
+                window.failures = window.failures.saturating_add(1);
+            }
+        }
+    }
+}
+
+impl LoginReservation<'_> {
+    pub(crate) fn succeeded(mut self) {
+        self.limiter.finish(self.generation, false);
+        self.finished = true;
+    }
+
+    pub(crate) fn failed(mut self) {
+        self.limiter.finish(self.generation, true);
+        self.finished = true;
+    }
+}
+
+impl Drop for LoginReservation<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.limiter.finish(self.generation, false);
         }
     }
 }
@@ -341,7 +445,8 @@ pub struct AppState {
     /// The private file used when the operator completes first-run setup.
     pub web_password_path: Mutex<Option<PathBuf>>,
     /// Serialises first-run setup requests inside this Cellar process.
-    pub web_password_setup: Mutex<()>,
+    pub web_password_setup: tokio::sync::Mutex<()>,
+    pub(crate) password_work: PasswordWork,
     /// Explicit web authentication policy.
     pub web_auth: cellar_core::config::WebAuthMode,
     pub web_secure_cookies: bool,
@@ -454,7 +559,8 @@ impl AppState {
             persistence_config: Default::default(),
             web_password_hash: Mutex::new(None),
             web_password_path: Mutex::new(None),
-            web_password_setup: Mutex::new(()),
+            web_password_setup: tokio::sync::Mutex::new(()),
+            password_work: PasswordWork::new(PASSWORD_WORK_CAPACITY),
             web_auth: Default::default(),
             web_secure_cookies: false,
             web_tailscale_configured: false,
@@ -624,13 +730,54 @@ mod tests {
     }
 
     #[test]
-    fn login_limiter_counts_failures_without_blocking_successful_attempts() {
+    fn login_limiter_reserves_in_flight_attempts_before_work_starts() {
         let limiter = LoginLimiter::new(2);
-        assert!(limiter.allow());
-        limiter.record_failure();
-        assert!(limiter.allow());
-        limiter.record_failure();
-        assert!(!limiter.allow());
+        let first = limiter.reserve().expect("first attempt has capacity");
+        let second = limiter.reserve().expect("second attempt has capacity");
+        assert!(limiter.reserve().is_none());
+
+        first.succeeded();
+        let replacement = limiter.reserve().expect("success refunds its reservation");
+        second.failed();
+        replacement.failed();
+        assert!(limiter.reserve().is_none());
+    }
+
+    #[tokio::test]
+    async fn password_work_runs_on_a_blocking_worker() {
+        let runtime_thread = std::thread::current().id();
+        let work = PasswordWork::new(1);
+
+        let worker_thread = work
+            .run(|| std::thread::current().id())
+            .await
+            .expect("worker has capacity");
+
+        assert_ne!(worker_thread, runtime_thread);
+    }
+
+    #[tokio::test]
+    async fn saturated_password_work_is_refused_before_it_starts() {
+        let work = PasswordWork::new(0);
+        let result = work.run(|| "must not run").await;
+
+        assert_eq!(result, Err(PasswordWorkError::Busy));
+    }
+
+    #[tokio::test]
+    async fn timed_out_password_work_keeps_a_bounded_response_time() {
+        let work = PasswordWork::with_timeout(1, Duration::from_millis(5));
+        let result = work
+            .run(|| {
+                std::thread::sleep(Duration::from_millis(50));
+                "too late"
+            })
+            .await;
+
+        assert_eq!(result, Err(PasswordWorkError::TimedOut));
+        assert_eq!(work.run(|| "must wait").await, Err(PasswordWorkError::Busy));
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(work.run(|| "ready").await, Ok("ready"));
     }
 
     #[tokio::test]

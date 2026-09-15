@@ -338,7 +338,7 @@ mod contract_tests {
     }
 
     #[tokio::test]
-    async fn loopback_first_run_setup_saves_a_hash_and_cannot_run_twice() {
+    async fn concurrent_loopback_setup_saves_one_hash_and_refuses_the_other() {
         let path =
             std::env::temp_dir().join(format!("cellar-web-password-test-{}", std::process::id()));
         let _ = std::fs::remove_file(&path);
@@ -366,8 +366,14 @@ mod contract_tests {
                 .unwrap()
         };
 
-        let response = web_router(state.clone()).oneshot(request()).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        let app = web_router(state.clone());
+        let (first, second) = tokio::join!(
+            app.clone().oneshot(request()),
+            app.clone().oneshot(request())
+        );
+        let mut statuses = [first.unwrap().status(), second.unwrap().status()];
+        statuses.sort();
+        assert_eq!(statuses, [StatusCode::OK, StatusCode::CONFLICT]);
         let hash = state.web_password().expect("setup stores a hash");
         assert!(crate::session::verify_password(
             "a sufficiently long password",
@@ -377,10 +383,86 @@ mod contract_tests {
             crate::session::load_password_hash(&path).unwrap(),
             Some(hash.expose().to_owned())
         );
-
-        let response = web_router(state).oneshot(request()).await.unwrap();
-        assert_eq!(response.status(), StatusCode::CONFLICT);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn concurrent_wrong_logins_cannot_bypass_the_attempt_budget() {
+        let hash = crate::session::hash_password("a long operator password").unwrap();
+        let mut state = AppState::new(Documents::memory(), Policy::Trusted, "test-scope");
+        state.web_auth = cellar_core::config::WebAuthMode::Password;
+        state.login_limiter = crate::state::LoginLimiter::new(1);
+        state
+            .web_password_hash
+            .lock()
+            .unwrap()
+            .replace(cellar_core::Secret::new(hash));
+        let app = web_router(Arc::new(state));
+        let request = || {
+            Request::builder()
+                .method("POST")
+                .uri("/api/login")
+                .header("Host", "cellar.example")
+                .header("Content-Type", "application/json")
+                .body(Body::from(r#"{"password":"wrong"}"#))
+                .unwrap()
+        };
+
+        let (first, second) = tokio::join!(
+            app.clone().oneshot(request()),
+            app.clone().oneshot(request())
+        );
+        let mut statuses = [first.unwrap().status(), second.unwrap().status()];
+        statuses.sort();
+        assert_eq!(
+            statuses,
+            [StatusCode::UNAUTHORIZED, StatusCode::TOO_MANY_REQUESTS]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_saturated_password_gate_does_not_block_health() {
+        let hash = crate::session::hash_password("a long operator password").unwrap();
+        let mut state = AppState::new(Documents::memory(), Policy::Trusted, "test-scope");
+        state.web_auth = cellar_core::config::WebAuthMode::Password;
+        state.password_work = crate::state::PasswordWork::new(1);
+        state
+            .web_password_hash
+            .lock()
+            .unwrap()
+            .replace(cellar_core::Secret::new(hash));
+        let state = Arc::new(state);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let blocker_state = state.clone();
+        let blocker = tokio::spawn(async move {
+            blocker_state
+                .password_work
+                .run(move || {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.recv();
+                })
+                .await
+        });
+        started_rx.await.unwrap();
+        let app = web_router(state);
+        let login = Request::builder()
+            .method("POST")
+            .uri("/api/login")
+            .header("Host", "cellar.example")
+            .header("Content-Type", "application/json")
+            .body(Body::from(r#"{"password":"wrong"}"#))
+            .unwrap();
+        let health = Request::builder()
+            .uri("/healthz")
+            .body(Body::empty())
+            .unwrap();
+
+        let (login, health) = tokio::join!(app.clone().oneshot(login), app.clone().oneshot(health));
+        assert_eq!(login.unwrap().status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(health.unwrap().status(), StatusCode::OK);
+        release_tx.send(()).unwrap();
+        assert_eq!(blocker.await.unwrap(), Ok(()));
     }
 
     #[tokio::test]

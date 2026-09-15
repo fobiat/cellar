@@ -35,6 +35,12 @@ seven days absolute. The tray and remote TUI accept a session through
 `CELLAR_SESSION`; they do not write it to disk. Session cookies are bearer
 credentials, so revoke the web session by restarting Cellar if one is exposed.
 
+Password hashing and verification run outside Tokio's async workers. Cellar
+admits at most two password operations at once, gives each operation 30 seconds
+to answer the request, and keeps timed-out work inside that bound until it
+actually exits. Login attempt accounting reserves its failure-window capacity
+before Argon2 starts, so simultaneous failures cannot all pass the limit.
+
 ## Privacy
 
 Cellar has no analytics or telemetry service. It records operational events,
