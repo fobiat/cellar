@@ -139,9 +139,9 @@ test("customizes the overview canvas and persists the layout", async ({ page }) 
   await page.goto("/#/overview");
   await page.evaluate(() => localStorage.removeItem("cellar.overview.layout"));
   await page.reload();
+  await expect(page.locator("#overview-layout .overview-layout-row")).toHaveCount(22);
   await page.locator("#overview-customize").click();
   await expect(page.locator("#overview-layout")).toBeVisible();
-  await expect(page.locator("#overview-layout .overview-layout-row")).toHaveCount(22);
   await expect(page.locator("#overview-layout")).toContainText("Game documents");
   await expect(page.locator("#overview-layout")).toContainText("Web access");
 
@@ -161,7 +161,10 @@ test("customizes the overview canvas and persists the layout", async ({ page }) 
     const resizedSpan = Number(await page.locator('[data-overview-id="health"]').getAttribute("data-overview-span"));
     expect(resizedSpan).toBeGreaterThan(4);
 
-    await page.locator('[data-overview-id="activity"]').dragTo(page.locator('[data-overview-id="health"]'));
+    await page.locator('[data-overview-id="activity"]').dragTo(
+      page.locator('[data-overview-id="health"]'),
+      { targetPosition: { x: 10, y: 10 } },
+    );
     const order = await page.locator("#overview-grid .overview-card").evaluateAll((cards) => cards.map((card) => card.dataset.overviewId));
     expect(order.indexOf("activity")).toBeLessThan(order.indexOf("health"));
   }
