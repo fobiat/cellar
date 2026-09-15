@@ -46,6 +46,20 @@ fn bridge_bindings(instances: &[Instance], documents: &Documents) -> Result<Vec<
         .collect()
 }
 
+fn install_bridges(
+    state: &AppState,
+    primary: Option<&cellar_server::registry::Entry>,
+    bindings: &[BridgeBinding],
+) {
+    state.replace_bridges(
+        primary.map(|entry| &entry.id),
+        bindings
+            .iter()
+            .map(|binding| (binding.id.clone(), binding.state.clone()))
+            .collect(),
+    );
+}
+
 pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     let config =
         Config::load(config_path).with_context(|| format!("reading {}", config_path.display()))?;
@@ -144,6 +158,7 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
              says the same thing without starting anything."
         );
     }
+    let registry_primary = registry.primary().cloned();
 
     let state = build_state(
         config_path,
@@ -155,13 +170,7 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         documents,
     )?;
 
-    state.replace_bridges(
-        Some(&primary.id),
-        bindings
-            .iter()
-            .map(|binding| (binding.id.clone(), binding.state.clone()))
-            .collect(),
-    );
+    install_bridges(&state, registry_primary.as_ref(), &bindings);
 
     let mut servers = Vec::new();
 
@@ -1032,6 +1041,40 @@ mod tests {
         assert_eq!(bindings[1].id.as_str(), "beta");
         assert_eq!(bindings[1].bind, "127.0.0.1:18081");
         assert_eq!(bindings[1].state.scope, "beta");
+    }
+
+    #[test]
+    fn an_unavailable_configured_primary_uses_the_started_bridge_for_metrics() {
+        let config = Config::parse_at(
+            r#"
+                [bridge]
+                enabled = true
+
+                [instances.alpha.server]
+                executable = "/srv/alpha/sbox-server"
+
+                [instances.beta.server]
+                executable = "/srv/beta/sbox-server"
+            "#,
+            Path::new("cellar.toml"),
+        )
+        .unwrap();
+        let instances = config.instances();
+        let documents = Documents::memory();
+        let bindings = bridge_bindings(&instances, &documents).unwrap();
+        let mut entries: Vec<_> = instances
+            .iter()
+            .map(cellar_server::registry::Entry::from_instance)
+            .collect();
+        entries[0].unavailable = Some("the executable is unavailable".to_owned());
+        let registry = cellar_server::registry::Registry::new(entries);
+        let state = AppState::new(documents, Policy::Trusted, "alpha");
+
+        install_bridges(&state, registry.primary(), &bindings);
+
+        let beta = InstanceId::new("beta").unwrap();
+        state.bridge_for(&beta).unwrap().bridge_write(false);
+        assert_eq!(state.stats().writes, 1);
     }
 
     /// The interleaving that a single `Option<u64>` got wrong.
