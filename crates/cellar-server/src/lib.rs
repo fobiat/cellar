@@ -29,14 +29,13 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 
-pub use state::{AppState, Documents};
+pub use state::{AppState, BridgeState, Documents};
 
 /// The bridge and health only. What a `cellar run` with `bridge.enabled` binds.
-pub fn bridge_router(state: Arc<AppState>) -> Router {
+pub fn bridge_router(bridge: Arc<BridgeState>, app: Arc<AppState>) -> Router {
     Router::new()
-        .merge(bridge::routes())
-        .merge(health::routes())
-        .with_state(state)
+        .merge(bridge::routes().with_state(bridge))
+        .merge(health::routes().with_state(app))
 }
 
 /// The operator's web UI, its API and its live stream.
@@ -171,12 +170,25 @@ mod contract_tests {
     const TOKEN: &str = "a-plausible-bearer-token";
 
     fn app() -> (Router, Arc<AppState>) {
+        let documents = Documents::memory();
         let state = Arc::new(AppState::new(
-            Documents::memory(),
+            documents.clone(),
             Policy::Trusted,
             "test-scope",
         ));
-        (bridge_router(state.clone()), state)
+        let bridge = Arc::new(BridgeState::new(
+            documents,
+            Policy::Trusted,
+            "test-scope",
+            1024 * 1024,
+            600,
+        ));
+        let id = cellar_core::config::InstanceId::new("test").unwrap();
+        state.replace_bridges(
+            Some(&id),
+            std::collections::BTreeMap::from([(id.clone(), bridge.clone())]),
+        );
+        (bridge_router(bridge, state.clone()), state)
     }
 
     fn request(method: &str, key: &str) -> axum::http::request::Builder {
@@ -459,6 +471,60 @@ mod contract_tests {
     }
 
     #[tokio::test]
+    async fn two_bridge_contexts_keep_the_same_key_isolated() {
+        let documents = Documents::memory();
+        let alpha = Arc::new(BridgeState::new(
+            documents.clone(),
+            Policy::Trusted,
+            "alpha",
+            1024 * 1024,
+            600,
+        ));
+        let beta = Arc::new(BridgeState::new(
+            documents.clone(),
+            Policy::Trusted,
+            "beta",
+            1024 * 1024,
+            600,
+        ));
+        let app_state = Arc::new(AppState::new(documents, Policy::Trusted, "operator"));
+        let alpha_router = bridge_router(alpha.clone(), app_state.clone());
+        let beta_router = bridge_router(beta.clone(), app_state);
+
+        for (router, body) in [
+            (&alpha_router, r#"{"owner":"alpha"}"#),
+            (&beta_router, r#"{"owner":"beta"}"#),
+        ] {
+            let (status, _) = send(
+                router,
+                request("PUT", "features.json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::NO_CONTENT);
+        }
+
+        for (router, body) in [
+            (&alpha_router, r#"{"owner":"alpha"}"#),
+            (&beta_router, r#"{"owner":"beta"}"#),
+        ] {
+            let (status, returned) = send(
+                router,
+                request("GET", "features.json").body(Body::empty()).unwrap(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(returned, body);
+        }
+
+        assert_eq!(alpha.stats().writes, 1);
+        assert_eq!(alpha.stats().reads, 1);
+        assert_eq!(beta.stats().writes, 1);
+        assert_eq!(beta.stats().reads, 1);
+    }
+
+    #[tokio::test]
     async fn no_credential_is_401_and_never_404() {
         let (app, _) = app();
         let response = app
@@ -479,12 +545,20 @@ mod contract_tests {
 
     #[tokio::test]
     async fn a_shared_secret_bridge_refuses_the_wrong_token() {
-        let state = Arc::new(AppState::new(
-            Documents::memory(),
-            Policy::SharedSecret(cellar_core::Secret::new("the-real-secret")),
+        let documents = Documents::memory();
+        let app_state = Arc::new(AppState::new(
+            documents.clone(),
+            Policy::Trusted,
             "test-scope",
         ));
-        let app = bridge_router(state);
+        let bridge = Arc::new(BridgeState::new(
+            documents,
+            Policy::SharedSecret(cellar_core::Secret::new("the-real-secret")),
+            "test-scope",
+            1024 * 1024,
+            600,
+        ));
+        let app = bridge_router(bridge, app_state);
 
         let (status, _) = send(
             &app,
@@ -537,8 +611,16 @@ mod contract_tests {
 
     #[tokio::test]
     async fn an_oversized_body_is_refused_as_a_failure_not_as_a_conflict() {
-        let state = Arc::new(AppState::new(Documents::memory(), Policy::Trusted, "s"));
-        let app = bridge_router(state);
+        let documents = Documents::memory();
+        let app_state = Arc::new(AppState::new(documents.clone(), Policy::Trusted, "s"));
+        let bridge = Arc::new(BridgeState::new(
+            documents,
+            Policy::Trusted,
+            "s",
+            1024 * 1024,
+            600,
+        ));
+        let app = bridge_router(bridge, app_state);
 
         let huge = serde_json::json!({ "padding": "x".repeat(2 * 1024 * 1024) });
         let (status, _) = send(
@@ -585,9 +667,16 @@ mod contract_tests {
 
     #[tokio::test]
     async fn the_rate_limiter_refuses_with_429_and_not_with_404() {
-        let mut state = AppState::new(Documents::memory(), Policy::Trusted, "s");
-        state.rate_limiter = crate::state::RateLimiter::new(2);
-        let app = bridge_router(Arc::new(state));
+        let documents = Documents::memory();
+        let app_state = Arc::new(AppState::new(documents.clone(), Policy::Trusted, "s"));
+        let bridge = Arc::new(BridgeState::new(
+            documents,
+            Policy::Trusted,
+            "s",
+            1024 * 1024,
+            2,
+        ));
+        let app = bridge_router(bridge, app_state);
 
         let mut statuses = Vec::new();
         for _ in 0..4 {

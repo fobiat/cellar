@@ -781,7 +781,7 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator, target: Target)
         None => None,
     };
 
-    let bridge = state.stats();
+    let bridge = state.bridge_stats_for(&target.id);
     let database = match &state.pool {
         Some(pool) => cellar_store::admin::info(pool).await.is_ok(),
         None => false,

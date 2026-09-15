@@ -11,11 +11,40 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use cellar_core::config::{AuthMode, Config, DatabaseSchemaOwner, UpdatePolicy};
+use cellar_core::config::{Config, DatabaseSchemaOwner, Instance, InstanceId, UpdatePolicy};
 use cellar_core::event::Event;
 use cellar_runtime::{Handle, Supervisor};
 use cellar_server::auth::Policy;
-use cellar_server::state::{AppState, Documents, ProgramUpdateStatus, RateLimiter};
+use cellar_server::state::{AppState, BridgeState, Documents, ProgramUpdateStatus};
+
+struct BridgeBinding {
+    id: InstanceId,
+    bind: String,
+    state: Arc<BridgeState>,
+}
+
+fn bridge_bindings(instances: &[Instance], documents: &Documents) -> Result<Vec<BridgeBinding>> {
+    instances
+        .iter()
+        .filter(|instance| instance.enabled && instance.bridge.enabled)
+        .map(|instance| {
+            let auth =
+                Policy::from_config(instance.bridge.auth, instance.bridge.shared_secret.as_ref())
+                    .map_err(|why| anyhow::anyhow!("instance '{}': {why}", instance.id))?;
+            Ok(BridgeBinding {
+                id: instance.id.clone(),
+                bind: instance.bridge.bind.clone(),
+                state: Arc::new(BridgeState::new(
+                    documents.clone(),
+                    auth,
+                    instance.scope.clone(),
+                    instance.bridge.max_body_bytes,
+                    instance.bridge.rate_limit_per_minute,
+                )),
+            })
+        })
+        .collect()
+}
 
 pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     let config =
@@ -31,6 +60,11 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     let primary = config
         .primary()
         .context("no server is configured; `cellar doctor` says which table is missing")?;
+    let mut instances = config.instances();
+    let documents = match &pool {
+        Some(pool) => Documents::MySql(pool.clone()),
+        None => Documents::memory(),
+    };
 
     // One supervisor per enabled instance. A disabled one still reaches the
     // registry, marked unavailable with its reason, so the dashboard shows a
@@ -38,7 +72,7 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     let mut supervisors = Vec::new();
     let mut entries: Vec<cellar_server::registry::Entry> = Vec::new();
 
-    for mut instance in config.instances() {
+    for instance in &mut instances {
         // The real player ceiling, before a single player connects.
         // `+maxplayers` is not a convar and not a launch switch; the old
         // `entrypoint.sh` passed it for years and it was inert. Reading it here
@@ -62,7 +96,11 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
             Ok(None) => {}
             Err(why) => tracing::warn!("instance '{}': {why}", instance.id),
         }
+    }
 
+    let bindings = bridge_bindings(&instances, &documents)?;
+
+    for instance in instances {
         let mut entry = cellar_server::registry::Entry::from_instance(&instance);
         if !instance.enabled {
             tracing::info!(
@@ -87,14 +125,6 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
 
         let id = instance.id.clone();
         let (supervisor, handle, control) = Supervisor::new(instance);
-
-        match supervisor.prepare_hosting() {
-            Ok(message) => tracing::info!("{id}: hosting.json: {message}"),
-            // Not fatal: without it the gamemode keeps its own default, which
-            // is local files. Loud, because a bridge nobody is using is the
-            // quiet failure this whole feature exists to avoid.
-            Err(why) => tracing::error!("{id}: hosting.json: {why}"),
-        }
 
         entry.handle = Some(handle.clone());
         entry.unavailable = None;
@@ -122,13 +152,23 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         pool.clone(),
         primary_handle.clone(),
         mariadb.clone(),
+        documents,
     )?;
+
+    state.replace_bridges(
+        Some(&primary.id),
+        bindings
+            .iter()
+            .map(|binding| (binding.id.clone(), binding.state.clone()))
+            .collect(),
+    );
 
     let mut servers = Vec::new();
 
-    if config.bridge.enabled {
-        let router = cellar_server::bridge_router(state.clone());
-        servers.push(bind(&config.bridge.bind, router, "bridge").await?);
+    for binding in bindings {
+        let label = format!("instance '{}' bridge", binding.id);
+        let router = cellar_server::bridge_router(binding.state, state.clone());
+        servers.push(bind(&binding.bind, router, &label).await?);
     }
 
     if config.web.enabled {
@@ -159,6 +199,13 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
             tracing::warn!(
                 "Tailscale web exposure is disabled until a web UI password is configured"
             );
+        }
+    }
+
+    for (id, supervisor, _, _) in &supervisors {
+        match supervisor.prepare_hosting() {
+            Ok(message) => tracing::info!("{id}: hosting.json: {message}"),
+            Err(why) => tracing::error!("{id}: hosting.json: {why}"),
         }
     }
 
@@ -446,21 +493,9 @@ fn build_state(
     pool: Option<sqlx::MySqlPool>,
     handle: Option<Handle>,
     mariadb: Option<cellar_mariadb::Handle>,
+    documents: Documents,
 ) -> Result<Arc<AppState>> {
-    let documents = match &pool {
-        Some(pool) => Documents::MySql(pool.clone()),
-        // Without a database the bridge has nowhere to put a document. The
-        // config layer refuses that combination, so this is only reached with
-        // the bridge disabled, where the backing is never touched.
-        None => Documents::memory(),
-    };
-
-    let auth = Policy::from_config(config.bridge.auth, config.bridge.shared_secret.as_ref())
-        .map_err(anyhow::Error::msg)?;
-
-    let mut state = AppState::new(documents, auth, config.scope());
-    state.max_body_bytes = config.bridge.max_body_bytes;
-    state.rate_limiter = RateLimiter::new(config.bridge.rate_limit_per_minute);
+    let mut state = AppState::new(documents, Policy::Trusted, config.scope());
     state.login_limiter = cellar_server::state::LoginLimiter::new(10);
     state.supervisor = handle;
     state.pool = pool;
@@ -515,14 +550,6 @@ fn build_state(
         steamcmd: config.update.steamcmd.clone(),
         check_remote: config.update.check_remote,
     });
-
-    if config.bridge.enabled && config.bridge.auth == AuthMode::Trusted {
-        tracing::warn!(
-            "the bridge accepts any well-formed bearer token without verifying it, and is trusted \
-             because it binds {}. See the auth notes in the README.",
-            config.bridge.bind
-        );
-    }
 
     Ok(Arc::new(state))
 }
@@ -958,6 +985,53 @@ mod tests {
 
     fn id(name: &str) -> InstanceId {
         InstanceId::new(name).unwrap()
+    }
+
+    #[test]
+    fn every_enabled_resolved_bridge_gets_one_binding() {
+        let config = Config::parse_at(
+            r#"
+                [bridge]
+                enabled = false
+
+                [instances.alpha.server]
+                executable = "/srv/alpha/sbox-server"
+
+                [instances.alpha.bridge]
+                enabled = true
+                bind = "127.0.0.1:18080"
+
+                [instances.beta.server]
+                executable = "/srv/beta/sbox-server"
+
+                [instances.beta.bridge]
+                enabled = true
+                bind = "127.0.0.1:18081"
+
+                [instances.disabled]
+                enabled = false
+
+                [instances.disabled.server]
+                executable = "/srv/disabled/sbox-server"
+
+                [instances.disabled.bridge]
+                enabled = true
+                bind = "127.0.0.1:18082"
+            "#,
+            Path::new("cellar.toml"),
+        )
+        .unwrap();
+        let documents = Documents::memory();
+
+        let bindings = bridge_bindings(&config.instances(), &documents).unwrap();
+
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0].id.as_str(), "alpha");
+        assert_eq!(bindings[0].bind, "127.0.0.1:18080");
+        assert_eq!(bindings[0].state.scope, "alpha");
+        assert_eq!(bindings[1].id.as_str(), "beta");
+        assert_eq!(bindings[1].bind, "127.0.0.1:18081");
+        assert_eq!(bindings[1].state.scope, "beta");
     }
 
     /// The interleaving that a single `Option<u64>` got wrong.

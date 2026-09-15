@@ -378,6 +378,11 @@ Every shared-secret bridge in one Cellar process inherits the same
 `CELLAR_BRIDGE_SECRET`; secrets cannot be stored in the TOML file and are never
 written back to it.
 
+Each enabled resolved instance bridge owns its own listener, authentication
+policy, document scope, body ceiling, rate limit and health counters. Cellar
+binds every required bridge and web listener before it writes `hosting.json` or
+starts a game process, so a listener failure prevents game startup.
+
 **`public_url` must not redirect.** The engine strips the `Authorization` header
 on every redirect hop, so a redirecting URL turns every authenticated request
 into an unauthenticated one.

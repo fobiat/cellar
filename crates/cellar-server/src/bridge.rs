@@ -32,13 +32,13 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 
 use crate::auth;
-use crate::state::AppState;
+use crate::state::BridgeState;
 
 /// Mount the bridge routes.
 ///
 /// One handler chain for all three methods, because the client uses the same
 /// route with `GET`, `PUT` and `HEAD` and they must agree about keys and auth.
-pub fn routes() -> Router<Arc<AppState>> {
+pub fn routes() -> Router<Arc<BridgeState>> {
     Router::new().route(
         "/v1/doc/{*key}",
         get(read_document).put(write_document).head(head_document),
@@ -46,7 +46,7 @@ pub fn routes() -> Router<Arc<AppState>> {
 }
 
 async fn read_document(
-    State(state): State<Arc<AppState>>,
+    State(state): State<Arc<BridgeState>>,
     headers: HeaderMap,
     Path(key): Path<String>,
 ) -> Response {
@@ -79,7 +79,7 @@ async fn read_document(
 }
 
 async fn head_document(
-    State(state): State<Arc<AppState>>,
+    State(state): State<Arc<BridgeState>>,
     headers: HeaderMap,
     Path(key): Path<String>,
 ) -> Response {
@@ -98,7 +98,7 @@ async fn head_document(
 }
 
 async fn write_document(
-    State(state): State<Arc<AppState>>,
+    State(state): State<Arc<BridgeState>>,
     headers: HeaderMap,
     Path(key): Path<String>,
     body: Bytes,
@@ -144,7 +144,7 @@ async fn write_document(
 /// Auth, rate limit and key validation, in that order.
 // The error is boxed: a `Response` is large, and every caller returns it
 // immediately, so the common path should not carry its width on the stack.
-fn admit(state: &AppState, headers: &HeaderMap, key: &str) -> Result<(), Box<Response>> {
+fn admit(state: &BridgeState, headers: &HeaderMap, key: &str) -> Result<(), Box<Response>> {
     if let Err(status) = auth::check(&state.auth, headers) {
         return Err(Box::new(status.into_response()));
     }

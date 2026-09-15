@@ -1,8 +1,9 @@
 //! Shared state for every route.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use cellar_core::snapshot::BridgeStats;
@@ -159,6 +160,86 @@ pub struct SnapshotDocument {
     pub body: serde_json::Value,
 }
 
+/// The state one document bridge listener owns.
+pub struct BridgeState {
+    pub documents: Documents,
+    pub auth: Policy,
+    pub scope: String,
+    pub max_body_bytes: usize,
+    pub rate_limiter: RateLimiter,
+    reads: AtomicU64,
+    writes: AtomicU64,
+    absent: AtomicU64,
+    refused: AtomicU64,
+    would_conflict: AtomicU64,
+    healthy: AtomicBool,
+    last_error: Mutex<Option<String>>,
+}
+
+impl BridgeState {
+    pub fn new(
+        documents: Documents,
+        auth: Policy,
+        scope: impl Into<String>,
+        max_body_bytes: usize,
+        rate_limit_per_minute: u32,
+    ) -> Self {
+        Self {
+            documents,
+            auth,
+            scope: scope.into(),
+            max_body_bytes,
+            rate_limiter: RateLimiter::new(rate_limit_per_minute),
+            reads: AtomicU64::new(0),
+            writes: AtomicU64::new(0),
+            absent: AtomicU64::new(0),
+            refused: AtomicU64::new(0),
+            would_conflict: AtomicU64::new(0),
+            healthy: AtomicBool::new(true),
+            last_error: Mutex::new(None),
+        }
+    }
+
+    pub fn bridge_read(&self) {
+        self.reads.fetch_add(1, Ordering::Relaxed);
+        self.healthy.store(true, Ordering::Relaxed);
+    }
+
+    pub fn bridge_absent(&self) {
+        self.absent.fetch_add(1, Ordering::Relaxed);
+        self.healthy.store(true, Ordering::Relaxed);
+    }
+
+    pub fn bridge_write(&self, would_conflict: bool) {
+        self.writes.fetch_add(1, Ordering::Relaxed);
+        if would_conflict {
+            self.would_conflict.fetch_add(1, Ordering::Relaxed);
+        }
+        self.healthy.store(true, Ordering::Relaxed);
+    }
+
+    pub fn bridge_failed(&self, why: &str) {
+        self.refused.fetch_add(1, Ordering::Relaxed);
+        self.healthy.store(false, Ordering::Relaxed);
+        if let Ok(mut last) = self.last_error.lock() {
+            *last = Some(why.to_owned());
+        }
+    }
+
+    pub fn stats(&self) -> BridgeStats {
+        BridgeStats {
+            enabled: true,
+            healthy: self.healthy.load(Ordering::Relaxed),
+            reads: self.reads.load(Ordering::Relaxed),
+            writes: self.writes.load(Ordering::Relaxed),
+            absent: self.absent.load(Ordering::Relaxed),
+            refused: self.refused.load(Ordering::Relaxed),
+            would_conflict: self.would_conflict.load(Ordering::Relaxed),
+            last_error: self.last_error.lock().ok().and_then(|error| error.clone()),
+        }
+    }
+}
+
 /// A fixed-window limiter, per process.
 ///
 /// §7.2 asks for one because the caller is a game host and a compromised host is
@@ -234,10 +315,7 @@ impl RateLimiter {
 /// Everything the routes share.
 pub struct AppState {
     pub documents: Documents,
-    pub auth: Policy,
     pub scope: String,
-    pub max_body_bytes: usize,
-    pub rate_limiter: RateLimiter,
     pub login_limiter: LoginLimiter,
     /// The supervisor, when one is running. Absent for a bridge-only process.
     pub supervisor: Option<Handle>,
@@ -295,14 +373,8 @@ pub struct AppState {
     pub web_bind: String,
     pub web_enabled: bool,
     pub shutdown_requested: std::sync::Arc<AtomicBool>,
-
-    reads: AtomicU64,
-    writes: AtomicU64,
-    absent: AtomicU64,
-    refused: AtomicU64,
-    would_conflict: AtomicU64,
-    healthy: std::sync::atomic::AtomicBool,
-    last_error: Mutex<Option<String>>,
+    bridges: RwLock<BTreeMap<cellar_core::config::InstanceId, Arc<BridgeState>>>,
+    primary_bridge: RwLock<Option<Arc<BridgeState>>>,
 }
 
 impl AppState {
@@ -359,12 +431,17 @@ impl AppState {
     }
 
     pub fn new(documents: Documents, auth: Policy, scope: impl Into<String>) -> Self {
+        let scope = scope.into();
+        let primary_bridge = Arc::new(BridgeState::new(
+            documents.clone(),
+            auth,
+            scope.clone(),
+            1024 * 1024,
+            600,
+        ));
         Self {
             documents,
-            auth,
-            scope: scope.into(),
-            max_body_bytes: 1024 * 1024,
-            rate_limiter: RateLimiter::new(600),
+            scope,
             login_limiter: LoginLimiter::new(10),
             supervisor: None,
             pool: None,
@@ -399,53 +476,87 @@ impl AppState {
             web_bind: "127.0.0.1:8081".to_owned(),
             web_enabled: false,
             shutdown_requested: std::sync::Arc::new(AtomicBool::new(false)),
-            reads: AtomicU64::new(0),
-            writes: AtomicU64::new(0),
-            absent: AtomicU64::new(0),
-            refused: AtomicU64::new(0),
-            would_conflict: AtomicU64::new(0),
-            healthy: std::sync::atomic::AtomicBool::new(true),
-            last_error: Mutex::new(None),
+            bridges: RwLock::new(BTreeMap::new()),
+            primary_bridge: RwLock::new(Some(primary_bridge)),
         }
+    }
+
+    pub fn replace_bridges(
+        &self,
+        primary: Option<&cellar_core::config::InstanceId>,
+        bridges: BTreeMap<cellar_core::config::InstanceId, Arc<BridgeState>>,
+    ) {
+        let primary_bridge = primary.and_then(|id| bridges.get(id).cloned());
+        if let Ok(mut current) = self.bridges.write() {
+            *current = bridges;
+        }
+        if let Ok(mut current) = self.primary_bridge.write() {
+            *current = primary_bridge;
+        }
+    }
+
+    pub fn bridge_for(&self, id: &cellar_core::config::InstanceId) -> Option<Arc<BridgeState>> {
+        self.bridges
+            .read()
+            .ok()
+            .and_then(|bridges| bridges.get(id).cloned())
+    }
+
+    pub fn bridge_stats_for(&self, id: &cellar_core::config::InstanceId) -> BridgeStats {
+        self.bridge_for(id)
+            .map_or_else(BridgeStats::default, |bridge| bridge.stats())
     }
 
     pub fn bridge_read(&self) {
-        self.reads.fetch_add(1, Ordering::Relaxed);
-        self.healthy.store(true, Ordering::Relaxed);
+        if let Some(bridge) = self
+            .primary_bridge
+            .read()
+            .ok()
+            .and_then(|bridge| bridge.clone())
+        {
+            bridge.bridge_read();
+        }
     }
 
     pub fn bridge_absent(&self) {
-        self.absent.fetch_add(1, Ordering::Relaxed);
-        self.healthy.store(true, Ordering::Relaxed);
+        if let Some(bridge) = self
+            .primary_bridge
+            .read()
+            .ok()
+            .and_then(|bridge| bridge.clone())
+        {
+            bridge.bridge_absent();
+        }
     }
 
     pub fn bridge_write(&self, would_conflict: bool) {
-        self.writes.fetch_add(1, Ordering::Relaxed);
-        if would_conflict {
-            self.would_conflict.fetch_add(1, Ordering::Relaxed);
+        if let Some(bridge) = self
+            .primary_bridge
+            .read()
+            .ok()
+            .and_then(|bridge| bridge.clone())
+        {
+            bridge.bridge_write(would_conflict);
         }
-        self.healthy.store(true, Ordering::Relaxed);
     }
 
     pub fn bridge_failed(&self, why: &str) {
-        self.refused.fetch_add(1, Ordering::Relaxed);
-        self.healthy.store(false, Ordering::Relaxed);
-        if let Ok(mut last) = self.last_error.lock() {
-            *last = Some(why.to_owned());
+        if let Some(bridge) = self
+            .primary_bridge
+            .read()
+            .ok()
+            .and_then(|bridge| bridge.clone())
+        {
+            bridge.bridge_failed(why);
         }
     }
 
     pub fn stats(&self) -> BridgeStats {
-        BridgeStats {
-            enabled: true,
-            healthy: self.healthy.load(Ordering::Relaxed),
-            reads: self.reads.load(Ordering::Relaxed),
-            writes: self.writes.load(Ordering::Relaxed),
-            absent: self.absent.load(Ordering::Relaxed),
-            refused: self.refused.load(Ordering::Relaxed),
-            would_conflict: self.would_conflict.load(Ordering::Relaxed),
-            last_error: self.last_error.lock().ok().and_then(|e| e.clone()),
-        }
+        self.primary_bridge
+            .read()
+            .ok()
+            .and_then(|bridge| bridge.clone())
+            .map_or_else(BridgeStats::default, |bridge| bridge.stats())
     }
 
     pub fn active_config_name(&self) -> Option<String> {
