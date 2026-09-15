@@ -1411,8 +1411,7 @@ fn refuse_shared_resources(instances: &[Exclusive]) -> Result<(), ConfigError> {
                         &one.scope
                     },
                     "Multi-instance scopes must use ASCII letters, digits, dots, underscores or \
-                     hyphens. This remains safe on a database that has not applied Cellar's binary \
-                     scope-collation migration.",
+                     hyphens so their identity is stable under supported database collations.",
                 ));
             }
 
