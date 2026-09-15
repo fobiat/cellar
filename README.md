@@ -88,7 +88,7 @@ Public releases need no token.
 ### Linux
 
 ```sh
-version=v0.3.0-beta.1
+version=v0.3.0
 curl -fsSLO "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.sh"
 less install.sh
 sh install.sh --tray --version "$version"
@@ -98,7 +98,7 @@ rm install.sh
 ### Windows
 
 ```powershell
-$version = 'v0.3.0-beta.1'
+$version = 'v0.3.0'
 Invoke-WebRequest "https://raw.githubusercontent.com/fobiat/cellar/$version/scripts/install.ps1" -OutFile install-cellar.ps1
 Get-Content .\install-cellar.ps1
 .\install-cellar.ps1 -Version $version -Tray

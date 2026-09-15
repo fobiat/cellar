@@ -16,7 +16,7 @@ use cellar_core::config::{BackupConfig, MariaDbConfig};
 /// The dump and restore clients are separate processes, so a database Cellar
 /// can reach over sqlx is not on its own enough.
 fn clients_are_installed() -> bool {
-    ["mariadb", "mariadb-dump", "mysql", "mysqldump"]
+    ["mariadb", "mariadb-dump"]
         .iter()
         .filter(|name| {
             std::process::Command::new(name)
@@ -25,7 +25,7 @@ fn clients_are_installed() -> bool {
                 .is_ok()
         })
         .count()
-        >= 2
+        == 2
 }
 
 #[tokio::test]
