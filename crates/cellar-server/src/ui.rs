@@ -206,6 +206,10 @@ async fn login(State(state): State<Arc<AppState>>, Json(login): Json<Login>) -> 
         .await
     {
         Ok(verified) => verified,
+        Err(PasswordWorkError::Busy) => {
+            attempt.not_started();
+            return password_work_error(PasswordWorkError::Busy);
+        }
         Err(error) => return password_work_error(error),
     };
 
@@ -260,7 +264,9 @@ async fn setup_password(
             "first-run password setup is only available on a loopback listener",
         );
     }
-    let _guard = state.web_password_setup.lock().await;
+    let Ok(setup_permit) = state.web_password_setup.clone().try_acquire_owned() else {
+        return password_work_error(PasswordWorkError::Busy);
+    };
     if state.web_password().is_some() {
         return setup_error(
             StatusCode::CONFLICT,
@@ -289,29 +295,35 @@ async fn setup_password(
         );
     };
     let password = setup.password;
-    let hash = match state
+    let setup_state = state.clone();
+    match state
         .password_work
         .run(move || {
+            let _setup_permit = setup_permit;
             let hash = session::hash_password(&password).map_err(SetupFailure::Hash)?;
             session::save_password_hash(&path, &hash).map_err(SetupFailure::Save)?;
-            Ok::<_, SetupFailure>(hash)
+            if !setup_state.set_web_password(cellar_core::Secret::new(hash)) {
+                let _ = std::fs::remove_file(path);
+                return Err(SetupFailure::Publish);
+            }
+            Ok::<_, SetupFailure>(())
         })
         .await
     {
-        Ok(Ok(hash)) => hash,
+        Ok(Ok(())) => {}
         Ok(Err(SetupFailure::Hash(message))) => {
             return setup_error(StatusCode::INTERNAL_SERVER_ERROR, message);
         }
         Ok(Err(SetupFailure::Save(message))) => {
             return setup_error(StatusCode::SERVICE_UNAVAILABLE, message);
         }
+        Ok(Err(SetupFailure::Publish)) => {
+            return setup_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "password setup is unavailable",
+            );
+        }
         Err(error) => return password_work_error(error),
-    };
-    if !state.set_web_password(cellar_core::Secret::new(hash)) {
-        return setup_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "password setup is unavailable",
-        );
     }
     Json(serde_json::json!({ "ok": true })).into_response()
 }
@@ -319,6 +331,7 @@ async fn setup_password(
 enum SetupFailure {
     Hash(String),
     Save(String),
+    Publish,
 }
 
 fn password_work_error(error: PasswordWorkError) -> Response {

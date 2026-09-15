@@ -373,7 +373,7 @@ mod contract_tests {
         );
         let mut statuses = [first.unwrap().status(), second.unwrap().status()];
         statuses.sort();
-        assert_eq!(statuses, [StatusCode::OK, StatusCode::CONFLICT]);
+        assert_eq!(statuses, [StatusCode::OK, StatusCode::TOO_MANY_REQUESTS]);
         let hash = state.web_password().expect("setup stores a hash");
         assert!(crate::session::verify_password(
             "a sufficiently long password",
@@ -383,6 +383,67 @@ mod contract_tests {
             crate::session::load_password_hash(&path).unwrap(),
             Some(hash.expose().to_owned())
         );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn timed_out_setup_finishes_storage_and_state_before_releasing_single_flight() {
+        let path = std::env::temp_dir().join(format!(
+            "cellar-web-password-timeout-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut state = AppState::new(Documents::memory(), Policy::Trusted, "test-scope");
+        state.web_auth = cellar_core::config::WebAuthMode::Password;
+        state.web_enabled = true;
+        state.web_bind = "127.0.0.1:8081".to_owned();
+        state.password_work =
+            crate::state::PasswordWork::with_timeout(1, std::time::Duration::from_millis(1));
+        state
+            .web_password_path
+            .lock()
+            .unwrap()
+            .replace(path.clone());
+        let state = Arc::new(state);
+        let app = web_router(state.clone());
+        let request = || {
+            Request::builder()
+                .method("POST")
+                .uri("/api/setup-password")
+                .header("Host", "cellar.example")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    r#"{"password":"a sufficiently long password","confirmation":"a sufficiently long password"}"#,
+                ))
+                .unwrap()
+        };
+
+        let timed_out = app.clone().oneshot(request()).await.unwrap();
+        assert_eq!(timed_out.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let overlapping = app.clone().oneshot(request()).await.unwrap();
+        assert_eq!(overlapping.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if state.web_password().is_some()
+                    && state.web_password_setup.available_permits() == 1
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let hash = state
+            .web_password()
+            .expect("detached setup publishes its hash");
+        assert_eq!(
+            crate::session::load_password_hash(&path).unwrap(),
+            Some(hash.expose().to_owned())
+        );
+        let completed = app.oneshot(request()).await.unwrap();
+        assert_eq!(completed.status(), StatusCode::CONFLICT);
         let _ = std::fs::remove_file(path);
     }
 
@@ -418,6 +479,36 @@ mod contract_tests {
             statuses,
             [StatusCode::UNAUTHORIZED, StatusCode::TOO_MANY_REQUESTS]
         );
+    }
+
+    #[tokio::test]
+    async fn timed_out_wrong_login_still_consumes_the_attempt_budget() {
+        let hash = crate::session::hash_password("a long operator password").unwrap();
+        let mut state = AppState::new(Documents::memory(), Policy::Trusted, "test-scope");
+        state.web_auth = cellar_core::config::WebAuthMode::Password;
+        state.login_limiter = crate::state::LoginLimiter::new(1);
+        state.password_work =
+            crate::state::PasswordWork::with_timeout(1, std::time::Duration::from_millis(1));
+        state
+            .web_password_hash
+            .lock()
+            .unwrap()
+            .replace(cellar_core::Secret::new(hash));
+        let app = web_router(Arc::new(state));
+        let request = || {
+            Request::builder()
+                .method("POST")
+                .uri("/api/login")
+                .header("Host", "cellar.example")
+                .header("Content-Type", "application/json")
+                .body(Body::from(r#"{"password":"wrong"}"#))
+                .unwrap()
+        };
+
+        let timed_out = app.clone().oneshot(request()).await.unwrap();
+        assert_eq!(timed_out.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let limited = app.oneshot(request()).await.unwrap();
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]

@@ -259,14 +259,12 @@ pub struct LoginLimiter {
 struct LoginWindow {
     started: Instant,
     failures: u32,
-    in_flight: u32,
     generation: u64,
 }
 
 pub(crate) struct LoginReservation<'a> {
     limiter: &'a LoginLimiter,
     generation: u64,
-    finished: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -289,7 +287,7 @@ impl PasswordWork {
         Self::with_timeout(capacity, PASSWORD_WORK_TIMEOUT)
     }
 
-    fn with_timeout(capacity: usize, timeout: Duration) -> Self {
+    pub(crate) fn with_timeout(capacity: usize, timeout: Duration) -> Self {
         Self {
             permits: Arc::new(tokio::sync::Semaphore::new(capacity)),
             timeout,
@@ -326,7 +324,6 @@ impl LoginLimiter {
             window: Mutex::new(LoginWindow {
                 started: Instant::now(),
                 failures: 0,
-                in_flight: 0,
                 generation: 0,
             }),
         }
@@ -340,51 +337,38 @@ impl LoginLimiter {
         if window.started.elapsed() >= Duration::from_secs(60) {
             window.started = Instant::now();
             window.failures = 0;
-            window.in_flight = 0;
             window.generation = window.generation.wrapping_add(1);
         }
 
-        if window.failures.saturating_add(window.in_flight) >= self.per_minute {
+        if window.failures >= self.per_minute {
             return None;
         }
-        window.in_flight = window.in_flight.saturating_add(1);
+        window.failures = window.failures.saturating_add(1);
         Some(LoginReservation {
             limiter: self,
             generation: window.generation,
-            finished: false,
         })
     }
 
-    fn finish(&self, generation: u64, failed: bool) {
-        if let Ok(mut window) = self.window.lock() {
-            if window.generation == generation {
-                window.in_flight = window.in_flight.saturating_sub(1);
-            }
-            if failed {
-                window.failures = window.failures.saturating_add(1);
-            }
+    fn refund(&self, generation: u64) {
+        if let Ok(mut window) = self.window.lock()
+            && window.generation == generation
+        {
+            window.failures = window.failures.saturating_sub(1);
         }
     }
 }
 
 impl LoginReservation<'_> {
-    pub(crate) fn succeeded(mut self) {
-        self.limiter.finish(self.generation, false);
-        self.finished = true;
+    pub(crate) fn succeeded(self) {
+        self.limiter.refund(self.generation);
     }
 
-    pub(crate) fn failed(mut self) {
-        self.limiter.finish(self.generation, true);
-        self.finished = true;
+    pub(crate) fn not_started(self) {
+        self.limiter.refund(self.generation);
     }
-}
 
-impl Drop for LoginReservation<'_> {
-    fn drop(&mut self) {
-        if !self.finished {
-            self.limiter.finish(self.generation, false);
-        }
-    }
+    pub(crate) fn failed(self) {}
 }
 
 impl RateLimiter {
@@ -444,8 +428,8 @@ pub struct AppState {
     pub web_password_hash: Mutex<Option<cellar_core::Secret>>,
     /// The private file used when the operator completes first-run setup.
     pub web_password_path: Mutex<Option<PathBuf>>,
-    /// Serialises first-run setup requests inside this Cellar process.
-    pub web_password_setup: tokio::sync::Mutex<()>,
+    /// One setup operation may own password storage at a time.
+    pub web_password_setup: Arc<tokio::sync::Semaphore>,
     pub(crate) password_work: PasswordWork,
     /// Explicit web authentication policy.
     pub web_auth: cellar_core::config::WebAuthMode,
@@ -559,7 +543,7 @@ impl AppState {
             persistence_config: Default::default(),
             web_password_hash: Mutex::new(None),
             web_password_path: Mutex::new(None),
-            web_password_setup: tokio::sync::Mutex::new(()),
+            web_password_setup: Arc::new(tokio::sync::Semaphore::new(1)),
             password_work: PasswordWork::new(PASSWORD_WORK_CAPACITY),
             web_auth: Default::default(),
             web_secure_cookies: false,
@@ -741,6 +725,29 @@ mod tests {
         second.failed();
         replacement.failed();
         assert!(limiter.reserve().is_none());
+    }
+
+    #[test]
+    fn an_abandoned_started_attempt_keeps_its_failure_charge() {
+        let limiter = LoginLimiter::new(1);
+        {
+            let _abandoned = limiter.reserve().expect("attempt has capacity");
+        }
+
+        assert!(limiter.reserve().is_none());
+    }
+
+    #[test]
+    fn a_previous_window_completion_does_not_change_the_current_window() {
+        let limiter = LoginLimiter::new(1);
+        let previous = limiter.reserve().expect("previous window has capacity");
+        limiter.window.lock().unwrap().started = Instant::now() - Duration::from_secs(61);
+        let current = limiter.reserve().expect("new window has capacity");
+
+        previous.failed();
+        assert!(limiter.reserve().is_none());
+        current.succeeded();
+        assert!(limiter.reserve().is_some());
     }
 
     #[tokio::test]
