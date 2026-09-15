@@ -378,6 +378,14 @@ Every shared-secret bridge in one Cellar process inherits the same
 `CELLAR_BRIDGE_SECRET`; secrets cannot be stored in the TOML file and are never
 written back to it.
 
+Cellar's second database migration gives every stored scope a binary collation,
+so case-distinct names remain distinct. A `database.schema_owner = "gamemode"`
+deployment does not run Cellar migrations automatically. To keep a
+multi-instance configuration safe before an operator runs `cellar db migrate`,
+its scopes must contain only ASCII letters, digits, `.`, `_` or `-`, and must
+not differ only by ASCII case. A one-instance legacy configuration keeps its
+existing scope unchanged.
+
 Each enabled resolved instance bridge owns its own listener, authentication
 policy, document scope, body ceiling, rate limit and health counters. Cellar
 binds every required bridge and web listener before it writes `hosting.json` or

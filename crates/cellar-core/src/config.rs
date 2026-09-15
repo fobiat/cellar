@@ -1402,12 +1402,26 @@ fn refuse_shared_resources(instances: &[Exclusive]) -> Result<(), ConfigError> {
                 ));
             }
 
-            if one.scope == other.scope {
+            if !is_storage_safe_scope(&one.scope) || !is_storage_safe_scope(&other.scope) {
+                return Err(clash(
+                    "the document scope",
+                    if is_storage_safe_scope(&one.scope) {
+                        &other.scope
+                    } else {
+                        &one.scope
+                    },
+                    "Multi-instance scopes must use ASCII letters, digits, dots, underscores or \
+                     hyphens. This remains safe on a database that has not applied Cellar's binary \
+                     scope-collation migration.",
+                ));
+            }
+
+            if one.scope.eq_ignore_ascii_case(&other.scope) {
                 return Err(clash(
                     "the document scope",
                     &one.scope,
-                    "The scope is the storage key, so one server's document writes would land on \
-                     the other's documents. Give each instance its own scope.",
+                    "The scope is the storage key, and case-insensitive MySQL collations merge \
+                     these values. Give each instance its own scope.",
                 ));
             }
 
@@ -1448,6 +1462,14 @@ fn refuse_shared_resources(instances: &[Exclusive]) -> Result<(), ConfigError> {
     }
 
     Ok(())
+}
+
+fn is_storage_safe_scope(scope: &str) -> bool {
+    !scope.is_empty()
+        && scope.len() <= 64
+        && scope
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 /// The refusals that are about one server rather than about the process.
@@ -2276,6 +2298,20 @@ enabled = false
         second.scope = instance("a").scope;
 
         let error = refuse_shared_resources(&[instance("a"), second])
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("document scope"), "{error}");
+    }
+
+    #[test]
+    fn two_instances_may_not_use_scopes_that_a_case_insensitive_database_merges() {
+        let mut second = instance("b");
+        second.scope = "PRODUCTION".to_owned();
+        let mut first = instance("a");
+        first.scope = "production".to_owned();
+
+        let error = refuse_shared_resources(&[first, second])
             .unwrap_err()
             .to_string();
 

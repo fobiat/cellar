@@ -60,6 +60,14 @@ fn install_bridges(
     );
 }
 
+fn active_primary(
+    registry: &cellar_server::registry::Registry,
+) -> Option<&cellar_server::registry::Entry> {
+    registry
+        .primary()
+        .filter(|entry| entry.unavailable.is_none())
+}
+
 pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     let config =
         Config::load(config_path).with_context(|| format!("reading {}", config_path.display()))?;
@@ -150,7 +158,10 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     // config nominates. They differ exactly when the first one could not start,
     // and that is the case where an operator most needs the dashboard up.
     let registry = cellar_server::registry::Registry::new(entries);
-    let primary_handle = registry.primary().and_then(|entry| entry.handle.clone());
+    let runtime_primary = active_primary(&registry).cloned();
+    let primary_handle = runtime_primary
+        .as_ref()
+        .and_then(|entry| entry.handle.clone());
 
     if primary_handle.is_none() {
         tracing::error!(
@@ -158,8 +169,6 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
              says the same thing without starting anything."
         );
     }
-    let registry_primary = registry.primary().cloned();
-
     let state = build_state(
         config_path,
         &config,
@@ -170,7 +179,7 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         documents,
     )?;
 
-    install_bridges(&state, registry_primary.as_ref(), &bindings);
+    install_bridges(&state, runtime_primary.as_ref(), &bindings);
 
     let mut servers = Vec::new();
 
@@ -504,7 +513,10 @@ fn build_state(
     mariadb: Option<cellar_mariadb::Handle>,
     documents: Documents,
 ) -> Result<Arc<AppState>> {
-    let mut state = AppState::new(documents, Policy::Trusted, config.scope());
+    let scope = active_primary(&instances)
+        .map(|entry| entry.scope.clone())
+        .unwrap_or_else(|| config.scope());
+    let mut state = AppState::new(documents, Policy::Trusted, scope);
     state.login_limiter = cellar_server::state::LoginLimiter::new(10);
     state.supervisor = handle;
     state.pool = pool;
@@ -1070,11 +1082,50 @@ mod tests {
         let registry = cellar_server::registry::Registry::new(entries);
         let state = AppState::new(documents, Policy::Trusted, "alpha");
 
-        install_bridges(&state, registry.primary(), &bindings);
+        install_bridges(&state, active_primary(&registry), &bindings);
 
         let beta = InstanceId::new("beta").unwrap();
         state.bridge_for(&beta).unwrap().bridge_write(false);
         assert_eq!(state.stats().writes, 1);
+    }
+
+    #[test]
+    fn an_unavailable_configured_primary_gives_process_state_the_started_scope() {
+        let config = Config::parse_at(
+            r#"
+                [bridge]
+                enabled = true
+
+                [instances.alpha.server]
+                executable = "/srv/alpha/sbox-server"
+
+                [instances.beta]
+                scope = "beta-live"
+
+                [instances.beta.server]
+                executable = "/srv/beta/sbox-server"
+            "#,
+            Path::new("cellar.toml"),
+        )
+        .unwrap();
+        let instances = config.instances();
+        let mut entries: Vec<_> = instances
+            .iter()
+            .map(cellar_server::registry::Entry::from_instance)
+            .collect();
+        entries[0].unavailable = Some("the executable is unavailable".to_owned());
+        let state = build_state(
+            Path::new("cellar.toml"),
+            &config,
+            cellar_server::registry::Registry::new(entries),
+            None,
+            None,
+            None,
+            Documents::memory(),
+        )
+        .unwrap();
+
+        assert_eq!(state.scope, "beta-live");
     }
 
     /// The interleaving that a single `Option<u64>` got wrong.
