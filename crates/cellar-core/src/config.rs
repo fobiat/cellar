@@ -1035,29 +1035,34 @@ impl Config {
             return self
                 .instances
                 .iter()
-                .map(|(id, declared)| Instance {
-                    id: id.clone(),
-                    scope: declared
-                        .scope
-                        .clone()
-                        .unwrap_or_else(|| id.as_str().to_owned()),
-                    enabled: declared.enabled,
-                    required: declared.required,
-                    server: declared.server.clone(),
-                    supervisor: declared
-                        .supervisor
-                        .clone()
-                        .unwrap_or_else(|| self.supervisor.clone()),
-                    bridge: declared
+                .map(|(id, declared)| {
+                    let mut bridge = declared
                         .bridge
                         .clone()
-                        .unwrap_or_else(|| self.bridge.clone()),
-                    player_ceiling: None,
-                    profile: declared
-                        .profile
-                        .clone()
-                        .or_else(|| self.profile.clone())
-                        .unwrap_or_default(),
+                        .unwrap_or_else(|| self.bridge.clone());
+                    bridge.shared_secret = self.bridge.shared_secret.clone();
+
+                    Instance {
+                        id: id.clone(),
+                        scope: declared
+                            .scope
+                            .clone()
+                            .unwrap_or_else(|| id.as_str().to_owned()),
+                        enabled: declared.enabled,
+                        required: declared.required,
+                        server: declared.server.clone(),
+                        supervisor: declared
+                            .supervisor
+                            .clone()
+                            .unwrap_or_else(|| self.supervisor.clone()),
+                        bridge,
+                        player_ceiling: None,
+                        profile: declared
+                            .profile
+                            .clone()
+                            .or_else(|| self.profile.clone())
+                            .unwrap_or_default(),
+                    }
                 })
                 .collect();
         }
@@ -1177,6 +1182,9 @@ impl Config {
             instance.profile.validate().map_err(|why| {
                 ConfigError::Invalid(format!("instance '{}': {why}", instance.id))
             })?;
+            if instance.enabled {
+                validate_bridge(&instance.id, &instance.bridge, &self.database)?;
+            }
         }
 
         if self.backup.enabled && self.backup.retain == 0 {
@@ -1196,57 +1204,6 @@ impl Config {
             return Err(ConfigError::Invalid(
                 "database.direct_control needs database.enabled".into(),
             ));
-        }
-
-        if self.bridge.enabled {
-            if !self.database.enabled {
-                return Err(ConfigError::Invalid(
-                    "bridge.enabled needs database.enabled: the bridge has nowhere to store a document".into(),
-                ));
-            }
-
-            if self.database.url.is_none() {
-                return Err(ConfigError::Invalid(
-                    "database.enabled needs CELLAR_DATABASE_URL or database.url_file".into(),
-                ));
-            }
-
-            match self.bridge.auth {
-                AuthMode::Facepunch => {
-                    return Err(ConfigError::Invalid(
-                        "bridge.auth = \"facepunch\" is not implemented: no public endpoint for \
-                         verifying an Auth.GetToken token was found. Use \"trusted\" on a loopback \
-                         bind, or \"shared_secret\"."
-                            .into(),
-                    ));
-                }
-                AuthMode::SharedSecret if self.bridge.shared_secret.is_none() => {
-                    return Err(ConfigError::Invalid(
-                        "bridge.auth = \"shared_secret\" needs CELLAR_BRIDGE_SECRET".into(),
-                    ));
-                }
-                _ => {}
-            }
-
-            // `trusted` leans entirely on nothing else being able to reach the
-            // bridge. Saying so at startup is cheaper than discovering it.
-            if self.bridge.auth == AuthMode::Trusted && !binds_loopback(&self.bridge.bind) {
-                return Err(ConfigError::Invalid(format!(
-                    "bridge.auth = \"trusted\" does not verify tokens, so it may only bind \
-                     loopback. {} is reachable from elsewhere; use \"shared_secret\" instead.",
-                    self.bridge.bind
-                )));
-            }
-
-            if self.bridge.public_url.trim().is_empty() {
-                return Err(ConfigError::Invalid("bridge.public_url is required".into()));
-            }
-
-            if self.bridge.auth_audience.trim().is_empty() {
-                return Err(ConfigError::Invalid(
-                    "bridge.auth_audience is required: HostingConfigStore refuses a hosting.json without one".into(),
-                ));
-            }
         }
 
         if self.web.enabled
@@ -1523,6 +1480,66 @@ fn validate_server(id: &InstanceId, server: &ServerConfig) -> Result<(), ConfigE
                 "server.map '{map}' must use org.package form"
             ))));
         }
+    }
+
+    Ok(())
+}
+
+fn validate_bridge(
+    id: &InstanceId,
+    bridge: &BridgeConfig,
+    database: &DatabaseConfig,
+) -> Result<(), ConfigError> {
+    if !bridge.enabled {
+        return Ok(());
+    }
+
+    let invalid = |message: &str| ConfigError::Invalid(format!("instance '{id}': {message}"));
+
+    if !database.enabled {
+        return Err(invalid(
+            "bridge.enabled needs database.enabled: the bridge has nowhere to store a document",
+        ));
+    }
+    if database.url.is_none() {
+        return Err(invalid(
+            "database.url needs CELLAR_DATABASE_URL or database.url_file",
+        ));
+    }
+
+    match bridge.auth {
+        AuthMode::Facepunch => {
+            return Err(invalid(
+                "bridge.auth = \"facepunch\" is not implemented: use \"trusted\" on a loopback bind, or \"shared_secret\"",
+            ));
+        }
+        AuthMode::SharedSecret if bridge.shared_secret.is_none() => {
+            return Err(invalid(
+                "bridge.auth = \"shared_secret\" needs CELLAR_BRIDGE_SECRET",
+            ));
+        }
+        _ => {}
+    }
+
+    if bridge.auth == AuthMode::Trusted && !binds_loopback(&bridge.bind) {
+        return Err(invalid(&format!(
+            "bridge.auth = \"trusted\" does not verify tokens, so bridge.bind may only be loopback. {} is reachable from elsewhere; use \"shared_secret\" instead",
+            bridge.bind
+        )));
+    }
+    if bridge.public_url.trim().is_empty() {
+        return Err(invalid("bridge.public_url is required"));
+    }
+    if bridge.auth_audience.trim().is_empty() {
+        return Err(invalid(
+            "bridge.auth_audience is required: HostingConfigStore refuses a hosting.json without one",
+        ));
+    }
+    if bridge.max_body_bytes == 0 {
+        return Err(invalid("bridge.max_body_bytes must be at least 1"));
+    }
+    if bridge.rate_limit_per_minute == 0 {
+        return Err(invalid("bridge.rate_limit_per_minute must be at least 1"));
     }
 
     Ok(())
@@ -2368,6 +2385,157 @@ enabled = false
         config.validate().unwrap();
     }
 
+    fn with_instance_bridge(bridge: BridgeConfig, enabled: bool) -> Config {
+        let mut config = minimal();
+        let server = config.server.take().expect("the fixture has one server");
+        config.database.enabled = true;
+        config.database.url = Some(Secret::new("mysql://user:pw@host/db"));
+        config.instances.insert(
+            InstanceId::new("game").unwrap(),
+            InstanceConfig {
+                scope: None,
+                enabled,
+                required: true,
+                server,
+                supervisor: None,
+                bridge: Some(bridge),
+                profile: None,
+            },
+        );
+        config
+    }
+
+    #[test]
+    fn unsafe_instance_bridge_override_is_rejected_with_its_instance_and_field() {
+        let bridge = BridgeConfig {
+            enabled: true,
+            bind: "0.0.0.0:8080".to_owned(),
+            auth: AuthMode::Trusted,
+            ..BridgeConfig::default()
+        };
+
+        let error = with_instance_bridge(bridge, true)
+            .validate()
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("instance 'game'"), "{error}");
+        assert!(error.contains("bridge.auth"), "{error}");
+    }
+
+    #[test]
+    fn every_instance_bridge_policy_field_is_validated() {
+        let cases = [
+            (
+                "bridge.auth",
+                BridgeConfig {
+                    enabled: true,
+                    auth: AuthMode::Facepunch,
+                    ..BridgeConfig::default()
+                },
+            ),
+            (
+                "bridge.public_url",
+                BridgeConfig {
+                    enabled: true,
+                    public_url: " ".to_owned(),
+                    ..BridgeConfig::default()
+                },
+            ),
+            (
+                "bridge.auth_audience",
+                BridgeConfig {
+                    enabled: true,
+                    auth_audience: String::new(),
+                    ..BridgeConfig::default()
+                },
+            ),
+            (
+                "bridge.max_body_bytes",
+                BridgeConfig {
+                    enabled: true,
+                    max_body_bytes: 0,
+                    ..BridgeConfig::default()
+                },
+            ),
+            (
+                "bridge.rate_limit_per_minute",
+                BridgeConfig {
+                    enabled: true,
+                    rate_limit_per_minute: 0,
+                    ..BridgeConfig::default()
+                },
+            ),
+        ];
+
+        for (field, bridge) in cases {
+            let error = with_instance_bridge(bridge, true)
+                .validate()
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("instance 'game'"), "{field}: {error}");
+            assert!(error.contains(field), "{field}: {error}");
+        }
+    }
+
+    #[test]
+    fn enabled_instance_bridge_needs_database_storage() {
+        let mut config = with_instance_bridge(
+            BridgeConfig {
+                enabled: true,
+                ..BridgeConfig::default()
+            },
+            true,
+        );
+        config.database.enabled = false;
+        config.database.url = None;
+
+        let error = config.validate().unwrap_err().to_string();
+
+        assert!(error.contains("instance 'game'"), "{error}");
+        assert!(error.contains("database.enabled"), "{error}");
+    }
+
+    #[test]
+    fn disabled_instance_bridge_imposes_no_runtime_requirements() {
+        let bridge = BridgeConfig {
+            enabled: true,
+            bind: "0.0.0.0:8080".to_owned(),
+            auth: AuthMode::Facepunch,
+            max_body_bytes: 0,
+            rate_limit_per_minute: 0,
+            ..BridgeConfig::default()
+        };
+
+        with_instance_bridge(bridge, false).validate().unwrap();
+    }
+
+    #[test]
+    fn instance_bridge_inherits_the_process_shared_secret() {
+        let mut config = with_instance_bridge(
+            BridgeConfig {
+                enabled: true,
+                auth: AuthMode::SharedSecret,
+                ..BridgeConfig::default()
+            },
+            true,
+        );
+        config.bridge.shared_secret = Some(Secret::new("environment-secret"));
+
+        let instances = config.instances();
+
+        assert_eq!(
+            instances[0]
+                .bridge
+                .shared_secret
+                .as_ref()
+                .expect("the process secret is inherited")
+                .expose(),
+            "environment-secret"
+        );
+        config.validate().unwrap();
+    }
+
     #[test]
     fn an_exposed_web_ui_needs_a_password() {
         let mut config = minimal();
@@ -2600,6 +2768,17 @@ enabled = false
                 r#"
                     [bridge]
                     shared_secret = "bridge-file-secret"
+                "#,
+            ),
+            (
+                "shared_secret",
+                r#"
+                    [instances.game.server]
+                    executable = "a.exe"
+                    project = "a.sbproj"
+
+                    [instances.game.bridge]
+                    shared_secret = "instance-file-secret"
                 "#,
             ),
             (

@@ -370,8 +370,13 @@ See [The bridge](BRIDGE.md) for the protocol.
 | `auth_audience` | `applejack-bridge` | The `Auth.GetToken` service name. |
 | `auth` | `trusted` | `trusted`, `shared_secret`, or `facepunch`. |
 | `scope` | `default` | Which server's documents these are. |
-| `max_body_bytes` | `1048576` | Request body ceiling. |
-| `rate_limit_per_minute` | `600` | Per-caller rate limit. |
+| `max_body_bytes` | `1048576` | Request body ceiling. Must be at least 1. |
+| `rate_limit_per_minute` | `600` | Per-caller rate limit. Must be at least 1. |
+
+An `[instances.<id>.bridge]` override is validated after defaults are resolved.
+Every shared-secret bridge in one Cellar process inherits the same
+`CELLAR_BRIDGE_SECRET`; secrets cannot be stored in the TOML file and are never
+written back to it.
 
 **`public_url` must not redirect.** The engine strips the `Authorization` header
 on every redirect hop, so a redirecting URL turns every authenticated request
