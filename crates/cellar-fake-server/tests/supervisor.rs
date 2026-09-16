@@ -97,7 +97,7 @@ async fn the_server_starts_becomes_ready_and_stops_cleanly() {
     let snapshot = handle.snapshot().await.unwrap();
     assert!(snapshot.state.is_ready(), "readiness reaches the snapshot");
 
-    handle.shutdown().await;
+    handle.shutdown().await.unwrap();
 
     let exit = wait_for(&mut events, Duration::from_secs(10), |e| {
         matches!(e, Event::ProcessExited { .. })
@@ -152,7 +152,7 @@ async fn players_joining_and_leaving_reach_the_roster() {
     let snapshot = handle.snapshot().await.unwrap();
     assert_eq!(snapshot.players.len(), 1);
 
-    handle.shutdown().await;
+    handle.shutdown().await.unwrap();
     let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
 }
 
@@ -210,7 +210,7 @@ async fn a_console_command_returns_its_reply() {
         "the echoed command is not part of the reply: {reply:?}"
     );
 
-    handle.shutdown().await;
+    handle.shutdown().await.unwrap();
     let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
 }
 
@@ -321,7 +321,7 @@ async fn the_configuration_can_be_captured_changed_and_read_back() {
     let text = snapshot.to_toml().unwrap();
     assert_eq!(convar::Snapshot::parse(&text).unwrap(), snapshot);
 
-    handle.shutdown().await;
+    handle.shutdown().await.unwrap();
     let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
 }
 
@@ -343,7 +343,7 @@ async fn a_stopped_server_keeps_answering_and_says_how_it_ended() {
     })
     .await;
 
-    handle.stop().await;
+    handle.stop().await.unwrap();
     wait_for(&mut events, Duration::from_secs(10), |e| {
         matches!(e, Event::ProcessExited { .. })
     })
@@ -361,13 +361,13 @@ async fn a_stopped_server_keeps_answering_and_says_how_it_ended() {
     assert!(exit.graceful);
 
     // And the server can be started again from the same handle.
-    handle.restart().await;
+    handle.restart().await.unwrap();
     wait_for(&mut events, Duration::from_secs(15), |e| {
         matches!(e, Event::ServerReady { .. })
     })
     .await;
 
-    handle.shutdown().await;
+    handle.shutdown().await.unwrap();
     let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
 }
 
@@ -393,7 +393,7 @@ async fn a_server_that_refuses_to_quit_is_killed_after_the_grace_period() {
     .await;
 
     let started = std::time::Instant::now();
-    handle.shutdown().await;
+    handle.shutdown().await.unwrap();
 
     wait_for(&mut events, Duration::from_secs(15), |e| {
         matches!(e, Event::ProcessExited { .. })
@@ -430,7 +430,7 @@ async fn a_hanging_server_never_reports_ready() {
     let snapshot = handle.snapshot().await.unwrap();
     assert!(!snapshot.state.is_ready(), "state was {:?}", snapshot.state);
 
-    handle.shutdown().await;
+    handle.shutdown().await.unwrap();
     let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
 }
 
@@ -466,7 +466,7 @@ async fn a_server_that_never_becomes_ready_stops_claiming_to_be_starting() {
     // one of the two causes, and killing it would be the wrong answer to it.
     assert!(snapshot.pid.is_some());
 
-    handle.shutdown().await;
+    handle.shutdown().await.unwrap();
     let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
 }
 
@@ -492,6 +492,6 @@ async fn resource_samples_arrive_for_the_running_process() {
         other => panic!("expected a sample, got {other:?}"),
     }
 
-    handle.shutdown().await;
+    handle.shutdown().await.unwrap();
     let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
 }

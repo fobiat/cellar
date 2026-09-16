@@ -306,7 +306,7 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     // pod is SIGKILLed mid-logoff, which is exactly the shutdown the engine has
     // no handler for.
     let budget = std::time::Duration::from_secs(60);
-    let _ = tokio::time::timeout(budget, async {
+    let shutdown_result = tokio::time::timeout(budget, async {
         // Asked concurrently. Each `quit` waits out its own engine's nine
         // shutdown steps, and doing that in sequence is what turns one grace
         // period into N of them.
@@ -316,18 +316,27 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
                 let (id, handle) = (id.clone(), handle.clone());
                 tokio::spawn(async move {
                     tracing::info!("stopping instance '{id}'");
-                    handle.shutdown().await;
+                    handle.shutdown().await.map_err(|why| {
+                        format!("could not confirm that instance '{id}' stopped: {why}")
+                    })
                 })
             })
             .collect();
         for ask in asks {
-            let _ = ask.await;
+            ask.await
+                .map_err(|error| format!("a shutdown task failed: {error}"))??;
         }
         for (_, _, task) in running {
-            let _ = task.await;
+            task.await
+                .map_err(|error| format!("a supervisor task failed: {error}"))?;
         }
+        Ok::<(), String>(())
     })
-    .await;
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!("the 60s shutdown budget expired before every server exit was confirmed")
+    })
+    .and_then(|result| result.map_err(anyhow::Error::msg));
 
     for server in servers {
         server.abort();
@@ -341,7 +350,7 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         mariadb.stop().await;
     }
 
-    Ok(())
+    shutdown_result
 }
 
 /// Every recurring job this process runs, in one register.
@@ -851,7 +860,10 @@ async fn check_for_updates(config: &Config, handle: &Handle) -> Result<String, S
 
             // Stop before updating: the engine's files are in use while it
             // runs, and Steam cannot replace a running binary.
-            handle.stop().await;
+            handle
+                .stop()
+                .await
+                .map_err(|why| format!("could not stop the server before updating: {why}"))?;
 
             let applied = cellar_update::updater::apply(&config.update, &probe.project_dir).await;
             let mut failures = Vec::new();
@@ -866,7 +878,9 @@ async fn check_for_updates(config: &Config, handle: &Handle) -> Result<String, S
 
             // Restart either way. A half-applied update still needs a running
             // server more than it needs to stay down.
-            handle.restart().await;
+            handle.restart().await.map_err(|why| {
+                format!("update completed but the server could not restart: {why}")
+            })?;
 
             if failures.is_empty() {
                 Ok(format!("applied {what}{snapshot}"))

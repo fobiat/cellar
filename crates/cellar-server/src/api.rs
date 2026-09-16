@@ -1513,8 +1513,13 @@ async fn control(
             operator.name
         );
         for entry in state.instances.iter() {
-            if let Some(supervisor) = &entry.handle {
-                supervisor.stop().await;
+            if let Some(supervisor) = &entry.handle
+                && let Err(why) = supervisor.stop().await
+            {
+                return error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("could not stop instance '{}': {why}", entry.id),
+                );
             }
         }
         state
@@ -1530,13 +1535,19 @@ async fn control(
     match action.as_str() {
         "stop" => {
             tracing::info!("{} asked for a graceful stop", operator.name);
-            supervisor.stop().await;
-            Json(serde_json::json!({ "ok": true, "action": "stop" })).into_response()
+            match supervisor.stop().await {
+                Ok(()) => Json(serde_json::json!({ "ok": true, "action": "stop" })).into_response(),
+                Err(why) => error(StatusCode::BAD_GATEWAY, why),
+            }
         }
         "restart" => {
             tracing::info!("{} asked for a restart", operator.name);
-            supervisor.restart().await;
-            Json(serde_json::json!({ "ok": true, "action": "restart" })).into_response()
+            match supervisor.restart().await {
+                Ok(()) => {
+                    Json(serde_json::json!({ "ok": true, "action": "restart" })).into_response()
+                }
+                Err(why) => error(StatusCode::BAD_GATEWAY, why),
+            }
         }
         other => error(StatusCode::BAD_REQUEST, format!("unknown action '{other}'")),
     }
@@ -1826,7 +1837,12 @@ async fn db_restore(
 
     let stopped = match &state.supervisor {
         Some(supervisor) => {
-            supervisor.stop().await;
+            if let Err(why) = supervisor.stop().await {
+                return error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("could not stop the server before restoring the database: {why}"),
+                );
+            }
             true
         }
         None => false,
@@ -1986,8 +2002,13 @@ async fn persistence_restore(
         Ok(documents) => documents,
         Err(why) => return error(StatusCode::BAD_GATEWAY, why),
     };
-    if let Some(supervisor) = &state.supervisor {
-        supervisor.stop().await;
+    if let Some(supervisor) = &state.supervisor
+        && let Err(why) = supervisor.stop().await
+    {
+        return error(
+            StatusCode::BAD_GATEWAY,
+            format!("could not stop the server before restoring persistence: {why}"),
+        );
     }
 
     let wanted = snapshot

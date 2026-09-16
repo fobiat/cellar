@@ -111,7 +111,7 @@ pub fn state_colour(state: cellar_core::State) -> Color {
         // yet, and the cause is as likely to be a wrong ready pattern as a
         // stuck engine.
         State::Unhealthy => token_colour(cellar_core::theme::LOG_WARNING),
-        State::Stopped | State::CrashLooping => russet(),
+        State::Stopped | State::StopFailed | State::CrashLooping => russet(),
     }
 }
 

@@ -36,6 +36,74 @@ const REPLY_TIMEOUT: Duration = Duration::from_secs(3);
 /// reasoning where it is used in `run_once`.
 const CONSOLE_GRACE: Duration = Duration::from_secs(2);
 
+const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const KILL_CONFIRM_TIMEOUT: Duration = Duration::from_secs(10);
+
+trait TerminationChild {
+    fn send_command(&self, command: &str) -> std::io::Result<()>;
+    fn try_wait_code(&mut self) -> std::io::Result<Option<i32>>;
+    fn kill(&mut self) -> std::io::Result<()>;
+}
+
+impl TerminationChild for Child {
+    fn send_command(&self, command: &str) -> std::io::Result<()> {
+        Self::send_command(self, command)
+    }
+
+    fn try_wait_code(&mut self) -> std::io::Result<Option<i32>> {
+        self.try_wait()
+            .map(|status| status.map(|status| status.exit_code() as i32))
+    }
+
+    fn kill(&mut self) -> std::io::Result<()> {
+        Self::kill(self)
+    }
+}
+
+async fn wait_for_exit(
+    child: &mut impl TerminationChild,
+    timeout: Duration,
+) -> Result<i32, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait_code() {
+            Ok(Some(code)) => return Ok(code),
+            Ok(None) => {}
+            Err(error) => return Err(format!("could not confirm that the server exited: {error}")),
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(format!(
+                "the server did not exit within {}s",
+                timeout.as_secs()
+            ));
+        }
+        tokio::time::sleep(remaining.min(EXIT_POLL_INTERVAL)).await;
+    }
+}
+
+async fn kill_and_confirm(
+    child: &mut impl TerminationChild,
+    timeout: Duration,
+) -> Result<i32, String> {
+    if let Err(error) = child.kill() {
+        return match child.try_wait_code() {
+            Ok(Some(code)) => Ok(code),
+            Ok(None) => Err(format!(
+                "could not kill the server and it is still running: {error}"
+            )),
+            Err(wait_error) => Err(format!(
+                "could not kill the server ({error}) or confirm that it exited ({wait_error})"
+            )),
+        };
+    }
+
+    wait_for_exit(child, timeout)
+        .await
+        .map_err(|error| format!("the server was killed but exit was not confirmed: {error}"))
+}
+
 /// A command awaiting its reply.
 ///
 /// The engine brackets console output precisely, which is worth stating because
@@ -86,14 +154,20 @@ pub enum Control {
         reply: oneshot::Sender<Result<Vec<String>, String>>,
     },
     /// Graceful stop: `quit`, then wait, then kill.
-    Stop { reply: oneshot::Sender<()> },
+    Stop {
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Stop and start again, resetting the backoff.
-    Restart { reply: oneshot::Sender<()> },
+    Restart {
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// End the supervisor task itself.
     ///
     /// Distinct from [`Control::Stop`], which stops the game server and leaves
     /// the supervisor answering. Cellar's own exit path is the only caller.
-    Shutdown { reply: oneshot::Sender<()> },
+    Shutdown {
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Replace the server profile and restart it without rebinding Cellar.
     SwitchConfig {
         instance: Box<Instance>,
@@ -137,26 +211,35 @@ impl Handle {
             .map_err(|_| "the supervisor stopped before replying".to_owned())?
     }
 
-    pub async fn stop(&self) {
+    pub async fn stop(&self) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
-        if self.control.send(Control::Stop { reply }).await.is_ok() {
-            let _ = rx.await;
-        }
+        self.control
+            .send(Control::Stop { reply })
+            .await
+            .map_err(|_| "the supervisor is not running".to_owned())?;
+        rx.await
+            .map_err(|_| "the supervisor stopped before confirming the server exit".to_owned())?
     }
 
-    pub async fn restart(&self) {
+    pub async fn restart(&self) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
-        if self.control.send(Control::Restart { reply }).await.is_ok() {
-            let _ = rx.await;
-        }
+        self.control
+            .send(Control::Restart { reply })
+            .await
+            .map_err(|_| "the supervisor is not running".to_owned())?;
+        rx.await
+            .map_err(|_| "the supervisor stopped before confirming the server exit".to_owned())?
     }
 
     /// End the supervisor task. The server should be stopped first.
-    pub async fn shutdown(&self) {
+    pub async fn shutdown(&self) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
-        if self.control.send(Control::Shutdown { reply }).await.is_ok() {
-            let _ = rx.await;
-        }
+        self.control
+            .send(Control::Shutdown { reply })
+            .await
+            .map_err(|_| "the supervisor is not running".to_owned())?;
+        rx.await
+            .map_err(|_| "the supervisor stopped before confirming the server exit".to_owned())?
     }
 
     pub async fn switch_config(&self, instance: Instance) -> Result<(), String> {
@@ -242,6 +325,15 @@ impl Supervisor {
         }
     }
 
+    fn report_stop_failure(&mut self, error: String) {
+        tracing::error!("server termination was not confirmed: {error}");
+        self.tracker.set_state(State::StopFailed);
+        self.publish(Event::Unparsed {
+            raw: format!("server termination was not confirmed: {error}"),
+            origin: Origin::Cellar,
+        });
+    }
+
     fn publish(&mut self, event: Event) {
         self.tracker.apply(&event, chrono::Utc::now());
         // A send fails only when nothing is subscribed, which is normal.
@@ -317,7 +409,7 @@ impl Supervisor {
                         message = control.recv() => {
                             match message {
                                 Some(Control::Stop { reply }) => {
-                                    let _ = reply.send(());
+                                    let _ = reply.send(Ok(()));
                                     tracing::info!("the backoff wait was cancelled by a stop");
                                     self.tracker.set_state(State::Stopped);
                                     if self.rest(&mut control).await == Resting::Done {
@@ -325,7 +417,7 @@ impl Supervisor {
                                     }
                                 }
                                 Some(Control::Shutdown { reply }) => {
-                                    let _ = reply.send(());
+                                    let _ = reply.send(Ok(()));
                                     return;
                                 }
                                 Some(Control::Snapshot { reply }) => {
@@ -334,7 +426,7 @@ impl Supervisor {
                                 // A restart during backoff means "stop waiting".
                                 Some(Control::Restart { reply }) => {
                                     self.restarts.record_healthy_run();
-                                    let _ = reply.send(());
+                                    let _ = reply.send(Ok(()));
                                 }
                                 Some(Control::Exec { reply, .. }) => {
                                     let _ = reply.send(Err("the server is not running".to_owned()));
@@ -366,14 +458,14 @@ impl Supervisor {
                 Some(Control::Restart { reply }) => {
                     tracing::info!("starting the server again on request");
                     self.restarts.record_healthy_run();
-                    let _ = reply.send(());
+                    let _ = reply.send(Ok(()));
                     return Resting::Resume;
                 }
                 // Already stopped. Answering rather than refusing keeps a
                 // second stop, or a stop racing a crash, from looking like an
                 // error to whoever asked.
                 Some(Control::Stop { reply }) => {
-                    let _ = reply.send(());
+                    let _ = reply.send(Ok(()));
                 }
                 Some(Control::Exec { reply, .. }) => {
                     let _ = reply.send(Err("the server is not running".to_owned()));
@@ -383,7 +475,7 @@ impl Supervisor {
                     let _ = reply.send(result);
                 }
                 Some(Control::Shutdown { reply }) => {
-                    let _ = reply.send(());
+                    let _ = reply.send(Ok(()));
                     return Resting::Done;
                 }
                 None => return Resting::Done,
@@ -472,13 +564,15 @@ impl Supervisor {
             seconds => Some(Duration::from_secs(seconds)),
         };
         let mut said_unhealthy = false;
+        let mut exit_check_failed = false;
+        let mut termination_failed = false;
         let mut requested_stop = false;
         let mut restart_requested = false;
         let mut shutting_down = false;
         // The command awaiting its reply, if any.
         let mut collecting: Option<PendingReply> = None;
 
-        let exit_code = loop {
+        let exit_code = 'running: loop {
             tokio::select! {
                 Some(chunk) = output.recv() => {
                     let lines = match chunk {
@@ -554,11 +648,17 @@ impl Supervisor {
                     }
                 }
 
-                _ = exit_tick.tick() => {
+                _ = exit_tick.tick(), if !exit_check_failed => {
                     match child.try_wait() {
                         Ok(Some(status)) => break Some(status.exit_code() as i32),
                         Ok(None) => {}
-                        Err(_) => break None,
+                        Err(error) => {
+                            exit_check_failed = true;
+                            termination_failed = true;
+                            self.report_stop_failure(format!(
+                                "could not inspect the managed child: {error}; it will not be replaced"
+                            ));
+                        }
                     }
                 }
 
@@ -599,42 +699,100 @@ impl Supervisor {
                             }
                         }
                         Some(Control::SwitchConfig { instance, reply }) => {
+                            let previous = self.instance.clone();
                             if let Err(why) = self.switch_to(*instance) {
                                 let _ = reply.send(Err(why));
                             } else {
-                                restart_requested = true;
-                                let status = self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await;
-                                let _ = reply.send(Ok(()));
-                                break status;
+                                match self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await {
+                                    Ok(status) => {
+                                        restart_requested = true;
+                                        let _ = reply.send(Ok(()));
+                                        break status;
+                                    }
+                                    Err(error) => {
+                                        termination_failed = true;
+                                        self.instance = previous;
+                                        let error = match self.prepare_hosting() {
+                                            Ok(_) => error,
+                                            Err(restore_error) => format!(
+                                                "{error}; could not restore the previous hosting configuration: {restore_error}"
+                                            ),
+                                        };
+                                        self.report_stop_failure(error.clone());
+                                        let _ = reply.send(Err(error));
+                                    }
+                                }
                             }
                         }
                         Some(Control::Stop { reply }) => {
-                            requested_stop = true;
-                            let status = self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await;
-                            let _ = reply.send(());
-                            break status;
+                            match self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await {
+                                Ok(status) => {
+                                    requested_stop = true;
+                                    let _ = reply.send(Ok(()));
+                                    break status;
+                                }
+                                Err(error) => {
+                                    termination_failed = true;
+                                    self.report_stop_failure(error.clone());
+                                    let _ = reply.send(Err(error));
+                                }
+                            }
                         }
                         Some(Control::Restart { reply }) => {
-                            restart_requested = true;
                             tracing::info!("restarting the server on request");
-                            let status = self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await;
-                            let _ = reply.send(());
-                            break status;
+                            match self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await {
+                                Ok(status) => {
+                                    restart_requested = true;
+                                    let _ = reply.send(Ok(()));
+                                    break status;
+                                }
+                                Err(error) => {
+                                    termination_failed = true;
+                                    self.report_stop_failure(error.clone());
+                                    let _ = reply.send(Err(error));
+                                }
+                            }
                         }
                         // Cellar is exiting with the server still up. Stop it
                         // the same way an explicit stop would: the engine has
                         // no signal handler, so anything else skips the Steam
                         // logoff and the convar save.
                         Some(Control::Shutdown { reply }) => {
-                            requested_stop = true;
-                            shutting_down = true;
-                            let status = self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await;
-                            let _ = reply.send(());
-                            break status;
+                            match self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await {
+                                Ok(status) => {
+                                    requested_stop = true;
+                                    shutting_down = true;
+                                    let _ = reply.send(Ok(()));
+                                    break status;
+                                }
+                                Err(error) => {
+                                    termination_failed = true;
+                                    self.report_stop_failure(error.clone());
+                                    let _ = reply.send(Err(error));
+                                }
+                            }
                         }
                         None => {
-                            requested_stop = true;
-                            break self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await;
+                            match self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await {
+                                Ok(status) => {
+                                    requested_stop = true;
+                                    break status;
+                                }
+                                Err(error) => {
+                                    termination_failed = true;
+                                    self.report_stop_failure(error);
+                                    tracing::error!("the control channel closed before the server exit was confirmed; retaining the child handle until it exits");
+                                    loop {
+                                        match child.try_wait_code() {
+                                            Ok(Some(status)) => {
+                                                requested_stop = true;
+                                                break 'running Some(status);
+                                            }
+                                            Ok(None) | Err(_) => tokio::time::sleep(EXIT_POLL_INTERVAL).await,
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -687,8 +845,31 @@ impl Supervisor {
             graceful,
         });
 
+        self.outcome_after_exit(
+            exit_code,
+            requested_stop,
+            restart_requested,
+            shutting_down,
+            termination_failed,
+            run_started.elapsed(),
+        )
+    }
+
+    fn outcome_after_exit(
+        &mut self,
+        exit_code: Option<i32>,
+        requested_stop: bool,
+        restart_requested: bool,
+        shutting_down: bool,
+        termination_failed: bool,
+        run_elapsed: Duration,
+    ) -> RunOutcome {
         if shutting_down {
             return RunOutcome::ShutDown;
+        }
+
+        if termination_failed {
+            return RunOutcome::Stopped;
         }
 
         if restart_requested {
@@ -699,7 +880,7 @@ impl Supervisor {
         match self.restarts.on_exit(
             exit_code,
             requested_stop,
-            run_started.elapsed(),
+            run_elapsed,
             self.started.elapsed().as_secs(),
             self.instance.supervisor.restart,
             self.instance.supervisor.backoff,
@@ -716,20 +897,16 @@ impl Supervisor {
     /// shutdown does nine things including saving every `Saved` convar and
     /// logging the server off Steam's master list. A kill skips all of it, which
     /// is what every Kubernetes rollout does to this server today.
-    /// Returns the exit status it observed, if any.
-    ///
-    /// Returning it matters: `try_wait` reports a status once and answers `None`
-    /// afterwards, so a caller that waits here and then asks again gets nothing
-    /// and reports a clean shutdown as "killed by a signal".
+    /// Returns an error unless the child exit is observed and reaped.
     async fn graceful_stop(
         &mut self,
-        child: &mut Child,
+        child: &mut impl TerminationChild,
         output: &mut mpsc::Receiver<Output>,
         assembler: &mut LineAssembler,
         pending: &mut Option<PendingReply>,
         ready_pattern: &str,
         console_is_the_source: bool,
-    ) -> Option<i32> {
+    ) -> Result<Option<i32>, String> {
         self.tracker.set_state(State::Stopping);
 
         if child.send_command("quit").is_err() {
@@ -737,8 +914,9 @@ impl Supervisor {
                 "could not reach the console to send `quit`; killing the server, which skips the \
                  Steam logoff and the convar save"
             );
-            let _ = child.kill();
-            return None;
+            return kill_and_confirm(child, KILL_CONFIRM_TIMEOUT)
+                .await
+                .map(Some);
         }
         tracing::info!(
             "sent `quit`; giving the engine {}s to run its nine shutdown steps",
@@ -747,65 +925,64 @@ impl Supervisor {
 
         let deadline =
             Duration::from_secs(self.instance.supervisor.graceful_timeout_seconds.max(1));
-        let waited = tokio::time::timeout(deadline, async {
-            loop {
-                match child.try_wait() {
-                    Ok(Some(status)) => return Some(status.exit_code() as i32),
-                    Err(_) => return None,
-                    Ok(None) => {}
+        let deadline_at = Instant::now() + deadline;
+        loop {
+            match child.try_wait_code() {
+                Ok(Some(status)) => return Ok(Some(status)),
+                Err(error) => {
+                    return Err(format!("could not confirm that the server exited: {error}"));
                 }
-
-                // Keep draining while it shuts down; the shutdown log is exactly
-                // what tells an operator the Steam logoff completed. Through
-                // the same ingest as the rest of the run, so the dedup still
-                // applies: the log file carries these lines too, and the final
-                // tailer poll after this returns picks them up with their
-                // logger names intact.
-                match tokio::time::timeout(Duration::from_millis(100), output.recv()).await {
-                    Ok(Some(Output::Bytes(bytes))) => {
-                        for line in assembler.push(&bytes) {
-                            self.ingest(
-                                &line,
-                                Origin::Console,
-                                ready_pattern,
-                                pending,
-                                console_is_the_source,
-                            );
-                        }
-                    }
-                    // The terminal closed. The child is on its way out; one more
-                    // check picks up the status rather than reporting none.
-                    Ok(Some(Output::Eof)) | Ok(None) => {
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                        return child
-                            .try_wait()
-                            .ok()
-                            .flatten()
-                            .map(|s| s.exit_code() as i32);
-                    }
-                    Err(_) => {}
-                }
+                Ok(None) => {}
             }
-        })
-        .await;
 
-        match waited {
-            Ok(status) => status,
-            Err(_) => {
-                let why = format!(
-                    "the server did not exit within {}s of `quit`; killing it, which skips the \
-                     Steam logoff and the convar save",
-                    deadline.as_secs()
-                );
-                tracing::warn!("{why}");
-                let _ = self.events.send(Event::Unparsed {
-                    raw: why,
-                    origin: Origin::Cellar,
-                });
-                let _ = child.kill();
-                None
+            if Instant::now() >= deadline_at {
+                break;
+            }
+
+            // Keep draining while it shuts down; the shutdown log is exactly
+            // what tells an operator the Steam logoff completed. Through
+            // the same ingest as the rest of the run, so the dedup still
+            // applies: the log file carries these lines too, and the final
+            // tailer poll after this returns picks them up with their
+            // logger names intact.
+            match tokio::time::timeout(Duration::from_millis(100), output.recv()).await {
+                Ok(Some(Output::Bytes(bytes))) => {
+                    for line in assembler.push(&bytes) {
+                        self.ingest(
+                            &line,
+                            Origin::Console,
+                            ready_pattern,
+                            pending,
+                            console_is_the_source,
+                        );
+                    }
+                }
+                // A closed terminal is not proof that its child is gone. Keep
+                // polling until it exits or the graceful deadline is reached.
+                Ok(Some(Output::Eof)) | Ok(None) => {
+                    let remaining = deadline_at.saturating_duration_since(Instant::now());
+                    if let Ok(status) = wait_for_exit(child, remaining).await {
+                        return Ok(Some(status));
+                    }
+                    break;
+                }
+                Err(_) => {}
             }
         }
+
+        let why = format!(
+            "the server did not exit within {}s of `quit`; killing it, which skips the \
+             Steam logoff and the convar save",
+            deadline.as_secs()
+        );
+        tracing::warn!("{why}");
+        self.publish(Event::Unparsed {
+            raw: why,
+            origin: Origin::Cellar,
+        });
+        kill_and_confirm(child, KILL_CONFIRM_TIMEOUT)
+            .await
+            .map(Some)
     }
 
     /// Turn one raw line into events.
@@ -943,6 +1120,8 @@ enum Resting {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::io;
     use std::path::PathBuf;
 
     use cellar_core::config::{Launcher, ServerConfig};
@@ -969,6 +1148,105 @@ mod tests {
             supervisor: Default::default(),
             bridge: Default::default(),
         }
+    }
+
+    struct TestChild {
+        command_result: io::Result<()>,
+        exits: VecDeque<io::Result<Option<i32>>>,
+        kill_result: io::Result<()>,
+    }
+
+    impl TerminationChild for TestChild {
+        fn send_command(&self, _: &str) -> io::Result<()> {
+            match &self.command_result {
+                Ok(()) => Ok(()),
+                Err(error) => Err(io::Error::new(error.kind(), error.to_string())),
+            }
+        }
+
+        fn try_wait_code(&mut self) -> io::Result<Option<i32>> {
+            self.exits.pop_front().unwrap_or(Ok(None))
+        }
+
+        fn kill(&mut self) -> io::Result<()> {
+            match &self.kill_result {
+                Ok(()) => Ok(()),
+                Err(error) => Err(io::Error::new(error.kind(), error.to_string())),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn graceful_stop_waits_for_exit_after_the_terminal_closes() {
+        let mut child = TestChild {
+            command_result: Ok(()),
+            exits: VecDeque::from([Ok(None), Ok(None), Ok(Some(0))]),
+            kill_result: Ok(()),
+        };
+        let (mut supervisor, _, _) = Supervisor::new(instance(None));
+        let (output_tx, mut output) = mpsc::channel(1);
+        output_tx.send(Output::Eof).await.unwrap();
+        drop(output_tx);
+        let mut assembler = LineAssembler::new();
+        let mut pending = None;
+
+        let outcome = supervisor
+            .graceful_stop(
+                &mut child,
+                &mut output,
+                &mut assembler,
+                &mut pending,
+                "Lobby created",
+                true,
+            )
+            .await;
+
+        assert_eq!(outcome, Ok(Some(0)));
+    }
+
+    #[tokio::test]
+    async fn a_failed_kill_is_not_reported_as_a_confirmed_exit() {
+        let mut child = TestChild {
+            command_result: Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed")),
+            exits: VecDeque::new(),
+            kill_result: Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied")),
+        };
+        let (mut supervisor, _, _) = Supervisor::new(instance(None));
+        let (_output_tx, mut output) = mpsc::channel(1);
+        let mut assembler = LineAssembler::new();
+        let mut pending = None;
+
+        let error = supervisor
+            .graceful_stop(
+                &mut child,
+                &mut output,
+                &mut assembler,
+                &mut pending,
+                "Lobby created",
+                true,
+            )
+            .await
+            .expect_err("a kill failure leaves the child unconfirmed");
+
+        assert!(error.contains("could not kill"), "{error}");
+    }
+
+    #[test]
+    fn a_late_exit_after_failed_termination_never_restarts() {
+        let mut server = instance(None);
+        server.supervisor.restart = cellar_core::lifecycle::RestartPolicy::Always;
+        let (mut supervisor, _, _) = Supervisor::new(server);
+
+        let outcome = supervisor.outcome_after_exit(
+            Some(1),
+            false,
+            false,
+            false,
+            true,
+            Duration::from_secs(1),
+        );
+
+        assert!(matches!(outcome, RunOutcome::Stopped));
     }
 
     /// The ceiling is known before a player connects, or it is honestly zero.

@@ -28,6 +28,8 @@ pub enum State {
     Unhealthy,
     /// A graceful stop is in flight: `quit` sent, waiting for exit.
     Stopping,
+    /// Stop escalation could not confirm that the managed child exited.
+    StopFailed,
     /// Exited unexpectedly. Waiting out the restart backoff.
     Backoff,
     /// Restarted too often, too fast. Cellar has stopped trying.
@@ -44,7 +46,7 @@ impl State {
     pub fn has_process(self) -> bool {
         matches!(
             self,
-            Self::Starting | Self::Running | Self::Stopping | Self::Unhealthy
+            Self::Starting | Self::Running | Self::Stopping | Self::Unhealthy | Self::StopFailed
         )
     }
 
@@ -55,6 +57,7 @@ impl State {
             Self::Running => "running",
             Self::Unhealthy => "unhealthy",
             Self::Stopping => "stopping",
+            Self::StopFailed => "stop_failed",
             Self::Backoff => "backoff",
             Self::CrashLooping => "crash_looping",
         }
@@ -401,6 +404,7 @@ mod tests {
             State::Starting,
             State::Unhealthy,
             State::Stopping,
+            State::StopFailed,
             State::Backoff,
             State::CrashLooping,
         ] {
@@ -414,5 +418,11 @@ mod tests {
     fn an_unhealthy_server_is_still_a_running_process() {
         assert!(State::Unhealthy.has_process());
         assert!(!State::Unhealthy.is_ready());
+    }
+
+    #[test]
+    fn a_failed_stop_is_still_a_running_process() {
+        assert!(State::StopFailed.has_process());
+        assert!(!State::StopFailed.is_ready());
     }
 }
