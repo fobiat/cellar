@@ -302,7 +302,7 @@ mod contract_tests {
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")
-            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==");
+            .header("Sec-WebSocket-Key", "AAAAAAAAAAAAAAAAAAAAAA==");
         if let Some(origin) = origin {
             request = request.header("Origin", origin);
         }
