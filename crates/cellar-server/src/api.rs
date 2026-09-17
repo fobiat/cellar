@@ -2567,6 +2567,7 @@ mod tests {
     use super::*;
 
     fn switchable_profile(game: &str, map: &str, log_file: &std::path::Path) -> String {
+        let log_file = serde_json::to_string(&log_file.to_string_lossy()).unwrap();
         format!(
             r#"
             [server]
@@ -2574,10 +2575,9 @@ mod tests {
             project = "/srv/game/game.sbproj"
             game = "{game}"
             map = "{map}"
-            log_file = "{}"
+            log_file = {log_file}
             data_dir = "/srv/{game}/data"
-            "#,
-            log_file.display()
+            "#
         )
     }
 
