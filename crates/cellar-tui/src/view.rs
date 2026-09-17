@@ -1,8 +1,5 @@
 //! Drawing the dashboard.
-//!
-//! Layout is fixed rather than configurable: a status bar, two sparklines, the
-//! roster, the log, and the command line. An operations screen earns its keep by
-//! being in the same place every time.
+//! Layout is fixed rather than configurable: a status bar, two sparklines, the roster, the log, and the command line. An operations screen earns its keep by being in the same place every time.
 
 use cellar_runtime::metrics::{format_bytes, format_uptime};
 use ratatui::Frame;
@@ -66,8 +63,7 @@ fn panel(title: &str) -> Block<'_> {
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
-    // The gamemode's own name, not a hardcoded one. This said APPLEJACK to
-    // every gamemode until profiles existed.
+    // The gamemode's own name, not a hardcoded one. This said APPLEJACK to every gamemode until profiles existed.
     let wordmark = app
         .gamemode
         .clone()
@@ -84,9 +80,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         ),
     ];
 
-    // Which server this screen is about, when there is more than one it could
-    // have been. A `quit` typed at the prompt goes here, so this is the most
-    // load-bearing three words on the screen.
+    // Which server this screen is about, when there is more than one it could have been. A `quit` typed at the prompt goes here, so this is the most load-bearing three words on the screen.
     if let Some(instance) = &app.instance {
         spans.push(Span::styled(
             format!("[{instance}] "),
@@ -133,8 +127,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
                     spans.push(Span::styled(format!("· {label} "), style));
                 }
 
-                // A rising count means an engine update moved a log string and the
-                // grammar needs revisiting. Worth a permanent place on the screen.
+                // A rising count means an engine update moved a log string and the grammar needs revisiting. Worth a permanent place on the screen.
                 if snapshot.unparsed_lines > 0 {
                     spans.push(Span::styled(
                         format!("· {} unparsed ", snapshot.unparsed_lines),
@@ -155,10 +148,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-/// A state with no process reads as an absence unless it says how the last run
-/// ended, which is the same argument the web dashboard's `stateLabel` makes.
-/// Exit 0 after a stop and exit 137 after an out-of-memory kill are the same
-/// word otherwise.
+/// A state with no process reads as an absence unless it says how the last run ended, which is the same argument the web dashboard's `stateLabel` makes. Exit 0 after a stop and exit 137 after an out-of-memory kill are the same word otherwise.
 fn state_label(snapshot: &cellar_core::snapshot::Snapshot) -> String {
     let word = snapshot.state.as_str();
     let Some(exit) = snapshot.last_exit else {
@@ -334,8 +324,7 @@ mod tests {
     #[test]
     fn it_draws_before_the_first_snapshot_arrives() {
         let screen = render(&App::new(), 100, 30);
-        // Not APPLEJACK. This screen said one gamemode's name to every gamemode
-        // until profiles existed, and with no profile it is Cellar's own.
+        // Not APPLEJACK. This screen said one gamemode's name to every gamemode until profiles existed, and with no profile it is Cellar's own.
         assert!(screen.contains("CELLAR"));
         assert!(screen.contains("connecting"));
     }
@@ -344,8 +333,7 @@ mod tests {
     fn the_masthead_names_the_gamemode_and_the_server_it_is_about() {
         let mut app = App::new();
         app.gamemode = Some("AppleJack Framework".to_owned());
-        // Set only when there is more than one server it could have followed.
-        // A `quit` typed at the prompt goes to this one.
+        // Set only when there is more than one server it could have followed. A `quit` typed at the prompt goes to this one.
         app.instance = Some("published".to_owned());
 
         let screen = render(&app, 100, 30);
@@ -354,10 +342,7 @@ mod tests {
     }
 
     /// "stopped" on its own is an absence rather than an answer.
-    ///
-    /// The same argument the web dashboard's `stateLabel` makes: exit 0 after a
-    /// stop and exit 137 after an out-of-memory kill are the same word without
-    /// this.
+    /// The same argument the web dashboard's `stateLabel` makes: exit 0 after a stop and exit 137 after an out-of-memory kill are the same word without this.
     #[test]
     fn a_stopped_server_says_how_the_last_run_ended() {
         let mut tracker = cellar_core::snapshot::Tracker::new("test", 32);
@@ -376,8 +361,7 @@ mod tests {
             },
             now,
         );
-        // The supervisor sets the state; the tracker only folds the exit into
-        // `last_exit`, which is the pair this label reads.
+        // The supervisor sets the state; the tracker only folds the exit into `last_exit`, which is the pair this label reads.
         tracker.set_state(cellar_core::State::Stopped);
 
         let mut app = App::new();
@@ -388,8 +372,7 @@ mod tests {
 
     #[test]
     fn a_narrow_terminal_does_not_panic() {
-        // The small-window screen must render without asking ratatui to split
-        // a layout into negative space.
+        // The small-window screen must render without asking ratatui to split a layout into negative space.
         for (width, height) in [(20u16, 10u16), (40, 12), (200, 60), (30, 20)] {
             render(&App::new(), width, height);
         }

@@ -1,13 +1,6 @@
 //! Writing the gamemode's `hosting.json`.
-//!
-//! `HostingConfigStore.Resolve()` reads this from the engine's data directory
-//! and picks the storage provider from it. It refuses a malformed document
-//! loudly rather than falling back to local, deliberately, so that a typo cannot
-//! quietly send a hosted server's writes to disk.
-//!
-//! That is a good reason not to hand-write it. Cellar generates it from its own
-//! config immediately before launching the child, so the bridge URL the gamemode
-//! dials and the address the bridge binds are the same value.
+//! `HostingConfigStore.Resolve()` reads this from the engine's data directory and picks the storage provider from it. It refuses a malformed document loudly rather than falling back to local, deliberately, so that a typo cannot quietly send a hosted server's writes to disk.
+//! That is a good reason not to hand-write it. Cellar generates it from its own config immediately before launching the child, so the bridge URL the gamemode dials and the address the bridge binds are the same value.
 
 use std::path::{Path, PathBuf};
 
@@ -15,9 +8,7 @@ use cellar_core::config::{BridgeConfig, ServerConfig};
 use serde::{Deserialize, Serialize};
 
 /// The document `HostingConfig.cs` deserialises.
-///
-/// Field names are the C# property names as `System.Text.Json` sees them by
-/// default, which is why they are camelCase here and PascalCase there.
+/// Field names are the C# property names as `System.Text.Json` sees them by default, which is why they are camelCase here and PascalCase there.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostingDocument {
     #[serde(rename = "version")]
@@ -28,14 +19,12 @@ pub struct HostingDocument {
     pub bridge_url: String,
     #[serde(rename = "authAudience")]
     pub auth_audience: String,
-    /// `default` pairs with `skip_serializing_if`: without it a document written
-    /// with an empty key has no `apiKey` at all, and reading it back fails.
+    /// `default` pairs with `skip_serializing_if`: without it a document written with an empty key has no `apiKey` at all, and reading it back fails.
     #[serde(rename = "apiKey", default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
 }
 
-/// `HostingRules.CurrentVersion`. A document from a later version is refused by
-/// the gamemode rather than migrated backwards, so this must not run ahead.
+/// `HostingRules.CurrentVersion`. A document from a later version is refused by the gamemode rather than migrated backwards, so this must not run ahead.
 pub const CURRENT_VERSION: i32 = 1;
 
 pub const LOCAL_PROVIDER: &str = "local";
@@ -68,11 +57,7 @@ impl HostingDocument {
     }
 
     /// Refuse a document the gamemode would refuse, before writing it.
-    ///
-    /// `HostingRules.Resolve` falls back to local and marks the choice
-    /// `Refused` for each of these. Falling back is safe but silent, and a
-    /// server that quietly stopped using its database is the failure this
-    /// check exists to make loud.
+    /// `HostingRules.Resolve` falls back to local and marks the choice `Refused` for each of these. Falling back is safe but silent, and a server that quietly stopped using its database is the failure this check exists to make loud.
     pub fn check(&self) -> Result<(), String> {
         if self.provider == LOCAL_PROVIDER {
             return Ok(());
@@ -132,11 +117,7 @@ pub fn document_for(bridge: &BridgeConfig) -> HostingDocument {
 }
 
 /// Where `hosting.json` goes.
-///
-/// The engine's data directory is per package, and Cellar cannot derive it
-/// reliably across Wine and Windows, so `server.data_dir` is the answer when it
-/// is set. Without it, Cellar does not guess: it says so, and the operator
-/// points at the directory that holds `features.json`.
+/// The engine's data directory is per package, and Cellar cannot derive it reliably across Wine and Windows, so `server.data_dir` is the answer when it is set. Without it, Cellar does not guess: it says so, and the operator points at the directory that holds `features.json`.
 pub fn document_path(server: &ServerConfig) -> Option<PathBuf> {
     server.data_dir.as_ref().map(|dir| dir.join(DOCUMENT_PATH))
 }

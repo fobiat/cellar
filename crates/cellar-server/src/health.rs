@@ -1,14 +1,9 @@
 //! Liveness and readiness.
-//!
 //! This exists because the deployment asked for it in a comment:
-//!
 //! > No readiness/liveness probes: this isn't HTTP ... Revisit once there's a
 //! > confirmed way to ask this server "are you actually serving."
 //!
-//! There is now, and it is not a guess at a network protocol. Cellar owns the
-//! process and watches its log, so readiness is "the supervisor saw the
-//! readiness line and the process has not exited since", which is a fact rather
-//! than an inference from a port being open.
+//! There is now, and it is not a guess at a network protocol. Cellar owns the process and watches its log, so readiness is "the supervisor saw the readiness line and the process has not exited since", which is a fact rather than an inference from a port being open.
 
 use std::sync::Arc;
 
@@ -27,15 +22,8 @@ pub fn routes() -> Router<Arc<AppState>> {
 }
 
 /// Liveness: Cellar itself is answering.
-///
-/// Deliberately not a check on the game server. A liveness probe that fails
-/// during a legitimate restart gets the pod killed mid-restart, which is the
-/// classic way to turn a recoverable fault into a crash loop.
-///
-/// The `x-cellar` header is how a second Cellar recognises the first. Without
-/// it, `doctor`'s "another Cellar is already bound" case and the refusal that
-/// stops a database restore while a server is writing were both unreachable:
-/// they sniffed this response for `"cellar"` or `"state"` and the body is `ok`.
+/// Deliberately not a check on the game server. A liveness probe that fails during a legitimate restart gets the pod killed mid-restart, which is the classic way to turn a recoverable fault into a crash loop.
+/// The `x-cellar` header is how a second Cellar recognises the first. Without it, `doctor`'s "another Cellar is already bound" case and the refusal that stops a database restore while a server is writing were both unreachable: they sniffed this response for `"cellar"` or `"state"` and the body is `ok`.
 async fn healthz() -> Response {
     (
         StatusCode::OK,
@@ -46,15 +34,8 @@ async fn healthz() -> Response {
 }
 
 /// Readiness: every instance that speaks for this process is serving.
-///
-/// Returns 503 while starting, backing off or crash-looping, which is what stops
-/// a rollout from sending players at a server that has not loaded its map.
-///
-/// **Every `required` instance, never any of them.** A development instance
-/// that cannot start on a host with no editor must not fail readiness for a
-/// healthy production server, and equally a production server that is down must
-/// not be papered over by a development one that is up. `required = false` is
-/// how an instance opts out of speaking here at all.
+/// Returns 503 while starting, backing off or crash-looping, which is what stops a rollout from sending players at a server that has not loaded its map.
+/// **Every `required` instance, never any of them.** A development instance that cannot start on a host with no editor must not fail readiness for a healthy production server, and equally a production server that is down must not be papered over by a development one that is up. `required = false` is how an instance opts out of speaking here at all.
 async fn readyz(State(state): State<Arc<AppState>>) -> Response {
     let required: Vec<_> = state
         .instances
@@ -63,8 +44,7 @@ async fn readyz(State(state): State<Arc<AppState>>) -> Response {
         .collect();
 
     if required.is_empty() {
-        // A bridge-only process has no game server to speak for. It is ready
-        // when its database is, because that is all it does.
+        // A bridge-only process has no game server to speak for. It is ready when its database is, because that is all it does.
         return match &state.pool {
             Some(pool) => match cellar_store::ping(pool).await {
                 Ok(()) => (StatusCode::OK, "bridge ready").into_response(),

@@ -1,9 +1,5 @@
 //! The terminal dashboard.
-//!
-//! htop for a dedicated server: load, roster, live log, and a command line that
-//! types straight into the game's console. It reads the same snapshot and the
-//! same event stream the web UI does, so the two cannot disagree about what the
-//! server is doing.
+//! htop for a dedicated server: load, roster, live log, and a command line that types straight into the game's console. It reads the same snapshot and the same event stream the web UI does, so the two cannot disagree about what the server is doing.
 
 pub mod theme;
 pub mod view;
@@ -38,8 +34,7 @@ pub struct Row {
     pub who: String,
     pub message: String,
     pub level: Level,
-    /// Set for a line Cellar itself produced, so an operator can tell the
-    /// supervisor's voice from the engine's.
+    /// Set for a line Cellar itself produced, so an operator can tell the supervisor's voice from the engine's.
     pub local: bool,
 }
 
@@ -48,15 +43,9 @@ pub struct App {
     pub snapshot: Option<Snapshot>,
     pub connected: bool,
     /// What this screen is about, when it is not the only thing running.
-    ///
-    /// The TUI follows the primary instance and always has. On a one-server
-    /// deployment that is the whole truth and naming it would be noise; on a
-    /// two-server one it silently showed one of them with nothing on screen
-    /// saying which, so a `quit` typed here went somewhere the operator had not
-    /// chosen.
+    /// The TUI follows the primary instance and always has. On a one-server deployment that is the whole truth and naming it would be noise; on a two-server one it silently showed one of them with nothing on screen saying which, so a `quit` typed here went somewhere the operator had not chosen.
     pub instance: Option<String>,
-    /// The gamemode's own name, when its profile gives one. The masthead said
-    /// APPLEJACK to every gamemode before profiles existed.
+    /// The gamemode's own name, when its profile gives one. The masthead said APPLEJACK to every gamemode before profiles existed.
     pub gamemode: Option<String>,
     pub rows: VecDeque<Row>,
     pub cpu: VecDeque<u64>,
@@ -180,8 +169,7 @@ impl App {
         }
         self.rows.push_back(row);
 
-        // Scrolled back to read something? Stay there, and keep the offset
-        // pointing at the same line as new ones arrive.
+        // Scrolled back to read something? Stay there, and keep the offset pointing at the same line as new ones arrive.
         if !self.follow {
             self.scroll = self.scroll.saturating_add(1);
         }
@@ -268,77 +256,61 @@ fn now() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
 }
 
+struct TerminalMode;
+
+impl TerminalMode {
+    fn enter() -> io::Result<Self> {
+        enable_raw_mode()?;
+        if let Err(error) = crossterm::execute!(io::stdout(), EnterAlternateScreen) {
+            let _ = disable_raw_mode();
+            return Err(error);
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for TerminalMode {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = crossterm::execute!(io::stdout(), LeaveAlternateScreen);
+    }
+}
+
 /// Run the dashboard until the operator quits.
-///
-/// The terminal is restored on every exit path, including a panic: a manager
-/// that leaves the terminal in raw mode after a crash makes the next command
-/// unreadable, which is the moment somebody most needs to type one.
-/// Drive the terminal dashboard for one supervised server.
-///
-/// `instance` is `None` for a deployment with one server, where naming it would
-/// be noise, and `Some(id)` when there are several and the screen has to say
-/// which one it is about.
+/// The terminal is restored on every exit path, including a panic: a manager that leaves the terminal in raw mode after a crash makes the next command unreadable, which is the moment somebody most needs to type one. Drive the terminal dashboard for one supervised server.
+/// `instance` is `None` for a deployment with one server, where naming it would be noise, and `Some(id)` when there are several and the screen has to say which one it is about.
 pub async fn run(
     handle: Handle,
     instance: Option<String>,
     gamemode: Option<String>,
 ) -> io::Result<()> {
-    enable_raw_mode()?;
-    let mut out = io::stdout();
-    crossterm::execute!(out, EnterAlternateScreen)?;
+    let _terminal_mode = TerminalMode::enter()?;
 
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = disable_raw_mode();
-        let _ = crossterm::execute!(io::stdout(), LeaveAlternateScreen);
-        previous(info);
-    }));
-
-    let result = drive(
+    drive(
         &handle,
         instance,
         gamemode,
         Terminal::new(CrosstermBackend::new(io::stdout()))?,
     )
-    .await;
-
-    disable_raw_mode()?;
-    crossterm::execute!(io::stdout(), LeaveAlternateScreen)?;
-    result
+    .await
 }
 
 /// Drive the dashboard against a running Cellar over its authenticated web API.
-///
-/// This is the path used by the tray launchers. It keeps the tray process small
-/// and lets an operator open a second dashboard without starting a second
-/// supervisor.
+/// This is the path used by the tray launchers. It keeps the tray process small and lets an operator open a second dashboard without starting a second supervisor.
 pub async fn run_remote(
     base_url: &str,
     session: Option<&str>,
     instance: Option<String>,
 ) -> io::Result<()> {
-    enable_raw_mode()?;
-    let mut out = io::stdout();
-    crossterm::execute!(out, EnterAlternateScreen)?;
+    let _terminal_mode = TerminalMode::enter()?;
 
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = disable_raw_mode();
-        let _ = crossterm::execute!(io::stdout(), LeaveAlternateScreen);
-        previous(info);
-    }));
-
-    let result = remote_drive(
+    remote_drive(
         base_url.trim_end_matches('/'),
         session,
         instance,
         Terminal::new(CrosstermBackend::new(io::stdout()))?,
     )
-    .await;
-
-    disable_raw_mode()?;
-    crossterm::execute!(io::stdout(), LeaveAlternateScreen)?;
-    result
+    .await
 }
 
 #[derive(Deserialize)]
@@ -395,14 +367,19 @@ async fn remote_drive<B: ratatui::backend::Backend>(
         ));
     };
     let ws_url = format!("{ws_base}/api/events{query}");
-    // `connect_async` validates a supplied request rather than filling in the
-    // handshake. Build it through tungstenite so the mandatory key is present.
+    // `connect_async` validates a supplied request rather than filling in the handshake. Build it through tungstenite so the mandatory key is present.
     let mut request = ws_url
         .into_client_request()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     request.headers_mut().insert(
         "User-Agent",
         "cellar-tui"
+            .parse()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
+    );
+    request.headers_mut().insert(
+        "Origin",
+        base_url
             .parse()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
     );
@@ -431,7 +408,9 @@ async fn remote_drive<B: ratatui::backend::Backend>(
 
     let mut ticker = tokio::time::interval(Duration::from_millis(200));
     loop {
-        terminal.draw(|frame| view::draw(frame, &app))?;
+        terminal
+            .draw(|frame| view::draw(frame, &app))
+            .map_err(|error| io::Error::other(error.to_string()))?;
         tokio::select! {
             message = socket.next() => match message {
                 Some(Ok(Message::Text(text))) => {
@@ -459,7 +438,7 @@ async fn remote_drive<B: ratatui::backend::Backend>(
                             match response.json::<serde_json::Value>().await {
                             Ok(body) if success => {
                                 if let Some(reply) = body.get("reply").and_then(serde_json::Value::as_array) {
-                                    app.apply(&Event::CommandReplied { command: command.clone(), reply: reply.iter().filter_map(|line| line.as_str().map(str::to_owned)).collect(), ok: true });
+                                    app.apply(&Event::CommandReplied { command: command.clone(), actor: "tui".to_owned(), reply: reply.iter().filter_map(|line| line.as_str().map(str::to_owned)).collect(), ok: true });
                                 }
                             }
                             Ok(body) => app.apply(&Event::Unparsed { raw: body.to_string(), origin: cellar_core::Origin::Console }),
@@ -485,7 +464,9 @@ async fn drive_offline<B: ratatui::backend::Backend>(
 ) -> io::Result<()> {
     let mut ticker = tokio::time::interval(Duration::from_millis(200));
     loop {
-        terminal.draw(|frame| view::draw(frame, &app))?;
+        terminal
+            .draw(|frame| view::draw(frame, &app))
+            .map_err(|error| io::Error::other(error.to_string()))?;
         ticker.tick().await;
         if let Some(command) = poll_terminal(&mut app)? {
             app.apply(&Event::Unparsed {
@@ -526,7 +507,9 @@ async fn drive<B: ratatui::backend::Backend>(
     app.snapshot = handle.snapshot().await;
 
     loop {
-        terminal.draw(|frame| view::draw(frame, &app))?;
+        terminal
+            .draw(|frame| view::draw(frame, &app))
+            .map_err(|error| io::Error::other(error.to_string()))?;
 
         tokio::select! {
             received = events.recv(), if app.connected => match received {
@@ -538,10 +521,7 @@ async fn drive<B: ratatui::backend::Backend>(
             _ = ticker.tick() => {
                 app.snapshot = handle.snapshot().await;
 
-                // Terminal input is polled rather than awaited: crossterm's
-                // blocking read would hold this task and stop the event stream
-                // draining, which shows up as a dashboard that only updates when
-                // a key is pressed.
+                // Terminal input is polled rather than awaited: crossterm's blocking read would hold this task and stop the event stream draining, which shows up as a dashboard that only updates when a key is pressed.
                 while term::poll(Duration::from_millis(0))? {
                     if let TermEvent::Key(key) = term::read()?
                         && key.kind == KeyEventKind::Press
@@ -637,8 +617,7 @@ mod tests {
         assert!(app.should_quit);
     }
 
-    /// A `q` typed into the command line must be a `q`, not a quit. This is the
-    /// bug that makes a console unusable.
+    /// A `q` typed into the command line must be a `q`, not a quit. This is the bug that makes a console unusable.
     #[test]
     fn typing_q_types_a_q() {
         let mut app = App::new();

@@ -1,16 +1,6 @@
 //! Cellar's operator palette, in one place.
-//!
-//! AppleJack Framework generates its colours from `Branding/palette.py` into
-//! `Branding/tokens/applejack-tokens.json`, and its `BRANDING.md` is explicit
-//! that a committed copy is a copy that goes stale. Cellar therefore states the
-//! tokens once, here, with the role each one carries, and the web UI and the
-//! TUI both derive from this rather than retyping hex. The colours follow the
-//! AppleJack Framework visual language, while the mark and wordmark belong to
-//! Cellar.
-//!
-//! `cellar theme sync <path-to-applejack-tokens.json>` regenerates this file's
-//! constants, so a palette change upstream is one command rather than a hunt.
-//!
+//! AppleJack Framework generates its colours from `Branding/palette.py` into `Branding/tokens/applejack-tokens.json`, and its `BRANDING.md` is explicit that a committed copy is a copy that goes stale. Cellar therefore states the tokens once, here, with the role each one carries, and the web UI and the TUI both derive from this rather than retyping hex. The colours follow the AppleJack Framework visual language, while the mark and wordmark belong to Cellar.
+//! `cellar theme sync <path-to-applejack-tokens.json>` regenerates this file's constants, so a palette change upstream is one command rather than a hunt.
 //! Cellar is blue, by standing rule. Azure against Frost.
 
 use serde::{Deserialize, Serialize};
@@ -77,19 +67,11 @@ token!(
     "#47713C",
     "Lawful, safe, success"
 );
-// The light theme was dead for exactly one reason: `ink` carried the dark value
-// in both themes, so the page painted `#201F1D` body text on a `#0E0F11` ground
-// at 1.15:1. It is a light ground now, and depth runs the other way in the light
-// theme: the page is the tinted one and cards are white, which is the ordinary
-// shape and the one that keeps every token above 4.5:1.
+// The light theme was dead for exactly one reason: `ink` carried the dark value in both themes, so the page painted `#201F1D` body text on a `#0E0F11` ground at 1.15:1. It is a light ground now, and depth runs the other way in the light theme: the page is the tinted one and cards are white, which is the ordinary shape and the one that keeps every token above 4.5:1.
 token!(INK, "ink", "#0E0F11", "#F4F3F1", "Deepest ground");
 token!(SHELL, "shell", "#191B1E", "#FAF9F8", "Panel background");
 
-// The scrim behind a modal, and the colour a shadow is mixed from. Split out of
-// `ink` when `ink` stopped being dark in both themes: a backdrop that lightens
-// the page it covers is not a backdrop, so this stays dark either way. Not the
-// same value twice, because a full-strength black veil over a light page reads
-// as a rendering fault rather than as depth.
+// The scrim behind a modal, and the colour a shadow is mixed from. Split out of `ink` when `ink` stopped being dark in both themes: a backdrop that lightens the page it covers is not a backdrop, so this stays dark either way. Not the same value twice, because a full-strength black veil over a light page reads as a rendering fault rather than as depth.
 token!(
     SHADOW,
     "shadow",
@@ -110,8 +92,7 @@ token!(
     LOG_TRACE,
     "log-trace",
     "#7C8496",
-    // Darkened from #697386, which was 4.31:1 on the light console ground and
-    // the only log token that missed AA there.
+    // Darkened from #697386, which was 4.31:1 on the light console ground and the only log token that missed AA there.
     "#5C6579",
     "Trace and low-signal output"
 );
@@ -218,9 +199,7 @@ pub const TAGLINE: &str = "s&box server control";
 /// Parse `#RRGGBB` into components, for the TUI which needs numbers.
 pub const fn rgb(hex: &str) -> (u8, u8, u8) {
     let bytes = hex.as_bytes();
-    // A const fn cannot return a Result, and every literal above is checked by
-    // the test below, so an unparseable value is a compile-time-visible bug
-    // rather than a runtime branch.
+    // A const fn cannot return a Result, and every literal above is checked by the test below, so an unparseable value is a compile-time-visible bug rather than a runtime branch.
     let (r, g, b) = (
         hex_pair(bytes[1], bytes[2]),
         hex_pair(bytes[3], bytes[4]),
@@ -243,10 +222,7 @@ const fn hex_digit(byte: u8) -> u8 {
 }
 
 /// Emit the palette as CSS custom properties for the web UI.
-///
-/// Both themes are written: bare `:root` carries light, and dark is redefined
-/// under `prefers-color-scheme` and an explicit `[data-theme]`, so a colour
-/// never has its only definition inside a media query.
+/// Both themes are written: bare `:root` carries light, and dark is redefined under `prefers-color-scheme` and an explicit `[data-theme]`, so a colour never has its only definition inside a media query.
 pub fn css_variables() -> String {
     let mut out = String::from(":root{\n");
     for token in TOKENS {
@@ -323,20 +299,14 @@ mod tests {
         (high + 0.05) / (low + 0.05)
     }
 
-    /// Every ground either theme draws words on. `style.css:14` is `INK`,
-    /// panels and headers are `SHELL`, cards are `RAISED`.
+    /// Every ground either theme draws words on. `style.css:14` is `INK`, panels and headers are `SHELL`, cards are `RAISED`.
     const GROUNDS: &[Token] = &[INK, SHELL, RAISED];
 
     /// Both halves of every token, so the light theme is held to the same bar.
-    ///
-    /// It was not, and that is how it stayed broken: `ink` carried the dark
-    /// value in both themes and no test looked at the light one, so the light
-    /// theme rendered body text at 1.15:1 and shipped that way for months.
+    /// It was not, and that is how it stayed broken: `ink` carried the dark value in both themes and no test looked at the light one, so the light theme rendered body text at 1.15:1 and shipped that way for months.
     #[test]
     fn body_text_tokens_meet_wcag_aa_on_every_ground_in_both_themes() {
-        // RUSSET and AZURE_HOVER are absent deliberately: they are borders and
-        // fills, where WCAG asks 3:1. RUSSET_TEXT exists so destructive wording
-        // has a value that clears 4.5:1 on a card as well as on the shell.
+        // RUSSET and AZURE_HOVER are absent deliberately: they are borders and fills, where WCAG asks 3:1. RUSSET_TEXT exists so destructive wording has a value that clears 4.5:1 on a card as well as on the shell.
         for token in [TEXT, TEXT_MUTED, RUSSET_TEXT, AZURE, FROST, ORCHARD] {
             for ground in GROUNDS {
                 for (theme, ink, on) in [
@@ -357,11 +327,7 @@ mod tests {
 
     #[test]
     fn log_category_tokens_are_legible_in_the_console_in_both_themes() {
-        // The console is the only place these are drawn, and it is INK. Its
-        // colour key shares that ground for the same reason: it was on the
-        // card's `raised` ground, where trace and error fell to 4.2:1, and a
-        // key drawn on a different ground from the thing it keys is wrong
-        // anyway. At 12.5px they are normal-size text, so 4.5:1.
+        // The console is the only place these are drawn, and it is INK. Its colour key shares that ground for the same reason: it was on the card's `raised` ground, where trace and error fell to 4.2:1, and a key drawn on a different ground from the thing it keys is wrong anyway. At 12.5px they are normal-size text, so 4.5:1.
         for token in TOKENS.iter().filter(|t| t.name.starts_with("log-")) {
             for (theme, ink, ground) in [
                 ("dark", token.dark, INK.dark),

@@ -1,5 +1,7 @@
 [advisories]
 version = 2
+yanked = "deny"
+unsound = "all"
 ignore = [
   # No patched release exists. SQLx brings RSA in for MySQL authentication;
   # Cellar does not expose RSA operations to remote callers.

@@ -1,10 +1,5 @@
 //! Every preflight check Cellar knows how to run, in one place.
-//!
-//! These used to live inside `cellar doctor` and print as they went, which made
-//! them unreachable from anything but the CLI. `cellar-server` cannot depend on
-//! `cellar-cli`, and a second copy of a check is a second copy that drifts, so
-//! they moved here instead: the crate sits above `cellar-runtime` and
-//! `cellar-store` because the checks genuinely span both.
+//! These used to live inside `cellar doctor` and print as they went, which made them unreachable from anything but the CLI. `cellar-server` cannot depend on `cellar-cli`, and a second copy of a check is a second copy that drifts, so they moved here instead: the crate sits above `cellar-runtime` and `cellar-store` because the checks genuinely span both.
 
 use std::path::PathBuf;
 
@@ -12,10 +7,7 @@ use cellar_core::config::{Config, Instance};
 use serde::Serialize;
 
 /// What a check decided.
-///
-/// `Note` is not a third severity, it is the absence of a verdict: a fact worth
-/// printing that Cellar cannot judge, such as a port being in use when the
-/// server this profile describes is probably the thing using it.
+/// `Note` is not a third severity, it is the absence of a verdict: a fact worth printing that Cellar cannot judge, such as a port being in use when the server this profile describes is probably the thing using it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Outcome {
@@ -74,11 +66,7 @@ impl Report {
 }
 
 /// Run everything, in the order a human wants to read it.
-///
-/// `owned_binds` are addresses the caller already holds. The dashboard runs
-/// these same checks from inside a Cellar that is by definition bound to its
-/// own web address, and reporting that as a conflict would make the screen
-/// permanently red about the process rendering it.
+/// `owned_binds` are addresses the caller already holds. The dashboard runs these same checks from inside a Cellar that is by definition bound to its own web address, and reporting that as a conflict would make the screen permanently red about the process rendering it.
 pub async fn run(config: &Config, owned_binds: &[String]) -> Report {
     let mut report = Report::default();
 
@@ -150,13 +138,7 @@ async fn database(config: &Config, report: &mut Report) {
 }
 
 /// Whether anything Cellar writes down has somewhere to go.
-///
-/// A game-owned schema is the default, and Cellar never creates tables in one.
-/// If the gamemode's migrations do not include Cellar's, every join, event and
-/// console command is written, refused and logged as a warning, once per line,
-/// forever. Nothing else says so: the Activity screen and the player history
-/// are simply empty, which is indistinguishable from a quiet server. Measured
-/// on a scratch database that had every other check green.
+/// A game-owned schema is the default, and Cellar never creates tables in one. If the gamemode's migrations do not include Cellar's, every join, event and console command is written, refused and logged as a warning, once per line, forever. Nothing else says so: the Activity screen and the player history are simply empty, which is indistinguishable from a quiet server. Measured on a scratch database that had every other check green.
 async fn recording_tables(config: &Config, pool: &sqlx::MySqlPool, report: &mut Report) {
     let missing = cellar_store::ops::missing_tables(pool).await;
     match missing {
@@ -188,19 +170,13 @@ async fn recording_tables(config: &Config, pool: &sqlx::MySqlPool, report: &mut 
 }
 
 /// Whether a configured backup could actually be taken and put back.
-///
-/// Every part of this is a way for the answer to "we have backups" to be no
-/// while the config says yes: no database to dump, a client binary that is not
-/// installed, a directory that cannot be written, and a newest dump that does
-/// not read back.
+/// Every part of this is a way for the answer to "we have backups" to be no while the config says yes: no database to dump, a client binary that is not installed, a directory that cannot be written, and a newest dump that does not read back.
 fn backups(config: &Config, report: &mut Report) {
     if !config.backup.enabled {
         return;
     }
 
-    // No check for a missing database URL: `validate` refuses that config at
-    // parse time (config.rs, "backup.enabled needs database.enabled and a
-    // database URL"), so a check for it here could never fire.
+    // No check for a missing database URL: `validate` refuses that config at parse time (config.rs, "backup.enabled needs database.enabled and a database URL"), so a check for it here could never fire.
 
     for binary in ["mariadb-dump", "mariadb"] {
         let filename = if cfg!(windows) {
@@ -324,9 +300,7 @@ fn ports(instances: &[Instance], report: &mut Report) {
             ("server.query_port", instance.server.query_port),
         ] {
             if let Err(why) = std::net::UdpSocket::bind(("0.0.0.0", port)) {
-                // A note, not a failure. The overwhelmingly common cause is the
-                // server this profile describes already running, and nothing
-                // here can tell that apart from a genuine conflict.
+                // A note, not a failure. The overwhelmingly common cause is the server this profile describes already running, and nothing here can tell that apart from a genuine conflict.
                 report.note(
                     Some(instance.id.as_str()),
                     label,
@@ -348,8 +322,7 @@ fn ports(instances: &[Instance], report: &mut Report) {
 }
 
 fn disks(config: &Config, instances: &[Instance], report: &mut Report) {
-    // Deduped by mount point, since instances sharing an install tree would
-    // otherwise report the same filesystem several times.
+    // Deduped by mount point, since instances sharing an install tree would otherwise report the same filesystem several times.
     let mut disks: Vec<(Option<String>, String, PathBuf)> = Vec::new();
     for instance in instances.iter().filter(|instance| instance.enabled) {
         disks.push((
@@ -378,9 +351,7 @@ fn disks(config: &Config, instances: &[Instance], report: &mut Report) {
             continue;
         }
         seen_mounts.push(mount.clone());
-        // The dedicated server install alone is 4.9GB and a game update writes
-        // before it deletes, so a couple of gigabytes is the point at which the
-        // next update fails halfway rather than refusing.
+        // The dedicated server install alone is 4.9GB and a game update writes before it deletes, so a couple of gigabytes is the point at which the next update fails halfway rather than refusing.
         const FLOOR: u64 = 2 * 1024 * 1024 * 1024;
         report.check(
             instance.as_deref(),
@@ -401,12 +372,7 @@ fn disks(config: &Config, instances: &[Instance], report: &mut Report) {
 }
 
 /// Whether the configured map is one this gamemode has.
-///
-/// A map is a package ident, `org.name`, and it is the optional second
-/// positional argument to `+game`; there is no `+map` switch. Shape alone was
-/// all this could check, and a well-shaped ident for a map that does not exist
-/// is a server that starts, fails to resolve the package and never becomes
-/// ready, which is indistinguishable from a slow start.
+/// A map is a package ident, `org.name`, and it is the optional second positional argument to `+game`; there is no `+map` switch. Shape alone was all this could check, and a well-shaped ident for a map that does not exist is a server that starts, fails to resolve the package and never becomes ready, which is indistinguishable from a slow start.
 fn map(instance: &Instance, report: &mut Report) {
     let id = Some(instance.id.as_str());
     let Some(map) = instance.server.map.as_deref() else {
@@ -427,9 +393,7 @@ fn map(instance: &Instance, report: &mut Report) {
         return;
     }
 
-    // The profile is the narrower statement and wins. Falling back to the
-    // project's own list means a local development instance gets the check for
-    // free, without anybody writing a profile at all.
+    // The profile is the narrower statement and wins. Falling back to the project's own list means a local development instance gets the check for free, without anybody writing a profile at all.
     let declared: Vec<String> = if !instance.profile.maps.is_empty() {
         instance.profile.maps.clone()
     } else {
@@ -441,9 +405,7 @@ fn map(instance: &Instance, report: &mut Report) {
     };
 
     if declared.is_empty() {
-        // Nothing said which maps exist, so nothing can be concluded. A note
-        // rather than a pass, because "ok" would claim a check that did not
-        // happen.
+        // Nothing said which maps exist, so nothing can be concluded. A note rather than a pass, because "ok" would claim a check that did not happen.
         report.note(
             id,
             "server.map",
@@ -467,10 +429,7 @@ fn map(instance: &Instance, report: &mut Report) {
 }
 
 /// What the `.sbproj` says, for an instance that has one.
-///
-/// The player ceiling in particular: `+maxplayers` is not a convar and not a
-/// launch switch, the old `entrypoint.sh` passed it for years and it was inert,
-/// and `Metadata.MaxPlayers` is the only place the real number exists.
+/// The player ceiling in particular: `+maxplayers` is not a convar and not a launch switch, the old `entrypoint.sh` passed it for years and it was inert, and `Metadata.MaxPlayers` is the only place the real number exists.
 fn project(instance: &Instance, report: &mut Report) {
     let id = Some(instance.id.as_str());
     let path = &instance.server.project;
@@ -494,23 +453,15 @@ fn project(instance: &Instance, report: &mut Report) {
             report.note(id, "server.project metadata", said.join(", "));
         }
         Ok(None) => {}
-        // Malformed rather than absent. Worth failing: the engine reads this
-        // file too, and it will not start on one it cannot parse.
+        // Malformed rather than absent. Worth failing: the engine reads this file too, and it will not start on one it cannot parse.
         Err(why) => report.check(id, false, "server.project metadata", why),
     }
 }
 
 /// Assertions the gamemode's own profile asked for.
-///
-/// This used to be one hardcoded check that grepped AppleJack Framework's
-/// `Code/Characters/CharacterDirector.cs` for two identifiers. It is now
-/// whatever `[[profile.check]]` declares, so a gamemode Cellar has never heard
-/// of gets the same treatment, and AppleJack Framework's check lives in AppleJack Framework's
-/// profile where somebody who changes that file will find it.
+/// This used to be one hardcoded check that grepped AppleJack Framework's `Code/Characters/CharacterDirector.cs` for two identifiers. It is now whatever `[[profile.check]]` declares, so a gamemode Cellar has never heard of gets the same treatment, and AppleJack Framework's check lives in AppleJack Framework's profile where somebody who changes that file will find it.
 fn check_profile(instance: &Instance, report: &mut Report) {
-    // Relative to the project directory, which is where the check it replaced
-    // looked. A published-package instance has no source tree to assert about,
-    // so its checks are skipped rather than failed.
+    // Relative to the project directory, which is where the check it replaced looked. A published-package instance has no source tree to assert about, so its checks are skipped rather than failed.
     let Some(root) = instance.server.project.parent() else {
         return;
     };
@@ -578,10 +529,7 @@ fn check_one_server(instance: &Instance, report: &mut Report) {
             format!("{}", project.display()),
         );
 
-        // StartGame enumerates this and throws DirectoryNotFoundException when
-        // it is absent, so the server exits to a bare console with no gamemode
-        // loaded and on_failure retries it into the same wall. Git does not
-        // keep empty directories, which is how a checkout loses it.
+        // StartGame enumerates this and throws DirectoryNotFoundException when it is absent, so the server exits to a bare console with no gamemode loaded and on_failure retries it into the same wall. Git does not keep empty directories, which is how a checkout loses it.
         if let Some(libraries) = project.parent().map(|dir| dir.join("Libraries")) {
             let present = libraries.is_dir();
             report.check(
@@ -627,10 +575,7 @@ fn check_one_server(instance: &Instance, report: &mut Report) {
         );
 
         if let Some(prefix) = &server.wine_prefix {
-            // A prefix is not just a directory: the server needs the Windows
-            // .NET 10 runtime inside it, and wine happily creates an empty one
-            // on first use, so a missing runtime looks like a working prefix
-            // right up until the server refuses to start.
+            // A prefix is not just a directory: the server needs the Windows .NET 10 runtime inside it, and wine happily creates an empty one on first use, so a missing runtime looks like a working prefix right up until the server refuses to start.
             let runtime = prefix.join("drive_c/Program Files/dotnet/dotnet.exe");
             report.check(
                 id,
@@ -677,9 +622,7 @@ pub async fn address_is_free(bind: &str) -> Free {
         return Free::Yes;
     };
 
-    // Asking rather than assuming. "Address in use" says nothing about who, and
-    // another Cellar is the case with real consequences: two backup loops
-    // pruning each other, two MariaDB instances on one data directory.
+    // Asking rather than assuming. "Address in use" says nothing about who, and another Cellar is the case with real consequences: two backup loops pruning each other, two MariaDB instances on one data directory.
     let probe = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build();
@@ -694,9 +637,7 @@ pub async fn address_is_free(bind: &str) -> Free {
 }
 
 /// Whether the Steam install is the dedicated server rather than the client.
-///
-/// `read_installed_build` looks for `appmanifest_1892930.acf`, so an install of
-/// 590830 makes version reporting silently impossible.
+/// `read_installed_build` looks for `appmanifest_1892930.acf`, so an install of 590830 makes version reporting silently impossible.
 fn steam_app(config: &Config, report: &mut Report) {
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Some(dir) = &config.update.steam_dir {
@@ -717,8 +658,7 @@ fn steam_app(config: &Config, report: &mut Report) {
     apps.dedup_by(|a, b| a.app_id == b.app_id);
 
     if apps.is_empty() {
-        // A container image or a hand-copied tree has no manifest and still
-        // runs, so this is not a failure.
+        // A container image or a hand-copied tree has no manifest and still runs, so this is not a failure.
         report.note(
             None,
             "steam app",
@@ -773,12 +713,7 @@ mod tests {
     use super::*;
 
     /// A backup that cannot be restored is not a backup.
-    ///
-    /// The newest dump is the one a restore reaches for, so it is the one
-    /// worth reading back. Driven for real, the failure this catches is a
-    /// dump that stops partway: a plausible file, a plausible size, and no
-    /// end marker, which used to be refused when written and accepted when
-    /// restored.
+    /// The newest dump is the one a restore reaches for, so it is the one worth reading back. Driven for real, the failure this catches is a dump that stops partway: a plausible file, a plausible size, and no end marker, which used to be refused when written and accepted when restored.
     #[tokio::test]
     async fn the_newest_dump_is_read_back_and_a_truncated_one_fails() {
         let directory = tempfile::tempdir().expect("a scratch directory");
@@ -839,9 +774,7 @@ mod tests {
     }
 
     /// A well-shaped ident for a map that does not exist is the failure here.
-    ///
-    /// It starts, fails to resolve the package and never becomes ready, which
-    /// is indistinguishable from a slow start. Shape alone could not catch it.
+    /// It starts, fails to resolve the package and never becomes ready, which is indistinguishable from a slow start. Shape alone could not catch it.
     #[tokio::test]
     async fn a_map_the_gamemode_does_not_have_is_refused_by_name() {
         let config: Config = toml::from_str(
@@ -873,8 +806,7 @@ mod tests {
             .expect("the map is checked");
 
         assert_eq!(map.outcome, Outcome::Fail);
-        // Naming what does exist is the whole value: "invalid map" tells an
-        // operator nothing they can act on.
+        // Naming what does exist is the whole value: "invalid map" tells an operator nothing they can act on.
         assert!(
             map.detail.contains("facepunch.flatgrass"),
             "the refusal must list the maps that exist: {}",
@@ -908,8 +840,7 @@ mod tests {
             .find(|check| check.label == "server.map")
             .expect("the map is still mentioned");
 
-        // A note, never an ok. "ok" would claim a check that did not happen,
-        // and a gamemode that has not declared its maps is the common case.
+        // A note, never an ok. "ok" would claim a check that did not happen, and a gamemode that has not declared its maps is the common case.
         assert_eq!(map.outcome, Outcome::Note);
     }
 

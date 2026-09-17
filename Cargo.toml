@@ -51,7 +51,11 @@ tokio-tungstenite = { version = "0.30", features = ["connect", "rustls-tls-nativ
 futures-util = "0.3"
 portable-pty = { package = "xpty", version = "0.3.6" }
 sysinfo = "0.32"
-ratatui = "0.29"
+ratatui = { version = "0.30.2", default-features = false, features = [
+  "crossterm_0_28",
+  "layout-cache",
+  "underline-color",
+] }
 crossterm = "0.28"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 argon2 = "0.5"

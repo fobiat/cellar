@@ -1,11 +1,7 @@
 //! The loop that owns the server process.
-//!
-//! One task owns the child, the terminal, the log tailer, the sampler and the
-//! restart policy, and publishes an event stream. Everything else in Cellar (the
-//! CLI, the TUI, the web UI, the webhooks) is a consumer of that stream and a
-//! sender on the control channel, which is what keeps three interfaces from
-//! disagreeing about what the server is doing.
+//! One task owns the child, the terminal, the log tailer, the sampler and the restart policy, and publishes an event stream. Everything else in Cellar (the CLI, the TUI, the web UI, the webhooks) is a consumer of that stream and a sender on the control channel, which is what keeps three interfaces from disagreeing about what the server is doing.
 
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use cellar_core::ansi::LineAssembler;
@@ -23,21 +19,16 @@ use crate::process::{self, Child, Output};
 use crate::{hosting, launch};
 
 /// Backstop for a command whose reply is never bracketed.
-///
-/// The console brackets a reply exactly (see [`PendingReply`]), so this fires
-/// only when the child has no usable terminal and the markers never arrive. It
-/// is longer than the old blind window because it is no longer the mechanism,
-/// just the way a degraded console still answers instead of hanging.
+/// The console brackets a reply exactly (see [`PendingReply`]), so this fires only when the child has no usable terminal and the markers never arrive. It is longer than the old blind window because it is no longer the mechanism, just the way a degraded console still answers instead of hanging.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// How long the console is held before it is allowed to be the event source.
-///
-/// Long enough for the log-file tailer, which polls, to get a turn. See the
-/// reasoning where it is used in `run_once`.
+/// Long enough for the log-file tailer, which polls, to get a turn. See the reasoning where it is used in `run_once`.
 const CONSOLE_GRACE: Duration = Duration::from_secs(2);
 
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const KILL_CONFIRM_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_QUEUED_COMMANDS: usize = 63;
 
 trait TerminationChild {
     fn send_command(&self, command: &str) -> std::io::Result<()>;
@@ -105,43 +96,48 @@ async fn kill_and_confirm(
 }
 
 /// A command awaiting its reply.
-///
-/// The engine brackets console output precisely, which is worth stating because
-/// the obvious reading is that it does not. `ConsoleInput.OnEnter` writes
-/// `"> " + inputString` *before* calling `OnInputText`, and `RedrawInputLine`
-/// repaints the status block *after* `ConVarSystem.Run` returns. A reply is
-/// therefore exactly the lines between the echo and the next status line, with
-/// no timing guess involved.
-///
-/// Those markers exist only on the pty, never in the log file, so `bracketed` is
-/// filled from the console whatever channel is otherwise authoritative. That
-/// also means a reply is never double-counted: the log file supplies events, the
-/// console supplies replies.
+/// The engine brackets console output precisely, which is worth stating because the obvious reading is that it does not. `ConsoleInput.OnEnter` writes `"> " + inputString` *before* calling `OnInputText`, and `RedrawInputLine` repaints the status block *after* `ConVarSystem.Run` returns. A reply is therefore exactly the lines between the echo and the next status line, with no timing guess involved.
+/// Those markers exist only on the pty, never in the log file, so `bracketed` is filled from the console whatever channel is otherwise authoritative. That also means a reply is never double-counted: the log file supplies events, the console supplies replies.
 struct PendingReply {
     command: String,
+    actor: String,
     /// Lines between the `> {command}` echo and the status redraw.
     bracketed: Vec<String>,
     /// Everything seen since dispatch, used only if the echo never arrives.
     fallback: Vec<String>,
-    /// Set by the echo, cleared by sending. While false, arriving console lines
-    /// belong to whatever the server was already saying.
+    /// Set by the echo, cleared by sending. While false, arriving console lines belong to whatever the server was already saying.
     open: bool,
     started: Instant,
     reply: oneshot::Sender<Result<Vec<String>, String>>,
 }
 
 impl PendingReply {
-    /// Answer the caller with the bracketed reply, or the unbracketed fallback
-    /// when the console never echoed.
-    fn complete(self) -> (String, Vec<String>) {
+    /// Answer the caller with the bracketed reply, or the unbracketed fallback when the console never echoed.
+    fn complete(self) -> (String, String, Vec<String>) {
         let lines = if self.open || !self.bracketed.is_empty() {
             self.bracketed
         } else {
             self.fallback
         };
         let _ = self.reply.send(Ok(lines.clone()));
-        (self.command, lines)
+        (self.command, self.actor, lines)
     }
+
+    fn fail(self, why: &str) -> (String, String, Vec<String>) {
+        let lines = if self.open || !self.bracketed.is_empty() {
+            self.bracketed
+        } else {
+            self.fallback
+        };
+        let _ = self.reply.send(Err(why.to_owned()));
+        (self.command, self.actor, lines)
+    }
+}
+
+struct QueuedCommand {
+    command: String,
+    actor: String,
+    reply: oneshot::Sender<Result<Vec<String>, String>>,
 }
 
 /// What an outside caller can ask the supervisor to do.
@@ -162,9 +158,7 @@ pub enum Control {
         reply: oneshot::Sender<Result<(), String>>,
     },
     /// End the supervisor task itself.
-    ///
-    /// Distinct from [`Control::Stop`], which stops the game server and leaves
-    /// the supervisor answering. Cellar's own exit path is the only caller.
+    /// Distinct from [`Control::Stop`], which stops the game server and leaves the supervisor answering. Cellar's own exit path is the only caller.
     Shutdown {
         reply: oneshot::Sender<Result<(), String>>,
     },
@@ -259,19 +253,14 @@ impl Handle {
 /// Owns the child process and everything watching it.
 pub struct Supervisor {
     /// The one instance this supervisor owns, with every default resolved.
-    ///
-    /// Not the whole `Config`: a supervisor has no business reading the web
-    /// binding or the backup schedule, and holding the process-wide config was
-    /// how it came to read the primary's server settings whichever instance it
-    /// was actually running.
+    /// Not the whole `Config`: a supervisor has no business reading the web binding or the backup schedule, and holding the process-wide config was how it came to read the primary's server settings whichever instance it was actually running.
     instance: Instance,
     tracker: Tracker,
     restarts: RestartTracker,
     sampler: Sampler,
     events: broadcast::Sender<Event>,
     started: Instant,
-    /// The two halves of the status bar, merged as they arrive. The engine draws
-    /// them as separate lines, so neither is ever a whole bar on its own.
+    /// The two halves of the status bar, merged as they arrive. The engine draws them as separate lines, so neither is ever a whole bar on its own.
     status: StatusBar,
 }
 
@@ -281,9 +270,7 @@ impl Supervisor {
         let (events, _) = broadcast::channel(1024);
         let (control_tx, control_rx) = mpsc::channel(64);
 
-        // Zero when nobody has read the project's `Metadata.MaxPlayers`, which
-        // is the only place the real ceiling exists. Zero means unknown, and
-        // the dashboard says so rather than showing "0/0".
+        // Zero when nobody has read the project's `Metadata.MaxPlayers`, which is the only place the real ceiling exists. Zero means unknown, and the dashboard says so rather than showing "0/0".
         let tracker = Tracker::new(
             instance.server.hostname.clone(),
             instance.player_ceiling.unwrap_or(0),
@@ -310,9 +297,7 @@ impl Supervisor {
     }
 
     /// Adopt a new profile, rolling back if it cannot be prepared.
-    ///
-    /// One place, because three call sites each rolling back by hand is three
-    /// chances for a half-applied switch.
+    /// One place, because three call sites each rolling back by hand is three chances for a half-applied switch.
     fn switch_to(&mut self, instance: Instance) -> Result<(), String> {
         let previous = std::mem::replace(&mut self.instance, instance);
 
@@ -340,11 +325,66 @@ impl Supervisor {
         let _ = self.events.send(event);
     }
 
+    fn dispatch_next(
+        &mut self,
+        child: &impl TerminationChild,
+        pending: &mut Option<PendingReply>,
+        queued: &mut VecDeque<QueuedCommand>,
+    ) {
+        while pending.is_none() {
+            let Some(next) = queued.pop_front() else {
+                return;
+            };
+            if next.reply.is_closed() {
+                continue;
+            }
+            match child.send_command(&next.command) {
+                Ok(()) => {
+                    self.publish(Event::CommandDispatched {
+                        command: next.command.clone(),
+                        actor: next.actor.clone(),
+                    });
+                    *pending = Some(PendingReply {
+                        command: next.command,
+                        actor: next.actor,
+                        bracketed: Vec::new(),
+                        fallback: Vec::new(),
+                        open: false,
+                        started: Instant::now(),
+                        reply: next.reply,
+                    });
+                }
+                Err(error) => {
+                    let _ = next
+                        .reply
+                        .send(Err(format!("could not reach the console: {error}")));
+                }
+            }
+        }
+    }
+
+    fn fail_commands(
+        &mut self,
+        pending: &mut Option<PendingReply>,
+        queued: &mut VecDeque<QueuedCommand>,
+        why: &str,
+    ) {
+        if let Some(pending) = pending.take() {
+            let (command, actor, reply) = pending.fail(why);
+            self.publish(Event::CommandReplied {
+                command,
+                actor,
+                reply,
+                ok: false,
+            });
+        }
+        for queued in queued.drain(..) {
+            let _ = queued.reply.send(Err(why.to_owned()));
+        }
+    }
+
     /// Write `hosting.json` so the gamemode dials the bridge Cellar is binding.
-    ///
-    /// Returns the message to log, or the reason it could not be written. Not
-    /// fatal: a server without a bridge is a server on local files, which is the
-    /// gamemode's own default.
+    /// Returns the message to log, or the reason it could not be written. Not fatal: a server without a bridge is a server on local files, which is the gamemode's own default.
     pub fn prepare_hosting(&self) -> Result<String, String> {
         let document = hosting::document_for(&self.instance.bridge);
 
@@ -366,12 +406,7 @@ impl Supervisor {
     }
 
     /// Run until Cellar itself is shutting down.
-    ///
-    /// A stopped or crash-looping server does not end this task: it rests,
-    /// still answering snapshots and still able to be restarted. Returning
-    /// instead would take the roster, the resource history, the exit code and
-    /// the restart button with it, and leave `/api/status` reporting an absence
-    /// where an operator needs a reason.
+    /// A stopped or crash-looping server does not end this task: it rests, still answering snapshots and still able to be restarted. Returning instead would take the roster, the resource history, the exit code and the restart button with it, and leave `/api/status` reporting an absence where an operator needs a reason.
     pub async fn run(mut self, mut control: mpsc::Receiver<Control>) {
         loop {
             match self.run_once(&mut control).await {
@@ -404,40 +439,64 @@ impl Supervisor {
                     self.tracker
                         .set_consecutive_failures(self.restarts.consecutive_failures());
 
-                    tokio::select! {
-                        () = tokio::time::sleep(delay) => {}
-                        message = control.recv() => {
-                            match message {
-                                Some(Control::Stop { reply }) => {
-                                    let _ = reply.send(Ok(()));
-                                    tracing::info!("the backoff wait was cancelled by a stop");
-                                    self.tracker.set_state(State::Stopped);
-                                    if self.rest(&mut control).await == Resting::Done {
-                                        return;
-                                    }
-                                }
-                                Some(Control::Shutdown { reply }) => {
-                                    let _ = reply.send(Ok(()));
-                                    return;
-                                }
-                                Some(Control::Snapshot { reply }) => {
-                                    let _ = reply.send(self.tracker.snapshot());
-                                }
-                                // A restart during backoff means "stop waiting".
-                                Some(Control::Restart { reply }) => {
-                                    self.restarts.record_healthy_run();
-                                    let _ = reply.send(Ok(()));
-                                }
-                                Some(Control::Exec { reply, .. }) => {
-                                    let _ = reply.send(Err("the server is not running".to_owned()));
-                                }
-                                Some(Control::SwitchConfig { instance, reply }) => {
-                                    let result = self.switch_to(*instance);
-                                    let _ = reply.send(result);
-                                }
-                                None => return,
+                    match self.wait_backoff(&mut control, delay).await {
+                        BackoffOutcome::Elapsed | BackoffOutcome::Resume => {}
+                        BackoffOutcome::Restart => self.restarts.record_healthy_run(),
+                        BackoffOutcome::Stopped => {
+                            tracing::info!("the backoff wait was cancelled by a stop");
+                            self.tracker.set_state(State::Stopped);
+                            if self.rest(&mut control).await == Resting::Done {
+                                return;
                             }
                         }
+                        BackoffOutcome::Done => return,
+                    }
+                }
+            }
+        }
+    }
+
+    async fn wait_backoff(
+        &mut self,
+        control: &mut mpsc::Receiver<Control>,
+        delay: Duration,
+    ) -> BackoffOutcome {
+        let deadline = tokio::time::Instant::now() + delay;
+        loop {
+            tokio::select! {
+                () = tokio::time::sleep_until(deadline) => return BackoffOutcome::Elapsed,
+                message = control.recv() => {
+                    match message {
+                        Some(Control::Stop { reply }) => {
+                            let _ = reply.send(Ok(()));
+                            return BackoffOutcome::Stopped;
+                        }
+                        Some(Control::Shutdown { reply }) => {
+                            let _ = reply.send(Ok(()));
+                            return BackoffOutcome::Done;
+                        }
+                        Some(Control::Snapshot { reply }) => {
+                            let _ = reply.send(self.tracker.snapshot());
+                        }
+                        Some(Control::Restart { reply }) => {
+                            let _ = reply.send(Ok(()));
+                            return BackoffOutcome::Restart;
+                        }
+                        Some(Control::Exec { reply, .. }) => {
+                            let _ = reply.send(Err("the server is not running".to_owned()));
+                        }
+                        Some(Control::SwitchConfig { instance, reply }) => {
+                            match self.switch_to(*instance) {
+                                Ok(()) => {
+                                    let _ = reply.send(Ok(()));
+                                    return BackoffOutcome::Resume;
+                                }
+                                Err(why) => {
+                                    let _ = reply.send(Err(why));
+                                }
+                            }
+                        }
+                        None => return BackoffOutcome::Done,
                     }
                 }
             }
@@ -445,7 +504,6 @@ impl Supervisor {
     }
 
     /// Answer control messages with no server running.
-    ///
     /// Returns [`Resting::Resume`] when asked to start the server again, and
     /// [`Resting::Done`] when Cellar is shutting down or the last handle has
     /// been dropped.
@@ -461,9 +519,7 @@ impl Supervisor {
                     let _ = reply.send(Ok(()));
                     return Resting::Resume;
                 }
-                // Already stopped. Answering rather than refusing keeps a
-                // second stop, or a stop racing a crash, from looking like an
-                // error to whoever asked.
+                // Already stopped. Answering rather than refusing keeps a second stop, or a stop racing a crash, from looking like an error to whoever asked.
                 Some(Control::Stop { reply }) => {
                     let _ = reply.send(Ok(()));
                 }
@@ -488,9 +544,7 @@ impl Supervisor {
         let command = launch::command_for(&self.instance.server, needs_local_http);
         let redacted = command.redacted(self.instance.server.gslt.as_ref());
 
-        // Armed before the child starts, so the follow position is this run's
-        // first byte. Arming after would race the engine's boot lines, and the
-        // engine writes several before anything else happens.
+        // Armed before the child starts, so the follow position is this run's first byte. Arming after would race the engine's boot lines, and the engine writes several before anything else happens.
         let mut tailer = Tailer::new(launch::log_file_for(&self.instance.server));
         tailer.poll();
 
@@ -536,18 +590,8 @@ impl Supervisor {
         let ready_pattern = self.instance.ready_pattern().to_owned();
 
         // Only one channel produces events, or every line is counted twice.
-        //
-        // The log file is preferred: it keeps the whole logger name where the
-        // console truncates to eight characters, and it carries a date. But it
-        // is polled, and the console is not, so a naive "whichever speaks first"
-        // races and emits the boot lines from both.
-        //
-        // So the console is held for a moment. Its lines are buffered rather
-        // than dropped, and if the log file has still said nothing when the
-        // grace expires, the buffer is replayed and the console becomes the
-        // source for the rest of the run. A server whose log file Cellar cannot
-        // read is then still followed, just with less fidelity, rather than
-        // silently unmonitored.
+        // The log file is preferred: it keeps the whole logger name where the console truncates to eight characters, and it carries a date. But it is polled, and the console is not, so a naive "whichever speaks first" races and emits the boot lines from both.
+        // So the console is held for a moment. Its lines are buffered rather than dropped, and if the log file has still said nothing when the grace expires, the buffer is replayed and the console becomes the source for the rest of the run. A server whose log file Cellar cannot read is then still followed, just with less fidelity, rather than silently unmonitored.
         let mut log_file_speaking = false;
         let mut console_authoritative = false;
         let mut console_backlog: Vec<String> = Vec::new();
@@ -569,8 +613,8 @@ impl Supervisor {
         let mut requested_stop = false;
         let mut restart_requested = false;
         let mut shutting_down = false;
-        // The command awaiting its reply, if any.
         let mut collecting: Option<PendingReply> = None;
+        let mut command_queue = VecDeque::new();
 
         let exit_code = 'running: loop {
             tokio::select! {
@@ -581,9 +625,9 @@ impl Supervisor {
                     };
 
                     for line in lines {
-                        // Always ingested with `emit` false first, because the
-                        // status bar is read from the console whatever else is.
+                        // Always ingested with `emit` false first, because the status bar is read from the console whatever else is.
                         self.ingest(&line, Origin::Console, &ready_pattern, &mut collecting, console_authoritative);
+                        self.dispatch_next(&child, &mut collecting, &mut command_queue);
 
                         if !console_authoritative && !log_file_speaking {
                             console_backlog.push(line);
@@ -609,6 +653,7 @@ impl Supervisor {
                         console_authoritative = true;
                         for line in std::mem::take(&mut console_backlog) {
                             self.ingest(&line, Origin::Console, &ready_pattern, &mut collecting, true);
+                            self.dispatch_next(&child, &mut collecting, &mut command_queue);
                         }
                     }
 
@@ -631,14 +676,14 @@ impl Supervisor {
                         self.publish(Event::Unparsed { raw: why, origin: Origin::Cellar });
                     }
 
-                    // Backstop only: a bracketed reply has already been sent by
-                    // the status line that terminated it.
+                    // Backstop only: a bracketed reply has already been sent by the status line that terminated it.
                     if let Some(p) = &collecting
                         && p.started.elapsed() >= REPLY_TIMEOUT
                         && let Some(p) = collecting.take()
                     {
-                        let (command, reply) = p.complete();
-                        self.publish(Event::CommandReplied { command, reply, ok: true });
+                        let (command, actor, reply) = p.fail("console reply timed out");
+                        self.publish(Event::CommandReplied { command, actor, reply, ok: false });
+                        self.dispatch_next(&child, &mut collecting, &mut command_queue);
                     }
                 }
 
@@ -668,34 +713,14 @@ impl Supervisor {
                             let _ = reply.send(self.tracker.snapshot());
                         }
                         Some(Control::Exec { command, actor, reply }) => {
-                            match child.send_command(&command) {
-                                Ok(()) => {
-                                    self.publish(Event::CommandDispatched {
-                                        command: command.clone(),
-                                        actor,
-                                    });
-                                    // Replace any in-flight collection; the newer
-                                    // command is the one the caller is waiting on.
-                                    if let Some(previous) = collecting.take() {
-                                        let (old, lines) = previous.complete();
-                                        self.publish(Event::CommandReplied {
-                                            command: old,
-                                            reply: lines,
-                                            ok: true,
-                                        });
-                                    }
-                                    collecting = Some(PendingReply {
-                                        command,
-                                        bracketed: Vec::new(),
-                                        fallback: Vec::new(),
-                                        open: false,
-                                        started: Instant::now(),
-                                        reply,
-                                    });
-                                }
-                                Err(error) => {
-                                    let _ = reply.send(Err(format!("could not reach the console: {error}")));
-                                }
+                            command_queue.retain(|queued| !queued.reply.is_closed());
+                            if collecting.is_some() && command_queue.len() >= MAX_QUEUED_COMMANDS {
+                                let _ = reply.send(Err(format!(
+                                    "the console command queue is full ({MAX_QUEUED_COMMANDS} waiting)"
+                                )));
+                            } else {
+                                command_queue.push_back(QueuedCommand { command, actor, reply });
+                                self.dispatch_next(&child, &mut collecting, &mut command_queue);
                             }
                         }
                         Some(Control::SwitchConfig { instance, reply }) => {
@@ -703,6 +728,11 @@ impl Supervisor {
                             if let Err(why) = self.switch_to(*instance) {
                                 let _ = reply.send(Err(why));
                             } else {
+                                self.fail_commands(
+                                    &mut collecting,
+                                    &mut command_queue,
+                                    "the server profile is switching",
+                                );
                                 match self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await {
                                     Ok(status) => {
                                         restart_requested = true;
@@ -725,6 +755,11 @@ impl Supervisor {
                             }
                         }
                         Some(Control::Stop { reply }) => {
+                            self.fail_commands(
+                                &mut collecting,
+                                &mut command_queue,
+                                "the server is stopping",
+                            );
                             match self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await {
                                 Ok(status) => {
                                     requested_stop = true;
@@ -740,6 +775,11 @@ impl Supervisor {
                         }
                         Some(Control::Restart { reply }) => {
                             tracing::info!("restarting the server on request");
+                            self.fail_commands(
+                                &mut collecting,
+                                &mut command_queue,
+                                "the server is restarting",
+                            );
                             match self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await {
                                 Ok(status) => {
                                     restart_requested = true;
@@ -753,11 +793,13 @@ impl Supervisor {
                                 }
                             }
                         }
-                        // Cellar is exiting with the server still up. Stop it
-                        // the same way an explicit stop would: the engine has
-                        // no signal handler, so anything else skips the Steam
-                        // logoff and the convar save.
+                        // Cellar is exiting with the server still up. Stop it the same way an explicit stop would: the engine has no signal handler, so anything else skips the Steam logoff and the convar save.
                         Some(Control::Shutdown { reply }) => {
+                            self.fail_commands(
+                                &mut collecting,
+                                &mut command_queue,
+                                "Cellar is shutting down",
+                            );
                             match self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await {
                                 Ok(status) => {
                                     requested_stop = true;
@@ -773,6 +815,11 @@ impl Supervisor {
                             }
                         }
                         None => {
+                            self.fail_commands(
+                                &mut collecting,
+                                &mut command_queue,
+                                "the supervisor control channel closed",
+                            );
                             match self.graceful_stop(&mut child, &mut output, &mut assembler, &mut collecting, &ready_pattern, console_authoritative).await {
                                 Ok(status) => {
                                     requested_stop = true;
@@ -818,14 +865,11 @@ impl Supervisor {
                 true,
             );
         }
-        if let Some(pending) = collecting.take() {
-            let (command, reply) = pending.complete();
-            self.publish(Event::CommandReplied {
-                command,
-                reply,
-                ok: true,
-            });
-        }
+        self.fail_commands(
+            &mut collecting,
+            &mut command_queue,
+            "the server exited before the console reply completed",
+        );
 
         let graceful = requested_stop || restart_requested;
         match (graceful, exit_code) {
@@ -892,12 +936,7 @@ impl Supervisor {
     }
 
     /// `quit`, then wait, then kill.
-    ///
-    /// The engine installs no SIGTERM or Ctrl+C handler anywhere, and its clean
-    /// shutdown does nine things including saving every `Saved` convar and
-    /// logging the server off Steam's master list. A kill skips all of it, which
-    /// is what every Kubernetes rollout does to this server today.
-    /// Returns an error unless the child exit is observed and reaped.
+    /// The engine installs no SIGTERM or Ctrl+C handler anywhere, and its clean shutdown does nine things including saving every `Saved` convar and logging the server off Steam's master list. A kill skips all of it, which is what every Kubernetes rollout does to this server today. Returns an error unless the child exit is observed and reaped.
     async fn graceful_stop(
         &mut self,
         child: &mut impl TerminationChild,
@@ -939,12 +978,7 @@ impl Supervisor {
                 break;
             }
 
-            // Keep draining while it shuts down; the shutdown log is exactly
-            // what tells an operator the Steam logoff completed. Through
-            // the same ingest as the rest of the run, so the dedup still
-            // applies: the log file carries these lines too, and the final
-            // tailer poll after this returns picks them up with their
-            // logger names intact.
+            // Keep draining while it shuts down; the shutdown log is exactly what tells an operator the Steam logoff completed. Through the same ingest as the rest of the run, so the dedup still applies: the log file carries these lines too, and the final tailer poll after this returns picks them up with their logger names intact.
             match tokio::time::timeout(Duration::from_millis(100), output.recv()).await {
                 Ok(Some(Output::Bytes(bytes))) => {
                     for line in assembler.push(&bytes) {
@@ -957,8 +991,7 @@ impl Supervisor {
                         );
                     }
                 }
-                // A closed terminal is not proof that its child is gone. Keep
-                // polling until it exits or the graceful deadline is reached.
+                // A closed terminal is not proof that its child is gone. Keep polling until it exits or the graceful deadline is reached.
                 Ok(Some(Output::Eof)) | Ok(None) => {
                     let remaining = deadline_at.saturating_duration_since(Instant::now());
                     if let Ok(status) = wait_for_exit(child, remaining).await {
@@ -986,11 +1019,7 @@ impl Supervisor {
     }
 
     /// Turn one raw line into events.
-    ///
-    /// `emit` is false for the console once the log file is speaking: the status
-    /// bar is still read from it, because that is the only place the engine
-    /// reports its frame timings, but nothing else is, or every line would be
-    /// counted twice.
+    /// `emit` is false for the console once the log file is speaking: the status bar is still read from it, because that is the only place the engine reports its frame timings, but nothing else is, or every line would be counted twice.
     fn ingest(
         &mut self,
         raw: &str,
@@ -1011,9 +1040,7 @@ impl Supervisor {
         };
 
         if from_console {
-            // The status bar is drawn straight to the terminal and never
-            // reaches the log file, so it is read from the console only. It is
-            // also the terminator for a command's reply.
+            // The status bar is drawn straight to the terminal and never reaches the log file, so it is read from the console only. It is also the terminator for a command's reply.
             if let Some(fragment) = grammar::parse_status_fragment(&parsed.message) {
                 fragment.apply(&mut self.status);
                 let bar = self.status.clone();
@@ -1021,9 +1048,10 @@ impl Supervisor {
 
                 if let Some(p) = pending.take() {
                     if p.open {
-                        let (command, reply) = p.complete();
+                        let (command, actor, reply) = p.complete();
                         self.publish(Event::CommandReplied {
                             command,
+                            actor,
                             reply,
                             ok: true,
                         });
@@ -1081,11 +1109,7 @@ enum RunOutcome {
 }
 
 /// What Cellar adds to the child's environment.
-///
-/// One entry, and deliberately not `FACEPUNCH_ENGINE`: that was measured on
-/// 2026-09-01 to move neither `logs/` nor `data/`, from the process environment
-/// or from the Wine registry, because the engine reads it with
-/// `EnvironmentVariableTarget.User`. See `docs/ARCHITECTURE.md`.
+/// One entry, and deliberately not `FACEPUNCH_ENGINE`: that was measured on 2026-09-01 to move neither `logs/` nor `data/`, from the process environment or from the Wine registry, because the engine reads it with `EnvironmentVariableTarget.User`. See `docs/ARCHITECTURE.md`.
 fn child_environment(server: &ServerConfig) -> Vec<(String, String)> {
     let mut env = Vec::new();
 
@@ -1101,8 +1125,7 @@ fn child_environment(server: &ServerConfig) -> Vec<(String, String)> {
     env
 }
 
-/// An exit status in words. `None` means the process died on a signal and
-/// reported no code at all, which is not the same as exit 0.
+/// An exit status in words. `None` means the process died on a signal and reported no code at all, which is not the same as exit 0.
 fn describe_exit(code: Option<i32>) -> String {
     match code {
         Some(0) => "code 0, cleanly".to_owned(),
@@ -1114,6 +1137,15 @@ fn describe_exit(code: Option<i32>) -> String {
 #[derive(Debug, PartialEq, Eq)]
 enum Resting {
     Resume,
+    Done,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum BackoffOutcome {
+    Elapsed,
+    Resume,
+    Restart,
+    Stopped,
     Done,
 }
 
@@ -1150,10 +1182,83 @@ mod tests {
         }
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn snapshots_and_rejected_commands_do_not_shorten_backoff() {
+        let (mut supervisor, handle, mut control) = Supervisor::new(instance(None));
+        let observer_handle = handle.clone();
+        let observer = tokio::spawn(async move {
+            for _ in 0..5 {
+                assert!(observer_handle.snapshot().await.is_some());
+            }
+            assert_eq!(
+                observer_handle.exec("status", "test").await,
+                Err("the server is not running".to_owned())
+            );
+        });
+        let started = tokio::time::Instant::now();
+
+        let outcome = supervisor
+            .wait_backoff(&mut control, Duration::from_millis(100))
+            .await;
+
+        observer.await.unwrap();
+        assert_eq!(outcome, BackoffOutcome::Elapsed);
+        assert_eq!(started.elapsed(), Duration::from_millis(100));
+        drop(handle);
+    }
+
     struct TestChild {
         command_result: io::Result<()>,
         exits: VecDeque<io::Result<Option<i32>>>,
         kill_result: io::Result<()>,
+    }
+
+    struct RecordingChild(std::sync::Mutex<Vec<String>>);
+
+    impl TerminationChild for RecordingChild {
+        fn send_command(&self, command: &str) -> io::Result<()> {
+            self.0.lock().unwrap().push(command.to_owned());
+            Ok(())
+        }
+
+        fn try_wait_code(&mut self) -> io::Result<Option<i32>> {
+            Ok(None)
+        }
+
+        fn kill(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_cancelled_queued_command_is_not_written_to_the_console() {
+        let child = RecordingChild(std::sync::Mutex::new(Vec::new()));
+        let (cancelled_reply, cancelled) = oneshot::channel();
+        drop(cancelled);
+        let (live_reply, _live) = oneshot::channel();
+        let mut queue = VecDeque::from([
+            QueuedCommand {
+                command: "cancelled".to_owned(),
+                actor: "gone".to_owned(),
+                reply: cancelled_reply,
+            },
+            QueuedCommand {
+                command: "status".to_owned(),
+                actor: "operator".to_owned(),
+                reply: live_reply,
+            },
+        ]);
+        let mut pending = None;
+        let (mut supervisor, _, _) = Supervisor::new(instance(None));
+
+        supervisor.dispatch_next(&child, &mut pending, &mut queue);
+
+        assert_eq!(&*child.0.lock().unwrap(), &["status"]);
+        assert_eq!(
+            pending.as_ref().map(|reply| reply.command.as_str()),
+            Some("status")
+        );
+        assert!(queue.is_empty());
     }
 
     impl TerminationChild for TestChild {
@@ -1250,12 +1355,7 @@ mod tests {
     }
 
     /// The ceiling is known before a player connects, or it is honestly zero.
-    ///
-    /// `+maxplayers` is not a convar and not a launch switch; the number lives
-    /// in the project's `Metadata.MaxPlayers`, and until it was read the
-    /// dashboard showed a ceiling of zero until the engine's status bar
-    /// happened to mention one. The status bar still wins once it arrives:
-    /// that is what the engine is actually enforcing.
+    /// `+maxplayers` is not a convar and not a launch switch; the number lives in the project's `Metadata.MaxPlayers`, and until it was read the dashboard showed a ceiling of zero until the engine's status bar happened to mention one. The status bar still wins once it arrives: that is what the engine is actually enforcing.
     #[test]
     fn the_player_ceiling_is_seeded_from_the_project_and_then_the_engine_wins() {
         let mut declared = instance(None);
@@ -1263,8 +1363,7 @@ mod tests {
         let (supervisor, _, _) = Supervisor::new(declared);
         assert_eq!(supervisor.tracker.snapshot().max_players, 48);
 
-        // Nobody has read a project. Zero means unknown, and the dashboard
-        // says so rather than showing "0/0" as if it were a limit.
+        // Nobody has read a project. Zero means unknown, and the dashboard says so rather than showing "0/0" as if it were a limit.
         let (blind, _, _) = Supervisor::new(instance(None));
         assert_eq!(blind.tracker.snapshot().max_players, 0);
     }
@@ -1279,17 +1378,12 @@ mod tests {
             vec![("WINEPREFIX".to_owned(), "/srv/dev/wine".to_owned())]
         );
 
-        // On Windows the setting means nothing, and passing it would put a
-        // variable in the child's environment that only confuses whoever reads
-        // it there later.
+        // On Windows the setting means nothing, and passing it would put a variable in the child's environment that only confuses whoever reads it there later.
         server.launcher = Launcher::Native;
         assert!(child_environment(&server).is_empty());
     }
 
-    /// Measured 2026-09-01: it moves neither `logs/` nor `data/`, from the
-    /// process environment or from the Wine registry, because the engine reads
-    /// it with `EnvironmentVariableTarget.User`. Setting it would be a variable
-    /// that looks like it does something.
+    /// Measured 2026-09-01: it moves neither `logs/` nor `data/`, from the process environment or from the Wine registry, because the engine reads it with `EnvironmentVariableTarget.User`. Setting it would be a variable that looks like it does something.
     #[test]
     fn facepunch_engine_is_not_passed_to_the_child() {
         let mut server = instance(None).server;
@@ -1318,8 +1412,7 @@ mod tests {
         assert!(written.contains("\"bridgeUrl\": \"http://127.0.0.1:8080\""));
     }
 
-    /// A bridge with nowhere to write `hosting.json` would silently leave the
-    /// gamemode on local files, which is the quiet failure worth refusing.
+    /// A bridge with nowhere to write `hosting.json` would silently leave the gamemode on local files, which is the quiet failure worth refusing.
     #[test]
     fn a_bridge_without_a_data_dir_says_so_instead_of_going_quiet() {
         let mut instance = instance(None);
@@ -1334,5 +1427,20 @@ mod tests {
     fn no_bridge_and_no_data_dir_is_simply_fine() {
         let (supervisor, _handle, _control) = Supervisor::new(instance(None));
         assert!(supervisor.prepare_hosting().is_ok());
+    }
+
+    #[test]
+    fn a_profile_that_cannot_be_prepared_leaves_the_previous_instance_active() {
+        let previous = instance(None);
+        let previous_game = previous.server.game.clone();
+        let (mut supervisor, _handle, _control) = Supervisor::new(previous);
+        let mut candidate = instance(None);
+        candidate.bridge.enabled = true;
+
+        let error = supervisor.switch_to(candidate).unwrap_err();
+
+        assert!(error.contains("data_dir"), "{error}");
+        assert_eq!(supervisor.instance.server.game, previous_game);
+        assert!(!supervisor.instance.bridge.enabled);
     }
 }

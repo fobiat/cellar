@@ -1,17 +1,7 @@
 //! Updating Cellar itself.
-//!
-//! Separate from [`crate::updater`], which updates the *game*. This one replaces
-//! the running binary, and the two have almost nothing in common except the
-//! word.
-//!
-//! The whole difficulty is on Windows: a running `.exe` cannot be deleted or
-//! overwritten, but it **can be renamed**. So the sequence is rename-self-aside,
-//! write the new binary into the original path, and leave the old one for the
-//! next run to sweep up. On Unix the file can simply be replaced, but the same
-//! shape is used on both so there is one code path to reason about.
-//!
-//! Nothing here downloads over plain HTTP, and nothing installs a binary whose
-//! SHA-256 does not match the checksum published beside it.
+//! Separate from [`crate::updater`], which updates the *game*. This one replaces the running binary, and the two have almost nothing in common except the word.
+//! The whole difficulty is on Windows: a running `.exe` cannot be deleted or overwritten, but it **can be renamed**. So the sequence is rename-self-aside, write the new binary into the original path, and leave the old one for the next run to sweep up. On Unix the file can simply be replaced, but the same shape is used on both so there is one code path to reason about.
+//! Nothing here downloads over plain HTTP, and nothing installs a binary whose SHA-256 does not match the checksum published beside it.
 
 use std::path::{Path, PathBuf};
 
@@ -53,9 +43,7 @@ pub async fn latest_release(url: &str) -> Result<Release, SelfUpdateError> {
 }
 
 /// The suffix a superseded binary is renamed to.
-///
-/// Left on disk deliberately: on Windows the old file is still mapped by the
-/// running process and cannot be removed until it exits.
+/// Left on disk deliberately: on Windows the old file is still mapped by the running process and cannot be removed until it exits.
 pub const OLD_SUFFIX: &str = ".old";
 
 /// What a release offers.
@@ -70,12 +58,7 @@ pub struct Release {
 pub struct Asset {
     pub name: String,
     /// The API URL, not the browser one.
-    ///
-    /// `browser_download_url` needs a web session on a private repository,
-    /// where the API URL works with the same bearer token the rest of the call
-    /// already uses, given `Accept: application/octet-stream`. It also works
-    /// unauthenticated on a public repository, so there is one path rather than
-    /// two.
+    /// `browser_download_url` needs a web session on a private repository, where the API URL works with the same bearer token the rest of the call already uses, given `Accept: application/octet-stream`. It also works unauthenticated on a public repository, so there is one path rather than two.
     pub url: String,
     pub size: u64,
 }
@@ -91,11 +74,7 @@ impl Release {
     }
 
     /// The bare binary for a platform.
-    ///
-    /// Published alongside the archive specifically so `self-update` can replace
-    /// the running binary without unpacking anything. Teaching a server manager
-    /// to read zip and tar formats, in-process, to update itself is a lot of
-    /// attack surface for a step that a single file makes unnecessary.
+    /// Published alongside the archive specifically so `self-update` can replace the running binary without unpacking anything. Teaching a server manager to read zip and tar formats, in-process, to update itself is a lot of attack surface for a step that a single file makes unnecessary.
     pub fn binary_for(&self, target: &str) -> Option<&Asset> {
         self.assets.iter().find(|asset| {
             asset.name.contains(target)
@@ -115,11 +94,7 @@ impl Release {
 }
 
 /// The target triple this build was compiled for.
-///
-/// Only the two targets releases actually carry are named. Anything else
-/// answers `"unknown"` and self-update reports that no build is published for
-/// this platform, which is the truth; naming a triple that is never uploaded
-/// turns a clear message into a 404 partway through the download.
+/// Only the two targets releases actually carry are named. Anything else answers `"unknown"` and self-update reports that no build is published for this platform, which is the truth; naming a triple that is never uploaded turns a clear message into a 404 partway through the download.
 pub const fn current_target() -> &'static str {
     if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
         "x86_64-pc-windows"
@@ -221,9 +196,7 @@ pub enum SelfUpdateError {
 }
 
 /// Verify a downloaded binary against its published checksum.
-///
-/// A separate, pure function so the check that matters most is a test rather
-/// than something entangled with the network.
+/// A separate, pure function so the check that matters most is a test rather than something entangled with the network.
 pub fn verify(bytes: &[u8], checksum_file: &str) -> Result<(), SelfUpdateError> {
     // `sha256sum` format: the hash, whitespace, then the filename.
     let expected = checksum_file
@@ -247,9 +220,7 @@ pub fn verify(bytes: &[u8], checksum_file: &str) -> Result<(), SelfUpdateError> 
 }
 
 /// Replace the binary at `target` with `bytes`.
-///
-/// Rename-aside rather than overwrite, because on Windows the running image
-/// cannot be written to but can be moved. The old file is left behind; see
+/// Rename-aside rather than overwrite, because on Windows the running image cannot be written to but can be moved. The old file is left behind; see
 /// [`sweep`].
 pub fn install(target: &Path, bytes: &[u8]) -> Result<PathBuf, SelfUpdateError> {
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
@@ -261,8 +232,7 @@ pub fn install(target: &Path, bytes: &[u8]) -> Result<PathBuf, SelfUpdateError> 
             .unwrap_or("cellar")
     ));
 
-    // Written beside the target, never in a temp directory: a cross-filesystem
-    // rename is a copy, and a copy is not atomic.
+    // Written beside the target, never in a temp directory: a cross-filesystem rename is a copy, and a copy is not atomic.
     std::fs::write(&staged, bytes)?;
     copy_permissions(target, &staged)?;
 
@@ -290,8 +260,7 @@ fn copy_permissions(from: &Path, to: &Path) -> std::io::Result<()> {
 
     let mode = std::fs::metadata(from)
         .map(|m| m.permissions().mode())
-        // A fresh install has nothing to copy from; 0o755 is what an executable
-        // wants, and getting this wrong means an update that cannot run.
+        // A fresh install has nothing to copy from; 0o755 is what an executable wants, and getting this wrong means an update that cannot run.
         .unwrap_or(0o755);
 
     std::fs::set_permissions(to, std::fs::Permissions::from_mode(mode | 0o111))
@@ -303,9 +272,7 @@ fn copy_permissions(_from: &Path, _to: &Path) -> std::io::Result<()> {
 }
 
 /// Remove a superseded binary left by a previous update.
-///
-/// Called at startup. On Windows the previous `.old` is only deletable once the
-/// process that was running it has exited, which is exactly now.
+/// Called at startup. On Windows the previous `.old` is only deletable once the process that was running it has exited, which is exactly now.
 pub fn sweep(target: &Path) {
     let retired = PathBuf::from(format!("{}{OLD_SUFFIX}", target.display()));
     if retired.exists() {
@@ -314,9 +281,7 @@ pub fn sweep(target: &Path) {
 }
 
 /// SHA-256, without a dependency for it.
-///
-/// Cellar needs exactly one hash, in one place, to check one download. Pulling
-/// in a crate for it would be more supply chain than the problem deserves.
+/// Cellar needs exactly one hash, in one place, to check one download. Pulling in a crate for it would be more supply chain than the problem deserves.
 pub fn sha256_hex(data: &[u8]) -> String {
     let digest = sha256(data);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -409,8 +374,7 @@ fn sha256(data: &[u8]) -> [u8; 32] {
 mod tests {
     use super::*;
 
-    /// Against the published NIST vectors, because a hash implemented in-tree
-    /// that is subtly wrong would accept a tampered binary.
+    /// Against the published NIST vectors, because a hash implemented in-tree that is subtly wrong would accept a tampered binary.
     #[test]
     fn sha256_matches_the_known_vectors() {
         assert_eq!(
@@ -535,8 +499,7 @@ mod tests {
         );
     }
 
-    /// The Windows dance, exercised on whatever platform the tests run on: the
-    /// rename must leave the old binary recoverable and the new one in place.
+    /// The Windows dance, exercised on whatever platform the tests run on: the rename must leave the old binary recoverable and the new one in place.
     #[test]
     fn installing_moves_the_old_binary_aside_and_puts_the_new_one_in_place() {
         let dir = tempfile::tempdir().unwrap();

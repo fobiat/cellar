@@ -1,9 +1,5 @@
 //! Cellar's Model Context Protocol adapter.
-//!
-//! The crate has two small seams. [`CellarBackend`] is the server-side seam,
-//! and [`CellarApi`] is the HTTP adapter used by the CLI. Keeping them apart
-//! lets the MCP protocol remain independent of Cellar's process state while
-//! still making the standard API authentication the source of truth.
+//! The crate has two small seams. [`CellarBackend`] is the server-side seam, and [`CellarApi`] is the HTTP adapter used by the CLI. Keeping them apart lets the MCP protocol remain independent of Cellar's process state while still making the standard API authentication the source of truth.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -20,9 +16,7 @@ const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8081";
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
 /// The data operations exposed to MCP clients.
-///
-/// Implementations are responsible for applying their own authentication. The
-/// protocol layer never receives or stores a bearer token or password.
+/// Implementations are responsible for applying their own authentication. The protocol layer never receives or stores a bearer token or password.
 #[async_trait]
 pub trait CellarBackend: Send + Sync + 'static {
     async fn status(&self, instance: Option<String>) -> Result<Value, String>;
@@ -36,15 +30,10 @@ pub trait CellarBackend: Send + Sync + 'static {
 }
 
 /// The one thing every server-scoped tool takes.
-///
-/// Named the same as the query parameter it becomes, and described in a way
-/// that tells a model to call `cellar_instances` rather than guess: a model
-/// that invents an id gets a 404 listing the real ones, which is recoverable,
-/// but a model that omits it silently addresses the primary, which is not.
+/// Named the same as the query parameter it becomes, and described in a way that tells a model to call `cellar_instances` rather than guess: a model that invents an id gets a 404 listing the real ones, which is recoverable, but a model that omits it silently addresses the primary, which is not.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct InstanceSelector {
-    /// Which supervised server this is about. Omit for the primary. Call
-    /// `cellar_instances` first when a config declares more than one.
+    /// Which supervised server this is about. Omit for the primary. Call `cellar_instances` first when a config declares more than one.
     #[serde(default)]
     pub instance: Option<String>,
 }
@@ -74,10 +63,7 @@ struct CommandRequest {
     /// One console command. Newlines are rejected by Cellar's existing API.
     pub command: String,
     /// Which supervised server to type it into. Omit for the primary.
-    ///
-    /// The highest-consequence argument in this file. `quit` sent to the wrong
-    /// instance stops a server nobody asked to stop, and a wrong id is refused
-    /// where an omitted one is silently the primary.
+    /// The highest-consequence argument in this file. `quit` sent to the wrong instance stops a server nobody asked to stop, and a wrong id is refused where an omitted one is silently the primary.
     #[serde(default)]
     pub instance: Option<String>,
 }
@@ -258,10 +244,7 @@ impl CellarApi {
     }
 
     /// Append `?instance=` when the caller named one.
-    ///
-    /// Built rather than concatenated so an id with a space or an ampersand in
-    /// it becomes a 404 naming the real ids, rather than a request that quietly
-    /// means something else.
+    /// Built rather than concatenated so an id with a space or an ampersand in it becomes a 404 naming the real ids, rather than a request that quietly means something else.
     fn scoped(&self, path: &str, instance: Option<String>) -> Result<reqwest::Url, String> {
         let mut url = reqwest::Url::parse(&format!("{}{path}", self.base_url))
             .map_err(|error| error.to_string())?;
@@ -498,8 +481,7 @@ pub async fn call_child_tool(
 mod tests {
     use super::*;
 
-    /// Records which instance each call was told to address, because the whole
-    /// risk in this file is a tool that quietly means the primary.
+    /// Records which instance each call was told to address, because the whole risk in this file is a tool that quietly means the primary.
     #[derive(Debug, Default)]
     struct FakeBackend {
         addressed: std::sync::Mutex<Vec<(&'static str, Option<String>)>>,
@@ -545,8 +527,7 @@ mod tests {
         }
     }
 
-    /// A wrong id is a 404 from Cellar; an id with a `&` in it would otherwise
-    /// be a request that silently means something else.
+    /// A wrong id is a 404 from Cellar; an id with a `&` in it would otherwise be a request that silently means something else.
     #[test]
     fn an_instance_id_is_a_query_pair_rather_than_concatenated_text() {
         let api = CellarApi {
@@ -609,9 +590,7 @@ mod tests {
         assert_eq!(result.structured_content, Some(json!({"state": "running"})));
     }
 
-    /// Every server-scoped tool has to pass the instance through. A tool that
-    /// accepts the argument and drops it is worse than one that never had it:
-    /// the caller is told which server it addressed and it addressed another.
+    /// Every server-scoped tool has to pass the instance through. A tool that accepts the argument and drops it is worse than one that never had it: the caller is told which server it addressed and it addressed another.
     #[tokio::test]
     async fn every_server_scoped_tool_passes_the_instance_through() {
         let backend = Arc::new(FakeBackend::default());

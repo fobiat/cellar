@@ -1,8 +1,5 @@
 //! Cellar's I/O half: the process, its terminal, its log file and its metrics.
-//!
-//! The one thing worth knowing before reading any of it: the server is spawned
-//! on a pseudo-terminal, not on pipes, because the engine only builds its
-//! interactive console when its output is not redirected. See [`process`].
+//! The one thing worth knowing before reading any of it: the server is spawned on a pseudo-terminal, not on pipes, because the engine only builds its interactive console when its output is not redirected. See [`process`].
 
 pub mod hosting;
 pub mod launch;

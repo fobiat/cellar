@@ -1,14 +1,6 @@
 //! The database browser behind the web UI's Records tab.
-//!
-//! A small, read-only phpMyAdmin: list tables, describe one, page through rows,
-//! and run a query. Enough to answer "what is actually in there" without
-//! shelling into a pod or exposing a second service.
-//!
-//! Read-only is enforced twice, and neither is decorative. [`is_read_only`] is a
-//! statement-shape check applied before anything reaches the server, and the
-//! deployment is expected to give the browser its own `SELECT`-only MySQL grant.
-//! The first stops a mistake; only the second stops an attacker, and the code
-//! says so rather than implying the parser is a security boundary.
+//! A small, read-only phpMyAdmin: list tables, describe one, page through rows, and run a query. Enough to answer "what is actually in there" without shelling into a pod or exposing a second service.
+//! Read-only is enforced twice, and neither is decorative. [`is_read_only`] is a statement-shape check applied before anything reaches the server, and the deployment is expected to give the browser its own `SELECT`-only MySQL grant. The first stops a mistake; only the second stops an attacker, and the code says so rather than implying the parser is a security boundary.
 
 use serde::{Deserialize, Serialize};
 use sqlx::{Column, MySqlPool, Row, TypeInfo, ValueRef};
@@ -75,8 +67,7 @@ pub struct ColumnSummary {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ResultSet {
     pub columns: Vec<String>,
-    /// Every value rendered as text or null, because a browser table shows text
-    /// and guessing a JSON type per column invites a wrong one.
+    /// Every value rendered as text or null, because a browser table shows text and guessing a JSON type per column invites a wrong one.
     pub rows: Vec<Vec<Option<String>>>,
     pub truncated: bool,
 }
@@ -135,10 +126,7 @@ pub async fn columns(pool: &MySqlPool, table: &str) -> Result<Vec<ColumnSummary>
 }
 
 /// Page through a table.
-///
-/// The table name cannot be a bound parameter, so it is validated against the
-/// live schema first and only then interpolated. A name that is not already a
-/// table in this database never reaches a query.
+/// The table name cannot be a bound parameter, so it is validated against the live schema first and only then interpolated. A name that is not already a table in this database never reaches a query.
 pub async fn browse(
     pool: &MySqlPool,
     table: &str,
@@ -217,13 +205,8 @@ fn render_value(row: &sqlx::mysql::MySqlRow, index: usize) -> Option<String> {
 
     let type_name = raw.type_info().name().to_ascii_uppercase();
 
-    // Numbers and times have a sensible text form; everything else is read as
-    // bytes and shown lossily, which is right for a browser and wrong for
-    // anything that needs the value back.
-    //
-    // Unsigned first. Every id and every revision in this schema is
-    // `BIGINT UNSIGNED`, which does not decode as `i64`, so trying signed first
-    // renders the most common column in the database as its type name.
+    // Numbers and times have a sensible text form; everything else is read as bytes and shown lossily, which is right for a browser and wrong for anything that needs the value back.
+    // Unsigned first. Every id and every revision in this schema is `BIGINT UNSIGNED`, which does not decode as `i64`, so trying signed first renders the most common column in the database as its type name.
     if let Ok(value) = row.try_get::<u64, _>(index) {
         return Some(value.to_string());
     }
@@ -250,16 +233,12 @@ fn render_value(row: &sqlx::mysql::MySqlRow, index: usize) -> Option<String> {
 }
 
 /// Whether a statement is a read.
-///
-/// A shape check, not a SQL parser, and not a security boundary. It exists so an
-/// operator cannot fat-finger a `DELETE` into the query box. The boundary is the
-/// grant the browser's database user holds.
+/// A shape check, not a SQL parser, and not a security boundary. It exists so an operator cannot fat-finger a `DELETE` into the query box. The boundary is the grant the browser's database user holds.
 pub fn is_read_only(sql: &str) -> Result<(), String> {
+    refuse_executable_comments(sql)?;
     let stripped = strip_comments(sql);
 
-    // Two statements in one string is how a read turns into a write. Split on
-    // semicolons that are actually separators: one inside a string literal is
-    // data, and refusing it would reject legitimate queries.
+    // Two statements in one string is how a read turns into a write. Split on semicolons that are actually separators: one inside a string literal is data, and refusing it would reject legitimate queries.
     let statements: Vec<&str> = split_statements(&stripped)
         .into_iter()
         .filter(|s| !s.trim().is_empty())
@@ -310,6 +289,7 @@ pub fn is_read_only(sql: &str) -> Result<(), String> {
 
 /// Validate the statements exposed by the opt-in operator write route.
 pub fn is_write_allowed(sql: &str) -> Result<(), String> {
+    refuse_executable_comments(sql)?;
     let stripped = strip_comments(sql);
     let statements: Vec<&str> = split_statements(&stripped)
         .into_iter()
@@ -359,8 +339,41 @@ pub fn is_write_allowed(sql: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Split on semicolons that separate statements, ignoring those inside string
-/// literals and quoted identifiers.
+fn refuse_executable_comments(sql: &str) -> Result<(), String> {
+    let bytes = sql.as_bytes();
+    let mut index = 0;
+    let mut quoted = None;
+    while index < bytes.len() {
+        if let Some(quote) = quoted {
+            if bytes[index] == b'\\' {
+                index = (index + 2).min(bytes.len());
+                continue;
+            }
+            if bytes[index] == quote {
+                quoted = None;
+            }
+            index += 1;
+            continue;
+        }
+
+        match bytes[index] {
+            b'\'' | b'"' | b'`' => quoted = Some(bytes[index]),
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                let marker = bytes.get(index + 2).copied();
+                let maria_marker =
+                    matches!(marker, Some(b'M' | b'm')) && bytes.get(index + 3) == Some(&b'!');
+                if marker == Some(b'!') || maria_marker {
+                    return Err("executable SQL comments are not allowed".to_owned());
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
+/// Split on semicolons that separate statements, ignoring those inside string literals and quoted identifiers.
 fn split_statements(sql: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0usize;
@@ -524,8 +537,7 @@ mod tests {
         assert!(is_read_only("SELECT 1; DROP TABLE aj_document").is_err());
     }
 
-    /// The interesting case: a comment hiding the semicolon that separates a
-    /// read from a write.
+    /// The interesting case: a comment hiding the semicolon that separates a read from a write.
     #[test]
     fn a_write_hidden_behind_a_comment_is_still_found() {
         assert!(is_read_only("SELECT 1 -- \n; DROP TABLE aj_document").is_err());
@@ -566,5 +578,31 @@ mod tests {
             "SELECT 1 \nFROM t"
         );
         assert_eq!(strip_comments("SELECT /* mid */ 1"), "SELECT   1");
+    }
+
+    #[test]
+    fn executable_comments_cannot_hide_policy_tokens() {
+        for sql in [
+            "DROP /*!50000 DATABASE */ cellar",
+            "DROP /*M!100000 DATABASE */ cellar",
+            "DROP /*m! DATABASE */ cellar",
+            "SELECT 1 /*!50000 INTO OUTFILE '/tmp/x' */",
+            "SELECT 1 /*M! FOR UPDATE */",
+        ] {
+            assert!(
+                is_read_only(sql).is_err(),
+                "{sql} must be refused as a read"
+            );
+            assert!(
+                is_write_allowed(sql).is_err(),
+                "{sql} must be refused as a write"
+            );
+        }
+    }
+
+    #[test]
+    fn executable_comment_markers_inside_literals_are_data() {
+        is_read_only("SELECT '/*!50000 DROP DATABASE cellar */'").unwrap();
+        is_read_only("SELECT '/*M! DROP DATABASE cellar */'").unwrap();
     }
 }

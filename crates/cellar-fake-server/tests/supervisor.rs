@@ -1,14 +1,6 @@
 //! End-to-end: the real supervisor, a real pseudo-terminal, a fake engine.
-//!
-//! These live here rather than in `cellar-runtime` because `CARGO_BIN_EXE_*` is
-//! only set for binaries in the same package, and pointing the supervisor at a
-//! path guessed from `target/` is the kind of test that passes locally and fails
-//! in CI.
-//!
-//! What they cover is the part unit tests cannot: that a command typed into a
-//! pty is read by a child that believes it has a terminal, that the log file and
-//! the console are both parsed into one event stream, and that a graceful stop
-//! reaches the engine's shutdown path instead of killing it.
+//! These live here rather than in `cellar-runtime` because `CARGO_BIN_EXE_*` is only set for binaries in the same package, and pointing the supervisor at a path guessed from `target/` is the kind of test that passes locally and fails in CI.
+//! What they cover is the part unit tests cannot: that a command typed into a pty is read by a child that believes it has a terminal, that the log file and the console are both parsed into one event stream, and that a graceful stop reaches the engine's shutdown path instead of killing it.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -117,6 +109,33 @@ async fn the_server_starts_becomes_ready_and_stops_cleanly() {
 }
 
 #[tokio::test]
+async fn the_supervisor_parses_an_independent_real_status_fixture() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(
+        dir.path().join("logs/sbox-server.log"),
+        &["--independent-status-fixture"],
+    );
+    let (supervisor, handle, control) = Supervisor::new(config);
+    let mut events = handle.subscribe();
+    let task = tokio::spawn(supervisor.run(control));
+
+    let status = wait_for(
+        &mut events,
+        Duration::from_secs(10),
+        |event| matches!(event, Event::Status(status) if status.max_players == 32),
+    )
+    .await;
+    let Event::Status(status) = status else {
+        unreachable!();
+    };
+    assert_eq!((status.players, status.max_players), (1, 32));
+    assert_eq!(status.uptime_seconds, 0);
+
+    handle.shutdown().await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+}
+
+#[tokio::test]
 async fn players_joining_and_leaving_reach_the_roster() {
     let dir = tempfile::tempdir().unwrap();
     let config = config(dir.path().join("logs/sbox-server.log"), &["--players", "2"]);
@@ -176,11 +195,7 @@ async fn a_console_command_returns_its_reply() {
     let elapsed = dispatched.elapsed();
     let text = reply.join("\n");
 
-    // The reply is bracketed, not timed. `ConsoleInput.OnEnter` echoes
-    // `> {command}` before dispatching and `RedrawInputLine` repaints the status
-    // block once the ConCmd returns, so the answer arrives as soon as the server
-    // is done. If this ever creeps up to REPLY_TIMEOUT the brackets have stopped
-    // being recognised and the backstop is silently doing the work.
+    // The reply is bracketed, not timed. `ConsoleInput.OnEnter` echoes `> {command}` before dispatching and `RedrawInputLine` repaints the status block once the ConCmd returns, so the answer arrives as soon as the server is done. If this ever creeps up to REPLY_TIMEOUT the brackets have stopped being recognised and the backstop is silently doing the work.
     assert!(
         elapsed < Duration::from_millis(1500),
         "the reply should be bracketed, not waited out; took {elapsed:?}"
@@ -189,11 +204,8 @@ async fn a_console_command_returns_its_reply() {
     assert!(text.contains("ui.menu.admin"), "reply was: {text}");
     assert!(text.contains("41 feature(s)"), "reply was: {text}");
 
-    // Two regressions, both found by running this against a live server rather
-    // than by reading the code.
-    //
-    // The console and the log file carry the same lines, so parsing both counted
-    // every line twice and the operator saw the feature list rendered twice.
+    // Two regressions, both found by running this against a live server rather than by reading the code.
+    // The console and the log file carry the same lines, so parsing both counted every line twice and the operator saw the feature list rendered twice.
     let repeats = reply
         .iter()
         .filter(|line| line.contains("41 feature(s)"))
@@ -203,8 +215,7 @@ async fn a_console_command_returns_its_reply() {
         "each line once, not once per channel: {reply:?}"
     );
 
-    // A pty echoes what is typed into it, so the command came back as the first
-    // line of its own reply.
+    // A pty echoes what is typed into it, so the command came back as the first line of its own reply.
     assert!(
         !reply.iter().any(|line| line.trim() == "applejack_features"),
         "the echoed command is not part of the reply: {reply:?}"
@@ -214,12 +225,72 @@ async fn a_console_command_returns_its_reply() {
     let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
 }
 
-/// The configuration round trip, end to end: read what the server is set to,
-/// write a change, and read it back.
-///
-/// The parsers are unit-tested against the formats read out of
-/// `FeatureDirector.cs` and `SettingDirector.cs`. This proves they also match
-/// what actually arrives through a pty, a log file and the reply window.
+#[tokio::test]
+async fn concurrent_console_commands_receive_their_own_replies_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(dir.path().join("logs/sbox-server.log"), &[]);
+
+    let (supervisor, handle, control) = Supervisor::new(config);
+    let mut events = handle.subscribe();
+    let task = tokio::spawn(supervisor.run(control));
+    wait_for(&mut events, Duration::from_secs(10), |event| {
+        matches!(event, Event::ServerReady { .. })
+    })
+    .await;
+
+    let first_handle = handle.clone();
+    let first = tokio::spawn(async move {
+        first_handle
+            .exec("delayed first 250", "discovery")
+            .await
+            .unwrap()
+    });
+    wait_for(&mut events, Duration::from_secs(5), |event| {
+        matches!(event, Event::CommandDispatched { command, .. } if command == "delayed first 250")
+    })
+    .await;
+    let second_handle = handle.clone();
+    let second = tokio::spawn(async move {
+        second_handle
+            .exec("delayed second 0", "operator")
+            .await
+            .unwrap()
+    });
+
+    let first = first.await.unwrap().join("\n");
+    let second = second.await.unwrap().join("\n");
+    assert!(first.contains("reply first"), "first reply was: {first}");
+    assert!(!first.contains("reply second"), "first reply was: {first}");
+    assert!(
+        second.contains("reply second"),
+        "second reply was: {second}"
+    );
+    assert!(
+        !second.contains("reply first"),
+        "second reply was: {second}"
+    );
+
+    let first_event = wait_for(&mut events, Duration::from_secs(5), |event| {
+        matches!(event, Event::CommandReplied { command, .. } if command == "delayed first 250")
+    })
+    .await;
+    let second_event = wait_for(&mut events, Duration::from_secs(5), |event| {
+        matches!(event, Event::CommandReplied { command, .. } if command == "delayed second 0")
+    })
+    .await;
+    assert!(
+        matches!(first_event, Event::CommandReplied { actor, ok: true, .. } if actor == "discovery")
+    );
+    assert!(
+        matches!(second_event, Event::CommandReplied { actor, ok: true, .. } if actor == "operator")
+    );
+
+    handle.shutdown().await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+}
+
+/// The configuration round trip, end to end: read what the server is set to, write a change, and read it back.
+/// The parsers are unit-tested against the formats read out of `FeatureDirector.cs` and `SettingDirector.cs`. This proves they also match what actually arrives through a pty, a log file and the reply window.
 #[tokio::test]
 async fn the_configuration_can_be_captured_changed_and_read_back() {
     use cellar_core::convar;
@@ -325,9 +396,7 @@ async fn the_configuration_can_be_captured_changed_and_read_back() {
     let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
 }
 
-/// After a stop the dashboard needs a reason, not an absence. The supervisor
-/// used to end its task here, taking the roster, the resource history and the
-/// restart button with it, and /api/status answered `"server": null`.
+/// After a stop the dashboard needs a reason, not an absence. The supervisor used to end its task here, taking the roster, the resource history and the restart button with it, and /api/status answered `"server": null`.
 #[tokio::test]
 async fn a_stopped_server_keeps_answering_and_says_how_it_ended() {
     let dir = tempfile::tempdir().unwrap();
@@ -375,8 +444,7 @@ async fn after_features(handle: &cellar_runtime::Handle) -> Vec<cellar_core::con
     cellar_core::convar::parse_features(&handle.exec("applejack_features", "test").await.unwrap())
 }
 
-/// A server that ignores `quit` must still be stopped, and the escalation must
-/// be reported rather than silent.
+/// A server that ignores `quit` must still be stopped, and the escalation must be reported rather than silent.
 #[tokio::test]
 async fn a_server_that_refuses_to_quit_is_killed_after_the_grace_period() {
     let dir = tempfile::tempdir().unwrap();
@@ -408,8 +476,7 @@ async fn a_server_that_refuses_to_quit_is_killed_after_the_grace_period() {
     let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
 }
 
-/// A server that never becomes ready must never report ready, however long it
-/// runs. This is what stops a rollout sending players at a server loading a map.
+/// A server that never becomes ready must never report ready, however long it runs. This is what stops a rollout sending players at a server loading a map.
 #[tokio::test]
 async fn a_hanging_server_never_reports_ready() {
     let dir = tempfile::tempdir().unwrap();
@@ -434,9 +501,7 @@ async fn a_hanging_server_never_reports_ready() {
     let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
 }
 
-/// Never reporting ready is correct and is not enough on its own: `Starting`
-/// forever looks exactly like a slow map load, and both observed causes are
-/// permanent. The state has to say so.
+/// Never reporting ready is correct and is not enough on its own: `Starting` forever looks exactly like a slow map load, and both observed causes are permanent. The state has to say so.
 #[tokio::test]
 async fn a_server_that_never_becomes_ready_stops_claiming_to_be_starting() {
     let dir = tempfile::tempdir().unwrap();
@@ -462,8 +527,7 @@ async fn a_server_that_never_becomes_ready_stops_claiming_to_be_starting() {
 
     let snapshot = handle.snapshot().await.unwrap();
     assert_eq!(snapshot.state, cellar_core::State::Unhealthy);
-    // Alive, untouched. The wrong ready pattern in front of a healthy server is
-    // one of the two causes, and killing it would be the wrong answer to it.
+    // Alive, untouched. The wrong ready pattern in front of a healthy server is one of the two causes, and killing it would be the wrong answer to it.
     assert!(snapshot.pid.is_some());
 
     handle.shutdown().await.unwrap();

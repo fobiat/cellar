@@ -1,9 +1,5 @@
 //! Cellar's own record: sessions, players, events, console audit.
-//!
-//! Separate from the bridge's tables by prefix and by purpose. These are
-//! observations, and losing them costs history rather than gameplay, so every
-//! write here is best-effort at the call site: an operations insert must never
-//! be the reason a server fails to start.
+//! Separate from the bridge's tables by prefix and by purpose. These are observations, and losing them costs history rather than gameplay, so every write here is best-effort at the call site: an operations insert must never be the reason a server fails to start.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -57,9 +53,7 @@ pub async fn end_session(
     .execute(pool)
     .await?;
 
-    // A session that ends with players still listed as connected would leave
-    // rows open forever, and every "who was on at the time" query would then
-    // include them. Close them with the session that owned them.
+    // A session that ends with players still listed as connected would leave rows open forever, and every "who was on at the time" query would then include them. Close them with the session that owned them.
     sqlx::query(
         "UPDATE srv_player_session
          SET left_at = CURRENT_TIMESTAMP(3), leave_reason = 'server_stopped'
@@ -114,8 +108,7 @@ pub async fn player_left(
 ) -> Result<(), StoreError> {
     let mut tx = pool.begin().await?;
 
-    // Only the most recent open row: a reconnect inside one server session
-    // leaves an older row that must not be closed twice.
+    // Only the most recent open row: a reconnect inside one server session leaves an older row that must not be closed twice.
     let row = sqlx::query(
         "SELECT id, TIMESTAMPDIFF(SECOND, joined_at, CURRENT_TIMESTAMP(3)) AS seconds
          FROM srv_player_session
@@ -210,11 +203,7 @@ pub async fn record_command(
 }
 
 /// One thing that happened, from either the audit or the observation table.
-///
-/// A single row type for both because an operator asking "what happened at
-/// 21:04" does not care which table it landed in, and the two are only
-/// meaningful next to each other: a crash three seconds after a command is the
-/// pair that explains itself.
+/// A single row type for both because an operator asking "what happened at 21:04" does not care which table it landed in, and the two are only meaningful next to each other: a crash three seconds after a command is the pair that explains itself.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivityEntry {
     pub at: DateTime<Utc>,
@@ -232,8 +221,7 @@ pub struct ActivityEntry {
     #[serde(with = "cellar_core::event::steam_id_wire::option")]
     pub steam_id: Option<u64>,
     pub session_id: Option<u64>,
-    /// Which supervised server. Absent for a row whose session predates scopes
-    /// or was written without one.
+    /// Which supervised server. Absent for a row whose session predates scopes or was written without one.
     pub scope: Option<String>,
 }
 
@@ -252,12 +240,7 @@ pub struct ActivityQuery {
 }
 
 /// The merged audit and observation timeline, newest first.
-///
-/// Two queries merged in Rust rather than a SQL `UNION`: the two tables share
-/// almost no columns, so a union needs six `NULL AS` casts per side, and the
-/// version that reads clearly is the one that will still be correct after
-/// somebody adds a column. Each side is limited before the merge and the merge
-/// is truncated, which is exact because both sides arrive newest-first.
+/// Two queries merged in Rust rather than a SQL `UNION`: the two tables share almost no columns, so a union needs six `NULL AS` casts per side, and the version that reads clearly is the one that will still be correct after somebody adds a column. Each side is limited before the merge and the merge is truncated, which is exact because both sides arrive newest-first.
 pub async fn activity(
     pool: &MySqlPool,
     query: &ActivityQuery,
@@ -273,10 +256,7 @@ pub async fn activity(
     };
 
     if wants("operator") {
-        // A LEFT JOIN, not an inner one. `session_id` is nullable on both
-        // tables, and an inner join would silently drop every command run
-        // while no server was up, which is exactly when an operator is most
-        // likely to be looking.
+        // A LEFT JOIN, not an inner one. `session_id` is nullable on both tables, and an inner join would silently drop every command run while no server was up, which is exactly when an operator is most likely to be looking.
         let rows = sqlx::query(
             "SELECT c.at, c.actor, c.command, c.reply, c.ok, c.session_id, s.scope
              FROM srv_command c
@@ -329,16 +309,9 @@ pub async fn activity(
         .await?;
 
         for row in rows {
-            // Read as bytes, not as `String`. MariaDB reports a JSON column as
-            // BLOB over the wire, so decoding it straight to `Option<String>`
-            // is a hard `ColumnDecode` error rather than a wrong value. It went
-            // unnoticed at first because every payload written before today was
-            // NULL, which decodes fine either way.
+            // Read as bytes, not as `String`. MariaDB reports a JSON column as BLOB over the wire, so decoding it straight to `Option<String>` is a hard `ColumnDecode` error rather than a wrong value. It went unnoticed at first because every payload written before today was NULL, which decodes fine either way.
             let payload: Option<Vec<u8>> = row.try_get("payload")?;
-            // The recorder writes a plain string into that JSON column, so the
-            // stored bytes are `"pid 4 ..."` with the quotes. Unwrap a JSON
-            // string back to its text and leave anything else as written, so
-            // older rows and any future structured payload still read.
+            // The recorder writes a plain string into that JSON column, so the stored bytes are `"pid 4 ..."` with the quotes. Unwrap a JSON string back to its text and leave anything else as written, so older rows and any future structured payload still read.
             let detail = payload
                 .map(|raw| {
                     let raw = String::from_utf8_lossy(&raw).into_owned();
@@ -364,9 +337,7 @@ pub async fn activity(
         }
     }
 
-    // Filtered here rather than in SQL because the two tables put the operator's
-    // words in different columns, and one `LIKE` per column per table is four
-    // clauses that have to stay in step with the row type.
+    // Filtered here rather than in SQL because the two tables put the operator's words in different columns, and one `LIKE` per column per table is four clauses that have to stay in step with the row type.
     if let Some(needle) = query.text.as_deref().filter(|text| !text.trim().is_empty()) {
         let needle = needle.trim().to_lowercase();
         entries.retain(|entry| {
@@ -441,13 +412,7 @@ pub async fn prune_events(pool: &MySqlPool, days: u32) -> Result<u64, StoreError
 }
 
 /// The tables Cellar writes to, and which of them are absent.
-///
-/// Every write in this module is best-effort at the call site, which is right:
-/// an operations insert must never stop a server starting. The cost is that a
-/// database with none of these tables looks exactly like a quiet one, from the
-/// dashboard and from the CLI both, while a warning per line scrolls past in
-/// the log. Naming the absence is the difference between "nobody has played
-/// here" and "nothing has ever been recorded".
+/// Every write in this module is best-effort at the call site, which is right: an operations insert must never stop a server starting. The cost is that a database with none of these tables looks exactly like a quiet one, from the dashboard and from the CLI both, while a warning per line scrolls past in the log. Naming the absence is the difference between "nobody has played here" and "nothing has ever been recorded".
 pub async fn missing_tables(pool: &MySqlPool) -> Result<Vec<String>, StoreError> {
     const WRITTEN: [&str; 5] = [
         "srv_session",

@@ -1,8 +1,5 @@
 //! The server's lifecycle, and when to restart it.
-//!
-//! Kept pure so the interesting cases (a crash loop, a server that exits zero
-//! on its own, a stop the operator asked for) are unit tests rather than things
-//! discovered in production at 3am.
+//! Kept pure so the interesting cases (a crash loop, a server that exits zero on its own, a stop the operator asked for) are unit tests rather than things discovered in production at 3am.
 
 use std::time::Duration;
 
@@ -19,12 +16,7 @@ pub enum State {
     /// Readiness seen. Accepting players.
     Running,
     /// Process still up, readiness never arrived within the start timeout.
-    ///
-    /// Distinct from `Starting` because the two look identical and only one of
-    /// them is going to resolve. Distinct from `CrashLooping` because nothing
-    /// has crashed: the process is alive, the ports may well be bound, and the
-    /// cause may be nothing worse than a `ready_pattern` this gamemode never
-    /// emits. Not ready, so a readiness probe still refuses it.
+    /// Distinct from `Starting` because the two look identical and only one of them is going to resolve. Distinct from `CrashLooping` because nothing has crashed: the process is alive, the ports may well be bound, and the cause may be nothing worse than a `ready_pattern` this gamemode never emits. Not ready, so a readiness probe still refuses it.
     Unhealthy,
     /// A graceful stop is in flight: `quit` sent, waiting for exit.
     Stopping,
@@ -79,11 +71,7 @@ pub enum RestartPolicy {
 }
 
 /// Exponential backoff with a ceiling, plus crash-loop detection.
-///
-/// The window matters more than the count. A server that has restarted twenty
-/// times over a month is fine; one that has restarted five times in two minutes
-/// is not going to fix itself, and continuing to restart it hides the fault and
-/// burns the Steam master-list registration.
+/// The window matters more than the count. A server that has restarted twenty times over a month is fine; one that has restarted five times in two minutes is not going to fix itself, and continuing to restart it hides the fault and burns the Steam master-list registration.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BackoffPolicy {
     #[serde(with = "humantime_seconds")]
@@ -108,15 +96,13 @@ impl Default for BackoffPolicy {
             multiplier: 2.0,
             crash_loop_threshold: 5,
             window: Duration::from_secs(300),
-            // A dedicated server that survived a minute got past map load and
-            // package compilation, which is where the repeatable failures are.
+            // A dedicated server that survived a minute got past map load and package compilation, which is where the repeatable failures are.
             healthy_after: Duration::from_secs(60),
         }
     }
 }
 
-/// Serde helper: durations in a config file read better as whole seconds than
-/// as a `{ secs, nanos }` table.
+/// Serde helper: durations in a config file read better as whole seconds than as a `{ secs, nanos }` table.
 mod humantime_seconds {
     use std::time::Duration;
 
@@ -168,9 +154,7 @@ impl RestartTracker {
     }
 
     /// Decide what to do about an exit.
-    ///
-    /// `now_seconds` is monotonic seconds since Cellar started, not wall clock:
-    /// a clock step must not open or close a crash-loop window.
+    /// `now_seconds` is monotonic seconds since Cellar started, not wall clock: a clock step must not open or close a crash-loop window.
     pub fn on_exit(
         &mut self,
         exit_code: Option<i32>,
@@ -412,8 +396,7 @@ mod tests {
         }
     }
 
-    /// The point of the state: it says the process is there and not serving.
-    /// Reading it as "gone" would be as wrong as reading it as "starting".
+    /// The point of the state: it says the process is there and not serving. Reading it as "gone" would be as wrong as reading it as "starting".
     #[test]
     fn an_unhealthy_server_is_still_a_running_process() {
         assert!(State::Unhealthy.has_process());

@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-#
-# Documentation gate. Two things a reader notices immediately and a writer never
-# does: a link that 404s, and an anchor that silently scrolls nowhere.
-#
-# A rule with no enforcer is a wish, so this runs in CI beside the cargo gate.
+# Documentation gate for links, anchors, and prohibited prose.
 
 set -uo pipefail
 
@@ -45,12 +41,7 @@ check_links() {
     done
 }
 
-# House style: no em dashes anywhere, in prose or in code comments.
-#
-# The character is built from its bytes rather than written literally, so this
-# file does not match its own check. Not '\u2014': printf only expands that in
-# a shell whose builtin supports it, and Git Bash emits the escape text instead,
-# so the check matched this very line and never looked for an em dash at all.
+# Build the prohibited character from bytes so this file does not match itself.
 check_em_dashes() {
     local hits em_dash
     em_dash=$(printf '\xe2\x80\x94')
@@ -68,6 +59,7 @@ check_em_dashes() {
 
 check_links
 check_em_dashes
+./scripts/check-comments.sh || bad=$((bad + 1))
 
 if [ "$bad" -ne 0 ]; then
     echo
@@ -75,4 +67,4 @@ if [ "$bad" -ne 0 ]; then
     exit 1
 fi
 
-echo "documentation: links and anchors resolve, no em dashes"
+echo "documentation: links, anchors, prose, and comment budget pass"

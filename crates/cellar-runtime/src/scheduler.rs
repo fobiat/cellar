@@ -1,15 +1,6 @@
 //! Every recurring job in one register, so an operator can see them.
-//!
-//! Cellar had five loops that each slept and did a thing, spawned from
-//! `runner.rs` and invisible from anywhere else. Nothing said when a backup
-//! last ran, whether it worked, or when the next one is due, and nothing could
-//! ask for one now. Worst of it: `database.event_retention_days` was
-//! configured and no loop existed at all, so the setting did nothing.
-//!
-//! Two of the five loops are deliberately **not** here. The supervisor's tail
-//! tick and the MariaDB supervisor's are a state machine's clock inside a
-//! `select!`, not jobs: they have no result to report and running one "now"
-//! means nothing.
+//! Cellar had five loops that each slept and did a thing, spawned from `runner.rs` and invisible from anywhere else. Nothing said when a backup last ran, whether it worked, or when the next one is due, and nothing could ask for one now. Worst of it: `database.event_retention_days` was configured and no loop existed at all, so the setting did nothing.
+//! Two of the five loops are deliberately **not** here. The supervisor's tail tick and the MariaDB supervisor's are a state machine's clock inside a `select!`, not jobs: they have no result to report and running one "now" means nothing.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -33,9 +24,7 @@ pub struct Spec {
     /// One line saying what the job does, shown beside it.
     pub description: String,
     pub interval: Duration,
-    /// Whether to run once at startup rather than waiting out the first
-    /// interval. True for the cheap read-only checks, false for anything that
-    /// writes: a Cellar restarted in a loop must not take a backup each time.
+    /// Whether to run once at startup rather than waiting out the first interval. True for the cheap read-only checks, false for anything that writes: a Cellar restarted in a loop must not take a backup each time.
     pub at_startup: bool,
 }
 
@@ -69,18 +58,13 @@ struct Job {
     spec: Spec,
     work: Work,
     history: Mutex<History>,
-    /// Notified by "run now". The loop selects on it and its sleep, so an
-    /// asked-for run also resets the timer: two backups a second apart because
-    /// somebody pressed the button just before the interval elapsed is not what
-    /// anybody means by "run now".
+    /// Notified by "run now". The loop selects on it and its sleep, so an asked-for run also resets the timer: two backups a second apart because somebody pressed the button just before the interval elapsed is not what anybody means by "run now".
     wake: tokio::sync::Notify,
 }
 
 impl Job {
     /// When the next automatic run is due.
-    ///
-    /// Measured from the last run rather than from a fixed schedule, which is
-    /// what makes "run now" push the next one out by a full interval.
+    /// Measured from the last run rather than from a fixed schedule, which is what makes "run now" push the next one out by a full interval.
     fn next_run(&self, history: &History) -> Option<DateTime<Utc>> {
         let last = history.last_run?;
         chrono::Duration::from_std(self.spec.interval)
@@ -89,9 +73,7 @@ impl Job {
     }
 
     fn status(&self) -> Status {
-        // A poisoned lock here would mean a panic inside `status` or `record`,
-        // neither of which does anything that can panic. Recovering the guard
-        // is still better than taking the whole web surface down with it.
+        // A poisoned lock here would mean a panic inside `status` or `record`, neither of which does anything that can panic. Recovering the guard is still better than taking the whole web surface down with it.
         let history = self.history.lock().unwrap_or_else(|held| held.into_inner());
         Status {
             name: self.spec.name.clone(),
@@ -145,8 +127,7 @@ impl Scheduler {
         Self::default()
     }
 
-    /// Add a job. The closure is called on every run, so it owns whatever it
-    /// needs rather than borrowing from the caller's stack.
+    /// Add a job. The closure is called on every run, so it owns whatever it needs rather than borrowing from the caller's stack.
     pub fn register<F, Fut>(&mut self, spec: Spec, work: F)
     where
         F: Fn() -> Fut + Send + Sync + 'static,
@@ -188,9 +169,7 @@ impl Scheduler {
     }
 
     /// Ask for a run now. Returns false when no job goes by that name.
-    ///
-    /// It nudges the job's own loop rather than running the work here, so a job
-    /// cannot be running twice at once however many operators press the button.
+    /// It nudges the job's own loop rather than running the work here, so a job cannot be running twice at once however many operators press the button.
     pub fn run_now(&self, name: &str) -> bool {
         let Some(job) = self.jobs.iter().find(|job| job.spec.name == name) else {
             return false;
@@ -222,9 +201,7 @@ mod tests {
 
         let status = &scheduler.statuses()[0];
         assert_eq!(status.last_run, None);
-        // Not "now plus an interval". The job has not run, so there is nothing
-        // to measure from, and inventing a time would be a schedule the
-        // scheduler does not actually keep.
+        // Not "now plus an interval". The job has not run, so there is nothing to measure from, and inventing a time would be a schedule the scheduler does not actually keep.
         assert_eq!(status.next_run, None);
         assert_eq!(status.last_ok, None);
         assert_eq!(status.runs, 0);
@@ -243,9 +220,7 @@ mod tests {
         assert_eq!(status.failures, 1);
         assert_eq!(status.runs, 1);
         assert_eq!(status.last_detail, "the dump directory is read-only");
-        // A failed run is still a run, so the next one is an interval away
-        // rather than immediate. A job that fails instantly and retries
-        // instantly is a busy loop against whatever is already broken.
+        // A failed run is still a run, so the next one is an interval away rather than immediate. A job that fails instantly and retries instantly is a busy loop against whatever is already broken.
         assert!(status.next_run.is_some());
     }
 

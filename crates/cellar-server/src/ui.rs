@@ -1,13 +1,6 @@
 //! The web UI, assembled at compile time.
-//!
-//! Three files embedded in the binary and stitched together once: a server
-//! manager that needs a node toolchain to render its own status page has a
-//! second thing to keep working, and it is always the one that breaks during an
-//! incident.
-//!
-//! The palette is not written into the stylesheet. It is generated from
-//! `cellar_core::theme`, which states the Applejack tokens once, so a brand
-//! change upstream is one edit rather than a search through CSS.
+//! Three files embedded in the binary and stitched together once: a server manager that needs a node toolchain to render its own status page has a second thing to keep working, and it is always the one that breaks during an incident.
+//! The palette is not written into the stylesheet. It is generated from `cellar_core::theme`, which states the Applejack tokens once, so a brand change upstream is one edit rather than a search through CSS.
 
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -62,8 +55,7 @@ async fn index(State(state): State<Arc<AppState>>) -> Response {
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            // Everything is inline and same-origin, so the policy can be strict.
-            // `unsafe-inline` is needed only because the page is one file.
+            // Everything is inline and same-origin, so the policy can be strict. `unsafe-inline` is needed only because the page is one file.
             (
                 header::CONTENT_SECURITY_POLICY,
                 "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; \
@@ -215,8 +207,7 @@ async fn login(State(state): State<Arc<AppState>>, Json(login): Json<Login>) -> 
 
     if !verified {
         attempt.failed();
-        // No detail: "wrong password" and "no operator configured" must look the
-        // same from outside.
+        // No detail: "wrong password" and "no operator configured" must look the same from outside.
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "ok": false })),
@@ -461,8 +452,7 @@ mod tests {
     #[test]
     fn the_palette_reaches_the_page_from_the_theme_module() {
         let page = page();
-        // Applejack is blue by standing rule; the page must be serving that blue
-        // and not a hex somebody typed into the stylesheet.
+        // Applejack is blue by standing rule; the page must be serving that blue and not a hex somebody typed into the stylesheet.
         assert!(page.contains("--aj-azure: #2F8FE0"));
         assert!(page.contains("--aj-russet: #DA5B4D"));
         assert!(page.contains("--aj-orchard: #6FA862"));
@@ -470,9 +460,7 @@ mod tests {
 
     #[test]
     fn no_colour_is_hardcoded_in_the_stylesheet() {
-        // Every colour must arrive as a custom property. A literal hex here is a
-        // second copy of the palette, and BRANDING.md is explicit that a second
-        // copy is one that goes stale.
+        // Every colour must arrive as a custom property. A literal hex here is a second copy of the palette, and BRANDING.md is explicit that a second copy is one that goes stale.
         let offenders: Vec<&str> = CSS
             .lines()
             .filter(|line| line.contains('#') && !line.trim_start().starts_with('*'))
@@ -487,11 +475,7 @@ mod tests {
     }
 
     /// Every control an operator types into has to say what it is for.
-    ///
-    /// There were zero `<label>` elements. Every input relied on a
-    /// `placeholder`, which disappears on focus, so tabbing into the allowlist
-    /// box gave an empty field with no clue what belonged in it, and no
-    /// accessible name at all.
+    /// There were zero `<label>` elements. Every input relied on a `placeholder`, which disappears on focus, so tabbing into the allowlist box gave an empty field with no clue what belonged in it, and no accessible name at all.
     #[test]
     fn every_control_has_an_accessible_name() {
         let named: Vec<&str> = HTML
@@ -499,8 +483,7 @@ mod tests {
             .filter(|tag| {
                 tag.starts_with("input") || tag.starts_with("select") || tag.starts_with("textarea")
             })
-            // A submit button and a hidden field are not things anybody types
-            // a value into looking for a hint.
+            // A submit button and a hidden field are not things anybody types a value into looking for a hint.
             .filter(|tag| !tag.contains("type=\"file\"") || tag.contains("id="))
             .filter(|tag| !tag.contains("aria-label="))
             .collect();
@@ -523,10 +506,7 @@ mod tests {
     }
 
     /// The tab bar has to be a tab bar to anything that is not a mouse.
-    ///
-    /// `aria-selected` was set on bare `<button>` elements, which means nothing
-    /// without the roles around it, and there was no `tabindex` anywhere in the
-    /// page, so eleven tabs were eleven separate stops before any content.
+    /// `aria-selected` was set on bare `<button>` elements, which means nothing without the roles around it, and there was no `tabindex` anywhere in the page, so eleven tabs were eleven separate stops before any content.
     #[test]
     fn the_tab_bar_follows_the_tabs_pattern() {
         assert!(HTML.contains(r#"<nav class="tabs" role="tablist""#));
@@ -571,10 +551,7 @@ mod tests {
     }
 
     /// A status must never be carried by colour alone.
-    ///
-    /// Every lamp was the same filled circle in a different hue, so in
-    /// greyscale, or to a red-green colour deficiency, "running" and "crashed"
-    /// were the same picture.
+    /// Every lamp was the same filled circle in a different hue, so in greyscale, or to a red-green colour deficiency, "running" and "crashed" were the same picture.
     #[test]
     fn no_status_is_carried_by_colour_alone() {
         for state in ["up", "down", "wait", "warn", "live"] {
@@ -606,10 +583,7 @@ mod tests {
     }
 
     /// A destructive action gets a dialog that can name what it is about.
-    ///
-    /// `window.confirm` cannot say which server, cannot count who is about to
-    /// be disconnected, and can be suppressed permanently by the browser, which
-    /// turns "really stop the production server?" into a silent yes.
+    /// `window.confirm` cannot say which server, cannot count who is about to be disconnected, and can be suppressed permanently by the browser, which turns "really stop the production server?" into a silent yes.
     #[test]
     fn destructive_actions_do_not_use_window_confirm() {
         let offenders: Vec<&str> = JS
@@ -629,9 +603,7 @@ mod tests {
             "the dialog is in the markup and never opened"
         );
 
-        // Measured, not assumed: the `close` event does not fire in every
-        // engine that ships <dialog>, so a confirmation that resolves from it
-        // hangs and the confirmed action silently never runs.
+        // Measured, not assumed: the `close` event does not fire in every engine that ships <dialog>, so a confirmation that resolves from it hangs and the confirmed action silently never runs.
         assert!(
             !JS.contains("dialog.onclose") && !JS.contains(r#"addEventListener("close""#),
             "the confirmation must not depend on the dialog's close event"
@@ -649,9 +621,7 @@ mod tests {
                 "killing Cellar and its managed processes",
             ),
             ("method: \"DELETE\"", "deleting a document"),
-            // Written in Phase 1 with no button. A restore is looked for
-            // under pressure, and a command nobody has run is a command
-            // nobody finds at 3am.
+            // Written in Phase 1 with no button. A restore is looked for under pressure, and a command nobody has run is a command nobody finds at 3am.
             ("/api/db/restore", "restoring a backup"),
             ("/api/db/backups", "listing the backups"),
         ] {
@@ -659,8 +629,7 @@ mod tests {
         }
     }
 
-    /// The one control on the page that skips every shutdown step. It must not
-    /// be reachable with a single click, and it must not read as instance work.
+    /// The one control on the page that skips every shutdown step. It must not be reachable with a single click, and it must not read as instance work.
     #[test]
     fn killing_cellar_is_typed_out_and_never_scoped_to_an_instance() {
         assert!(HTML.contains(r#"id="kill-cellar""#));
@@ -668,8 +637,7 @@ mod tests {
             JS.contains(r#"typed: "KILL ALL""#),
             "the kill has to be typed out rather than clicked"
         );
-        // `?instance=` on this route would read as killing one supervised
-        // server, and the route is process-wide.
+        // `?instance=` on this route would read as killing one supervised server, and the route is process-wide.
         assert!(
             !JS.contains(r#"forInstance("/api/control/kill")"#),
             "the kill route is process-wide and takes no instance"
@@ -677,15 +645,11 @@ mod tests {
     }
 
     /// A route that used to exist has to land where its screen went.
-    ///
-    /// A bookmark, a PWA shortcut and a link in a runbook all outlive a
-    /// restructure, and dropping one on the default tab teaches nothing.
+    /// A bookmark, a PWA shortcut and a link in a runbook all outlive a restructure, and dropping one on the default tab teaches nothing.
     #[test]
     fn a_tab_that_moved_still_resolves() {
         assert!(JS.contains("MOVED_TABS"));
-        // Precinct's commands came from the gamemode profile once profiles
-        // existed, and their output has always landed in the console, so the
-        // tab had nothing left that was its own.
+        // Precinct's commands came from the gamemode profile once profiles existed, and their output has always landed in the console, so the tab had nothing left that was its own.
         assert!(JS.contains(r#"precinct: "dispatch""#));
         assert!(
             !HTML.contains(r#"data-tab="precinct""#),
@@ -696,8 +660,7 @@ mod tests {
             "the command palette went with the tab instead of moving"
         );
 
-        // Every tab the grouping dissolved, and where it went. A name that is
-        // gone from the nav and absent from this table is a dead bookmark.
+        // Every tab the grouping dissolved, and where it went. A name that is gone from the nav and absent from this table is a dead bookmark.
         for (gone, went) in [
             ("roster", "players/connected"),
             ("access", "players/access"),
@@ -714,19 +677,13 @@ mod tests {
             );
         }
 
-        // `players` is both a live tab and a moved one, because a canonical
-        // route always carries its sub-tab: a bare `#/players` can only be an
-        // old link, and the old one meant the registry.
+        // `players` is both a live tab and a moved one, because a canonical route always carries its sub-tab: a bare `#/players` can only be an old link, and the old one meant the registry.
         assert!(JS.contains(r#"players: "players/history""#));
         assert!(HTML.contains(r#"data-tab="players""#));
     }
 
     /// A sub-tab is a tab, and gets the same pattern.
-    ///
-    /// Twelve tabs became nine by folding Roster, Registry and Access into
-    /// Players and Configs, the convar tables and the build controls into
-    /// Config. A second level that is not a real tablist is a second level a
-    /// keyboard cannot reach.
+    /// Twelve tabs became nine by folding Roster, Registry and Access into Players and Configs, the convar tables and the build controls into Config. A second level that is not a real tablist is a second level a keyboard cannot reach.
     #[test]
     fn every_sub_tab_is_a_real_tab() {
         let subs: Vec<&str> = HTML
@@ -767,12 +724,7 @@ mod tests {
     }
 
     /// The UI half of the AppleJack Framework coupling, pinned.
-    ///
-    /// The Precinct tab was thirteen `data-command="applejack_*"` buttons in
-    /// markup, so every other gamemode's operator got a panel of commands their
-    /// server would reject. They come from `[[profile.command]]` now, and the
-    /// only `applejack` left anywhere in the assets should be prose explaining
-    /// that it is an example.
+    /// The Precinct tab was thirteen `data-command="applejack_*"` buttons in markup, so every other gamemode's operator got a panel of commands their server would reject. They come from `[[profile.command]]` now, and the only `applejack` left anywhere in the assets should be prose explaining that it is an example.
     #[test]
     fn the_page_hardcodes_no_gamemode_commands() {
         let offenders: Vec<&str> = HTML
@@ -787,12 +739,8 @@ mod tests {
         );
     }
 
-    /// Every route that is about one supervised server must carry the
-    /// instance, or a two-server dashboard silently answers about the primary.
-    ///
-    /// The check is that no bare literal survives, rather than that
-    /// `forInstance` is called some number of times: a new call site added
-    /// later fails this without anyone having to remember the rule.
+    /// Every route that is about one supervised server must carry the instance, or a two-server dashboard silently answers about the primary.
+    /// The check is that no bare literal survives, rather than that `forInstance` is called some number of times: a new call site added later fails this without anyone having to remember the rule.
     #[test]
     fn every_instance_scoped_fetch_names_its_instance() {
         const SCOPED: [&str; 8] = [
@@ -810,9 +758,7 @@ mod tests {
             .lines()
             .map(str::trim)
             .filter(|line| line.contains("fetch(") && !line.contains("forInstance("))
-            // `control/exit` and `control/kill` are the two control actions
-            // about the process rather than about a server: both handlers
-            // ignore the target. Naming one instance would be a lie.
+            // `control/exit` and `control/kill` are the two control actions about the process rather than about a server: both handlers ignore the target. Naming one instance would be a lie.
             .filter(|line| !line.contains("/api/control/exit"))
             .filter(|line| !line.contains("/api/control/kill"))
             .filter(|line| SCOPED.iter().any(|route| line.contains(route)))
@@ -825,9 +771,7 @@ mod tests {
         );
     }
 
-    /// Tab state was a JS variable, which is why both PWA manifest shortcuts
-    /// landed on the same screen and a reload lost the tab. It is the location
-    /// hash now, and the manifest has to point at hashes for that to help.
+    /// Tab state was a JS variable, which is why both PWA manifest shortcuts landed on the same screen and a reload lost the tab. It is the location hash now, and the manifest has to point at hashes for that to help.
     #[test]
     fn the_manifest_shortcuts_are_routes_rather_than_the_same_screen_twice() {
         let parsed: serde_json::Value =
@@ -864,25 +808,17 @@ mod tests {
 
     #[test]
     fn the_script_never_assigns_untrusted_text_as_markup() {
-        // A player's display name reaches this page through the log. Rendering
-        // it as HTML would be stored cross-site scripting with a Steam profile
-        // as the input field.
+        // A player's display name reaches this page through the log. Rendering it as HTML would be stored cross-site scripting with a Steam profile as the input field.
         assert!(!JS.contains("innerHTML"));
         assert!(!JS.contains("outerHTML"));
         assert!(!JS.contains("insertAdjacentHTML"));
         assert!(!JS.contains("document.write"));
     }
 
-    /// The browser drops any event kind it does not name, silently. That is how
-    /// the whole shutdown transcript, which `graceful_stop` publishes as
-    /// `Unparsed`, went unrendered: a clean stop could not be watched from the
-    /// web UI at all.
+    /// The browser drops any event kind it does not name, silently. That is how the whole shutdown transcript, which `graceful_stop` publishes as `Unparsed`, went unrendered: a clean stop could not be watched from the web UI at all.
     #[test]
     fn the_script_handles_every_event_kind_the_server_can_send() {
-        // Read from `Event::kind` rather than listed here. A hand-written list
-        // can only catch a variant somebody remembered to add to it, which is
-        // exactly how `command_dispatched` and `command_replied` were broadcast
-        // and dropped by the browser for months while this test passed.
+        // Read from `Event::kind` rather than listed here. A hand-written list can only catch a variant somebody remembered to add to it, which is exactly how `command_dispatched` and `command_replied` were broadcast and dropped by the browser for months while this test passed.
         const EVENT_SOURCE: &str = include_str!("../../cellar-core/src/event.rs");
 
         let kinds: Vec<&str> = EVENT_SOURCE
@@ -894,8 +830,7 @@ mod tests {
         assert!(kinds.len() >= 12, "only found {kinds:?}");
 
         for kind in kinds {
-            // The two high-frequency samples. A console that printed a resource
-            // sample twice a second would be a console nobody could read.
+            // The two high-frequency samples. A console that printed a resource sample twice a second would be a console nobody could read.
             if matches!(kind, "status" | "resources") {
                 continue;
             }
@@ -905,8 +840,7 @@ mod tests {
             );
         }
 
-        // Synthesised by ws.rs rather than being `Event` variants, so they are
-        // not in the enum and still have to be handled.
+        // Synthesised by ws.rs rather than being `Event` variants, so they are not in the enum and still have to be handled.
         for kind in ["notice", "lagged"] {
             assert!(
                 JS.contains(&format!("case \"{kind}\":")),
@@ -916,10 +850,7 @@ mod tests {
     }
 
     /// Every verdict the diagnostics crate can return has to render as a word.
-    ///
-    /// Read from the enum rather than listed here, for the same reason the
-    /// event-kind test above is: a hand-written list only catches the variants
-    /// somebody remembered to add to it.
+    /// Read from the enum rather than listed here, for the same reason the event-kind test above is: a hand-written list only catches the variants somebody remembered to add to it.
     #[test]
     fn the_script_renders_every_diagnostic_outcome() {
         const SOURCE: &str = include_str!("../../cellar-diagnostics/src/lib.rs");
@@ -948,11 +879,7 @@ mod tests {
     }
 
     /// The doctor checks exist once.
-    ///
-    /// They used to live in `cellar-cli` and print as they went, which put the
-    /// dashboard one crate boundary away from reaching them. Reimplementing
-    /// them in the server was the option to refuse: a second copy of a check is
-    /// a second copy that drifts.
+    /// They used to live in `cellar-cli` and print as they went, which put the dashboard one crate boundary away from reaching them. Reimplementing them in the server was the option to refuse: a second copy of a check is a second copy that drifts.
     #[test]
     fn the_server_does_not_reimplement_the_doctor_checks() {
         const API: &str = include_str!("api.rs");
@@ -974,16 +901,10 @@ mod tests {
     }
 
     /// One arriving line must cost one DOM node, not a full teardown.
-    ///
-    /// `appendLine` used to call `renderConsole`, which called
-    /// `replaceChildren` and rebuilt up to 1500 elements per line. That is
-    /// O(n) work per line, and it is what "slow mode" existed to hide.
+    /// `appendLine` used to call `renderConsole`, which called `replaceChildren` and rebuilt up to 1500 elements per line. That is O(n) work per line, and it is what "slow mode" existed to hide.
     #[test]
     fn an_arriving_console_line_does_not_redraw_the_whole_console() {
-        // Bounded at the function's own closing brace, which in this file is
-        // the first `}` in column zero. Splitting on the next `function`
-        // keyword ran past the end into `renderConsole`, which legitimately
-        // does redraw everything.
+        // Bounded at the function's own closing brace, which in this file is the first `}` in column zero. Splitting on the next `function` keyword ran past the end into `renderConsole`, which legitimately does redraw everything.
         let js = JS.replace("\r\n", "\n");
         let append = js
             .split_once("function appendLine(")
@@ -1012,9 +933,7 @@ mod tests {
         );
     }
 
-    /// The categorisation rule lives in the gamemode profile, in Rust. A second
-    /// copy in JavaScript had already drifted: it still tested for `applejack`
-    /// after the Rust side started asking the profile.
+    /// The categorisation rule lives in the gamemode profile, in Rust. A second copy in JavaScript had already drifted: it still tested for `applejack` after the Rust side started asking the profile.
     #[test]
     fn the_browser_does_not_reimplement_log_categorisation() {
         assert!(
@@ -1024,12 +943,7 @@ mod tests {
     }
 
     /// A command must appear once, not twice.
-    ///
-    /// `command_dispatched` and `command_replied` are broadcast to every
-    /// browser. Rendering the HTTP reply locally as well showed the same reply
-    /// twice, which is what handling those two events for the first time
-    /// exposed. Rendering only locally would hide every command the CLI, MCP or
-    /// another operator ran, which is the reason to handle them at all.
+    /// `command_dispatched` and `command_replied` are broadcast to every browser. Rendering the HTTP reply locally as well showed the same reply twice, which is what handling those two events for the first time exposed. Rendering only locally would hide every command the CLI, MCP or another operator ran, which is the reason to handle them at all.
     #[test]
     fn a_command_reply_is_rendered_once() {
         let js = JS.replace("\r\n", "\n");
@@ -1049,8 +963,7 @@ mod tests {
         );
     }
 
-    /// A gap in the console must be a gap, not a line that reads like engine
-    /// output the grammar failed on.
+    /// A gap in the console must be a gap, not a line that reads like engine output the grammar failed on.
     #[test]
     fn the_lag_notice_is_not_dressed_up_as_an_unparsed_line() {
         const WS: &str = include_str!("ws.rs");
@@ -1062,11 +975,7 @@ mod tests {
     }
 
     /// A chart drawn in a stretched coordinate space stretches its labels.
-    ///
-    /// The two SVGs carried a fixed `viewBox` and `preserveAspectRatio="none"`,
-    /// so a 320-unit box painted across a 1180px panel stretched every unit by
-    /// 3.7 horizontally and left the height alone. The line survived it; "100%"
-    /// came out nearly four times as wide as it was tall.
+    /// The two SVGs carried a fixed `viewBox` and `preserveAspectRatio="none"`, so a 320-unit box painted across a 1180px panel stretched every unit by 3.7 horizontally and left the height alone. The line survived it; "100%" came out nearly four times as wide as it was tall.
     #[test]
     fn the_charts_are_not_drawn_in_a_stretched_coordinate_space() {
         assert!(
@@ -1084,11 +993,7 @@ mod tests {
     }
 
     /// Three screens show data that is not the selected instance's alone.
-    ///
-    /// Two instances never share a `data_dir` by default and always share the
-    /// game database, and a screen that shows either without saying so is a
-    /// claim about the wrong server. Navigation depth stays at two; the
-    /// honesty is an annotation.
+    /// Two instances never share a `data_dir` by default and always share the game database, and a screen that shows either without saying so is a claim about the wrong server. Navigation depth stays at two; the honesty is an annotation.
     #[test]
     fn every_shared_scope_screen_says_whose_data_it_is() {
         for (id, filler) in [

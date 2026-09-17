@@ -1,9 +1,5 @@
 //! Knowing what is installed, what is available, and what to do about it.
-//!
-//! Three separable things: [`version`] answers "what is running", [`changelog`]
-//! answers "what would change", and [`updater`] decides whether now is the time.
-//! Keeping the decision pure is what makes "never restart a server with players
-//! on it" a test rather than a hope.
+//! Three separable things: [`version`] answers "what is running", [`changelog`] answers "what would change", and [`updater`] decides whether now is the time. Keeping the decision pure is what makes "never restart a server with players on it" a test rather than a hope.
 
 pub mod changelog;
 pub mod pipeline;
@@ -22,8 +18,7 @@ pub use version::{Probe, Versions};
 pub struct Report {
     pub versions: Versions,
     pub decision: Decision,
-    /// Newest first, capped: a changelog can be tens of thousands of words and
-    /// the question being answered is "what changed recently".
+    /// Newest first, capped: a changelog can be tens of thousands of words and the question being answered is "what changed recently".
     pub releases: Vec<Release>,
 }
 

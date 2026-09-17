@@ -1,9 +1,5 @@
 //! `cellar`: a dedicated server runner and manager for s&box.
-//!
-//! `run` is the supervising foreground mode, used as a container entrypoint. It
-//! owns the game process, the bridge, the web UI and the updater, and it is the
-//! only mode that starts a server. Everything else either inspects a config or
-//! talks to a database.
+//! `run` is the supervising foreground mode, used as a container entrypoint. It owns the game process, the bridge, the web UI and the updater, and it is the only mode that starts a server. Everything else either inspects a config or talks to a database.
 
 mod commands;
 mod runner;
@@ -29,11 +25,7 @@ struct Cli {
     log: String,
 
     /// Which supervised server to talk to, for a config declaring several.
-    ///
-    /// Omitted means the primary, so nothing changes for a single-server
-    /// config. A wrong id is refused by the running Cellar with the real ids
-    /// listed, rather than quietly reaching the primary: the command most
-    /// likely to be sent to the wrong server is `quit`.
+    /// Omitted means the primary, so nothing changes for a single-server config. A wrong id is refused by the running Cellar with the real ids listed, rather than quietly reaching the primary: the command most likely to be sent to the wrong server is `quit`.
     #[arg(long, global = true)]
     instance: Option<String>,
 
@@ -51,9 +43,7 @@ enum Command {
     },
 
     /// Open a terminal dashboard connected to an already running Cellar.
-    ///
-    /// The web session is read from CELLAR_SESSION or supplied explicitly by
-    /// the tray launcher. It never starts a second supervisor.
+    /// The web session is read from CELLAR_SESSION or supplied explicitly by the tray launcher. It never starts a second supervisor.
     Tui {
         /// Running Cellar web URL.
         #[arg(long, default_value = "http://127.0.0.1:8081")]
@@ -70,16 +60,12 @@ enum Command {
     Doctor,
 
     /// Download or update the s&box dedicated server itself.
-    ///
-    /// The dedicated server is app 1892930, it is free, and anonymous login
-    /// works, so this needs no Steam credential. The paid client and editor is
-    /// app 590830 and anonymous fails on it with "No subscription".
+    /// The dedicated server is app 1892930, it is free, and anonymous login works, so this needs no Steam credential. The paid client and editor is app 590830 and anonymous fails on it with "No subscription".
     Install {
         /// Where to install. Defaults to `update.steam_dir`.
         #[arg(long)]
         into: Option<std::path::PathBuf>,
-        /// Re-check every file against the manifest. Slower, and the thing to
-        /// reach for when a server will not start after an interrupted update.
+        /// Re-check every file against the manifest. Slower, and the thing to reach for when a server will not start after an interrupted update.
         #[arg(long)]
         validate: bool,
     },
@@ -104,8 +90,7 @@ enum Command {
         /// Report only, whatever the configured policy says.
         #[arg(long)]
         check: bool,
-        /// Apply now, ignoring the maintenance window. Still refuses a dirty
-        /// checkout, and still refuses a populated server unless `--force`.
+        /// Apply now, ignoring the maintenance window. Still refuses a dirty checkout, and still refuses a populated server unless `--force`.
         #[arg(long)]
         now: bool,
         /// Apply even with players connected. Says what it is doing first.
@@ -120,10 +105,7 @@ enum Command {
     },
 
     /// Manage the locally-hosted MariaDB, when `[mariadb].managed = true`.
-    ///
-    /// Separate from `db`: that operates on whatever `database.url` already
-    /// points at, local or remote, and works the same either way. This only
-    /// makes sense when Cellar is hosting the instance itself.
+    /// Separate from `db`: that operates on whatever `database.url` already points at, local or remote, and works the same either way. This only makes sense when Cellar is hosting the instance itself.
     Mariadb {
         #[command(subcommand)]
         action: MariadbAction,
@@ -142,13 +124,9 @@ enum Command {
     },
 
     /// Type a command into the running server's console and print the reply.
-    ///
-    /// The console runs at full engine privilege, which is what makes a
-    /// gamemode's host-only commands reachable at all. Every call is audited
-    /// the same way the web UI's console is.
+    /// The console runs at full engine privilege, which is what makes a gamemode's host-only commands reachable at all. Every call is audited the same way the web UI's console is.
     Exec {
-        /// The command and its arguments. Quoting is optional: `cellar exec
-        /// status` and `cellar exec "status"` are the same call.
+        /// The command and its arguments. Quoting is optional: `cellar exec status` and `cellar exec "status"` are the same call.
         #[arg(trailing_var_arg = true)]
         command: Vec<String>,
         /// Run every non-blank, non-`#` line of a file instead, in order.
@@ -163,13 +141,9 @@ enum Command {
     },
 
     /// Kill a running Cellar and every process it started, immediately.
-    ///
-    /// The last resort. Nothing is stopped gracefully, so the engine's convar
-    /// save and its Steam logoff are both skipped. Reach for `cellar exec quit`
-    /// or the dashboard's Shut down Cellar while either still answers.
+    /// The last resort. Nothing is stopped gracefully, so the engine's convar save and its Steam logoff are both skipped. Reach for `cellar exec quit` or the dashboard's Shut down Cellar while either still answers.
     Kill {
-        /// Skip the typed confirmation, for scripts and for a terminal that has
-        /// no one sitting at it.
+        /// Skip the typed confirmation, for scripts and for a terminal that has no one sitting at it.
         #[arg(long)]
         yes: bool,
     },
@@ -244,10 +218,7 @@ enum DbAction {
     /// List the dumps in the backup directory, newest first.
     Backups,
     /// Apply a dump back over the database, replacing every table it carries.
-    ///
-    /// Stop the supervised server first. The gamemode writes through the
-    /// bridge continuously, and a write landing mid-restore lands in a table
-    /// that is about to be dropped.
+    /// Stop the supervised server first. The gamemode writes through the bridge continuously, and a write landing mid-restore lands in a table that is about to be dropped.
     Restore {
         /// The dump to apply. Defaults to the newest in the backup directory.
         dump: Option<PathBuf>,
@@ -259,17 +230,10 @@ enum DbAction {
 
 #[derive(Subcommand)]
 enum MariadbAction {
-    /// Download (if needed), initialize (if needed), and (re-)create the
-    /// database, user and password. Prints `CELLAR_DATABASE_URL` to set in
-    /// your environment. Safe to re-run, including to recover a lost
-    /// password: each install/init step is skipped once already done, but
-    /// the database, user and password are always (re-)applied.
+    /// Download (if needed), initialize (if needed), and (re-)create the database, user and password. Prints `CELLAR_DATABASE_URL` to set in your environment. Safe to re-run, including to recover a lost password: each install/init step is skipped once already done, but the database, user and password are always (re-)applied.
     Provision,
     /// Report install and data-directory state without starting anything.
-    ///
-    /// Deliberately no `start`/`stop`/`restart` here: `cellar run` is the
-    /// only thing that supervises the instance, the same way it is the only
-    /// thing that starts the game server.
+    /// Deliberately no `start`/`stop`/`restart` here: `cellar run` is the only thing that supervises the instance, the same way it is the only thing that starts the game server.
     Status,
 }
 
@@ -284,7 +248,6 @@ pub enum SettingsAction {
         #[arg(short, long)]
         output: Option<PathBuf>,
         /// Only what an operator changed away from the defaults.
-        ///
         /// The shape worth committing: a full dump is mostly defaults.
         #[arg(long)]
         overrides: bool,
@@ -333,8 +296,7 @@ async fn main() -> std::process::ExitCode {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .with_target(false)
-        // MCP stdio reserves stdout for JSON-RPC frames. Keeping all Cellar
-        // diagnostics on stderr also makes the command safe for host launchers.
+        // MCP stdio reserves stdout for JSON-RPC frames. Keeping all Cellar diagnostics on stderr also makes the command safe for host launchers.
         .with_writer(std::io::stderr)
         .init();
 
@@ -388,9 +350,7 @@ async fn main() -> std::process::ExitCode {
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            // To stderr and without a backtrace: the common failures here are
-            // configuration mistakes, and a stack trace buries the sentence that
-            // says which one.
+            // To stderr and without a backtrace: the common failures here are configuration mistakes, and a stack trace buries the sentence that says which one.
             eprintln!("cellar: {error:#}");
             std::process::ExitCode::FAILURE
         }

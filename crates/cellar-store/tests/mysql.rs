@@ -1,19 +1,12 @@
 //! Integration tests against a real MySQL or MariaDB.
-//!
-//! Skipped, loudly, unless `CELLAR_TEST_DATABASE_URL` is set, so a checkout with
-//! no database still runs `cargo test` green. CI sets it against a service
-//! container; locally:
-//!
+//! Skipped, loudly, unless `CELLAR_TEST_DATABASE_URL` is set, so a checkout with no database still runs `cargo test` green. CI sets it against a service container; locally:
 //! ```sh
 //! docker run -d --rm --name cellar-test-db \
 //!   -e MARIADB_ROOT_PASSWORD=cellartest -e MARIADB_DATABASE=cellar \
 //!   -p 33061:3306 mariadb:11
 //! export CELLAR_TEST_DATABASE_URL='mysql://root:cellartest@127.0.0.1:33061/cellar'
 //! ```
-//!
-//! The point of these is the SQL itself. The bridge's HTTP contract is tested
-//! against an in-memory backend in `cellar-server`; nothing there would catch a
-//! migration that does not apply or an upsert that does not upsert.
+//! The point of these is the SQL itself. The bridge's HTTP contract is tested against an in-memory backend in `cellar-server`; nothing there would catch a migration that does not apply or an upsert that does not upsert.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -21,17 +14,11 @@ use cellar_store::{document, ops};
 use sqlx::MySqlPool;
 
 /// Serialises the whole file.
-///
-/// Every test here drops and recreates the schema, and `cargo test` runs them on
-/// several threads, so without this they tear the tables out from under each
-/// other and fail with "table already exists" rather than with anything true
-/// about the code.
+/// Every test here drops and recreates the schema, and `cargo test` runs them on several threads, so without this they tear the tables out from under each other and fail with "table already exists" rather than with anything true about the code.
 static SCHEMA: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
 
 /// Connect and start from a clean schema, or return `None` to skip.
-///
-/// The returned guard is held for the test's lifetime; dropping it early would
-/// let the next test start dropping tables mid-run.
+/// The returned guard is held for the test's lifetime; dropping it early would let the next test start dropping tables mid-run.
 async fn database() -> Option<(MySqlPool, tokio::sync::MutexGuard<'static, ()>)> {
     let url = std::env::var("CELLAR_TEST_DATABASE_URL").ok()?;
     let guard = SCHEMA
@@ -40,8 +27,7 @@ async fn database() -> Option<(MySqlPool, tokio::sync::MutexGuard<'static, ()>)>
         .await;
     let pool = cellar_store::connect(&url, 4).await.expect("connect");
 
-    // Each run starts from nothing: a leftover row from a previous run turning a
-    // test green is worse than no test.
+    // Each run starts from nothing: a leftover row from a previous run turning a test green is worse than no test.
     for table in [
         "aj_document_revision",
         "aj_document",
@@ -64,8 +50,7 @@ async fn database() -> Option<(MySqlPool, tokio::sync::MutexGuard<'static, ()>)>
 macro_rules! pool_or_skip {
     () => {
         match database().await {
-            // `_guard` stays alive to the end of the test, which is what keeps
-            // the schema still underneath it.
+            // `_guard` stays alive to the end of the test, which is what keeps the schema still underneath it.
             Some((pool, _guard)) => (pool, _guard),
             None => {
                 eprintln!("skipping: CELLAR_TEST_DATABASE_URL is not set");
@@ -80,8 +65,7 @@ async fn the_migration_applies_to_an_empty_database() {
     let (pool, _guard) = pool_or_skip!();
     cellar_store::ping(&pool).await.unwrap();
 
-    // Running it twice must be a no-op, because `migrate_on_start` does exactly
-    // that on every restart.
+    // Running it twice must be a no-op, because `migrate_on_start` does exactly that on every restart.
     cellar_store::migrate(&pool).await.unwrap();
 }
 
@@ -176,8 +160,7 @@ async fn a_stale_expected_revision_is_reported_but_still_written() {
 async fn a_document_key_at_the_column_limit_fits() {
     let (pool, _guard) = pool_or_skip!();
 
-    // 128 characters, `DocumentKeys.MaximumLength`. If the column were narrower
-    // this would truncate silently under a non-strict sql_mode.
+    // 128 characters, `DocumentKeys.MaximumLength`. If the column were narrower this would truncate silently under a non-strict sql_mode.
     let key = format!("{}.json", "a".repeat(123));
     assert_eq!(key.len(), 128);
     assert!(cellar_core::doc_key::is_legal(&key));
@@ -230,6 +213,194 @@ async fn listing_finds_documents_by_prefix() {
 }
 
 #[tokio::test]
+async fn replacing_a_scope_is_atomic_and_preserves_other_scopes() {
+    let (pool, _guard) = pool_or_skip!();
+    document::put(
+        &pool,
+        "s",
+        "old.json",
+        &serde_json::json!({"old": true}),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    document::put(
+        &pool,
+        "s",
+        "keep.json",
+        &serde_json::json!({"version": 1}),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    document::put(
+        &pool,
+        "other",
+        "old.json",
+        &serde_json::json!({"untouched": true}),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let outcome = document::replace_scope(
+        &pool,
+        "s",
+        &[
+            ("keep.json".to_owned(), serde_json::json!({"version": 2})),
+            ("new.json".to_owned(), serde_json::json!({"new": true})),
+        ],
+        Some("restore-test"),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.documents, 2);
+    assert_eq!(outcome.removed, 1);
+    assert!(
+        document::get(&pool, "s", "old.json")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        document::get(&pool, "s", "keep.json")
+            .await
+            .unwrap()
+            .unwrap()
+            .revision,
+        2
+    );
+    assert!(
+        document::get(&pool, "s", "new.json")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        document::get(&pool, "other", "old.json")
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn restoring_a_previously_removed_key_continues_its_revision_history() {
+    let (pool, _guard) = pool_or_skip!();
+    document::put(
+        &pool,
+        "s",
+        "returning.json",
+        &serde_json::json!({"version": 1}),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    document::replace_scope(&pool, "s", &[], Some("remove-test"))
+        .await
+        .unwrap();
+    document::replace_scope(
+        &pool,
+        "s",
+        &[(
+            "returning.json".to_owned(),
+            serde_json::json!({"version": 2}),
+        )],
+        Some("restore-test"),
+    )
+    .await
+    .unwrap();
+
+    let restored = document::get(&pool, "s", "returning.json")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored.revision, 2);
+    assert_eq!(
+        document::revisions(&pool, "s", "returning.json", 10)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn a_failed_scope_replacement_rolls_back_deletes_and_writes() {
+    let (pool, _guard) = pool_or_skip!();
+    document::put(
+        &pool,
+        "s",
+        "old.json",
+        &serde_json::json!({"old": true}),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    document::put(
+        &pool,
+        "s",
+        "keep.json",
+        &serde_json::json!({"version": 1}),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let before = document::all(&pool, "s").await.unwrap();
+    let history_before = document::revisions(&pool, "s", "keep.json", 10)
+        .await
+        .unwrap();
+
+    sqlx::query(
+        "CREATE TRIGGER reject_failed_restore BEFORE INSERT ON aj_document
+         FOR EACH ROW
+         BEGIN
+           IF NEW.doc_key = 'fail.json' THEN
+             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'injected restore failure';
+           END IF;
+         END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let failure = document::replace_scope(
+        &pool,
+        "s",
+        &[
+            ("new.json".to_owned(), serde_json::json!({"new": true})),
+            ("fail.json".to_owned(), serde_json::json!({"fail": true})),
+        ],
+        Some("restore-test"),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(failure.to_string().contains("injected restore failure"));
+    assert_eq!(document::all(&pool, "s").await.unwrap(), before);
+    assert_eq!(
+        document::revisions(&pool, "s", "keep.json", 10)
+            .await
+            .unwrap(),
+        history_before
+    );
+    assert!(
+        document::get(&pool, "s", "new.json")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn a_player_session_accumulates_playtime() {
     let (pool, _guard) = pool_or_skip!();
 
@@ -259,8 +430,7 @@ async fn a_player_session_accumulates_playtime() {
     assert_eq!(players[0].last_name, "Kyle (renamed)");
 }
 
-/// A session that ends while players are listed must not leave rows open, or
-/// every later "who was on" query includes people who left months ago.
+/// A session that ends while players are listed must not leave rows open, or every later "who was on" query includes people who left months ago.
 #[tokio::test]
 async fn ending_a_session_closes_any_player_still_connected() {
     let (pool, _guard) = pool_or_skip!();
@@ -377,9 +547,7 @@ async fn the_admin_browser_sees_the_schema_and_refuses_to_write_to_it() {
         .unwrap();
     assert_eq!(result.rows[0][0].as_deref(), Some("1"));
 
-    // Every id and revision in this schema is BIGINT UNSIGNED, which does not
-    // decode as i64. Rendering it as its type name instead of its value is the
-    // bug this asserts against.
+    // Every id and revision in this schema is BIGINT UNSIGNED, which does not decode as i64. Rendering it as its type name instead of its value is the bug this asserts against.
     let result = cellar_store::admin::query(&pool, "SELECT revision FROM aj_document", 10)
         .await
         .unwrap();
@@ -397,10 +565,7 @@ async fn the_admin_browser_sees_the_schema_and_refuses_to_write_to_it() {
 }
 
 /// The activity timeline, which is the whole of Phase 3's audit screen.
-///
-/// Worth a real database rather than a unit test: the merge is two queries with
-/// `LEFT JOIN`s and a scope filter, and every way it can be wrong is a way SQL
-/// is wrong rather than a way Rust is.
+/// Worth a real database rather than a unit test: the merge is two queries with `LEFT JOIN`s and a scope filter, and every way it can be wrong is a way SQL is wrong rather than a way Rust is.
 #[tokio::test]
 async fn activity_merges_the_audit_and_the_observations_newest_first() {
     let Some((pool, _guard)) = database().await else {
@@ -437,8 +602,7 @@ async fn activity_merges_the_audit_and_the_observations_newest_first() {
     ops::record_command(&pool, Some(published), "api", "quit", &[], false)
         .await
         .unwrap();
-    // A command run while nothing was supervised. The join must keep it: that
-    // is exactly when an operator is most likely to be looking.
+    // A command run while nothing was supervised. The join must keep it: that is exactly when an operator is most likely to be looking.
     ops::record_command(&pool, None, "kyle", "cellar doctor", &[], true)
         .await
         .unwrap();
@@ -492,8 +656,7 @@ async fn activity_merges_the_audit_and_the_observations_newest_first() {
     assert_eq!(operator_only.len(), 3);
     assert!(operator_only.iter().all(|entry| entry.source == "operator"));
 
-    // The outcome is the point of an audit: a refused command has to be
-    // distinguishable from one that worked.
+    // The outcome is the point of an audit: a refused command has to be distinguishable from one that worked.
     let failed = operator_only
         .iter()
         .find(|entry| entry.detail == "quit")
@@ -501,8 +664,7 @@ async fn activity_merges_the_audit_and_the_observations_newest_first() {
     assert_eq!(failed.ok, Some(false));
     assert_eq!(failed.actor.as_deref(), Some("api"));
 
-    // Text search covers the reply, not only the command: "which command
-    // printed that?" is the question an operator actually has.
+    // Text search covers the reply, not only the command: "which command printed that?" is the question an operator actually has.
     let by_reply = ops::activity(
         &pool,
         &ops::ActivityQuery {
@@ -517,12 +679,8 @@ async fn activity_merges_the_audit_and_the_observations_newest_first() {
     assert_eq!(by_reply[0].detail, "status");
 }
 
-/// An event row has to say what happened, not only that something of a kind
-/// did.
-///
-/// Every notable event was stored as a bare kind and a timestamp until
-/// 2026-09-01, because the recorder passed `None` for the logger, the account
-/// and the payload. Nothing read the table back, so nothing caught it.
+/// An event row has to say what happened, not only that something of a kind did.
+/// Every notable event was stored as a bare kind and a timestamp until 2026-09-01, because the recorder passed `None` for the logger, the account and the payload. Nothing read the table back, so nothing caught it.
 #[tokio::test]
 async fn an_event_row_carries_who_and_what_not_only_its_kind() {
     use cellar_core::event::{Event, LeaveReason};
@@ -588,8 +746,7 @@ async fn an_event_row_carries_who_and_what_not_only_its_kind() {
             .unwrap_or_else(|| panic!("no {kind} row"))
     };
 
-    // The detail is stored in a JSON column as a JSON string, so this also
-    // asserts the quotes do not survive the round trip.
+    // The detail is stored in a JSON column as a JSON string, so this also asserts the quotes do not survive the round trip.
     assert_eq!(
         find("process_started").detail,
         "pid 4242: wine sbox-server.exe"

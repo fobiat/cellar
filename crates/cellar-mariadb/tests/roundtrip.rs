@@ -1,20 +1,12 @@
 //! The claim a backup makes, tested rather than assumed.
-//!
-//! A backup that has never been restored is a hypothesis. This dumps a real
-//! database, destroys what it dumped, restores it and checks the rows came
-//! back, which is the only thing that distinguishes a backup from a file.
-//!
-//! Skipped, loudly, unless `CELLAR_TEST_DATABASE_URL` is set, matching
-//! `cellar-store/tests/mysql.rs`. It also needs `mariadb` and `mariadb-dump` on
-//! `PATH`, which the sqlx tests do not, because a dump is a separate process
-//! and not a query.
+//! A backup that has never been restored is a hypothesis. This dumps a real database, destroys what it dumped, restores it and checks the rows came back, which is the only thing that distinguishes a backup from a file.
+//! Skipped, loudly, unless `CELLAR_TEST_DATABASE_URL` is set, matching `cellar-store/tests/mysql.rs`. It also needs `mariadb` and `mariadb-dump` on `PATH`, which the sqlx tests do not, because a dump is a separate process and not a query.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use cellar_core::config::{BackupConfig, MariaDbConfig};
 
-/// The dump and restore clients are separate processes, so a database Cellar
-/// can reach over sqlx is not on its own enough.
+/// The dump and restore clients are separate processes, so a database Cellar can reach over sqlx is not on its own enough.
 fn clients_are_installed() -> bool {
     ["mariadb", "mariadb-dump"]
         .iter()
@@ -63,8 +55,7 @@ async fn a_dump_restores_the_rows_it_was_taken_from() {
     };
     let dump = cellar_mariadb::backup(&url, &MariaDbConfig::default(), &backup).expect("dump");
 
-    // Both halves of the damage a restore has to undo: rows deleted, and a
-    // table gone entirely.
+    // Both halves of the damage a restore has to undo: rows deleted, and a table gone entirely.
     sqlx::query("DROP TABLE cellar_restore_proof")
         .execute(&pool)
         .await

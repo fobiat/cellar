@@ -1,8 +1,5 @@
 //! Turning a batch of events into one Discord message.
-//!
-//! One embed per batch, not per event. A restart that disconnects everybody
-//! produces one exit and a dozen leaves, and a dozen separate messages is how a
-//! channel becomes unreadable at exactly the moment somebody needs to read it.
+//! One embed per batch, not per event. A restart that disconnects everybody produces one exit and a dozen leaves, and a dozen separate messages is how a channel becomes unreadable at exactly the moment somebody needs to read it.
 
 use cellar_core::event::{Event, LeaveReason};
 use cellar_core::theme;
@@ -44,8 +41,7 @@ fn colour_for(batch: &[Event]) -> u32 {
 pub fn payload(batch: &[Event], hostname: &str) -> serde_json::Value {
     let lines: Vec<String> = batch.iter().filter_map(describe).collect();
 
-    // Discord refuses an embed description over 4096 characters, and a refused
-    // message is worse than a truncated one.
+    // Discord refuses an embed description over 4096 characters, and a refused message is worse than a truncated one.
     let mut description = lines.join("\n");
     if description.chars().count() > 3900 {
         description = description.chars().take(3900).collect::<String>();
@@ -115,9 +111,7 @@ fn describe(event: &Event) -> Option<String> {
                 None => format!("`exit` {how}, killed by a signal"),
             }
         }
-        // Names are escaped: a player called `**everyone**` should not be able to
-        // format the channel, and one containing a backtick should not break the
-        // code span it sits in.
+        // Names are escaped: a player called `**everyone**` should not be able to format the channel, and one containing a backtick should not break the code span it sits in.
         Event::PlayerJoined { name, steam_id } => {
             format!("`join` {} ({steam_id})", escape(name))
         }

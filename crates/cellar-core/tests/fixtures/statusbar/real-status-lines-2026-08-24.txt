@@ -1,0 +1,4 @@
+AppleJackRP Dev (1/32) [0:12:44]                                 Network 0.00ms
+Physics 0.00ms, NavMesh 0.00ms, Animation 0.00ms                  Update 0.00ms
+AppleJackRP Dev (1/64) [1:37:48]                                 Network 0.00ms
+Physics 0.00ms, NavMesh 0.00ms, Animation 0.00ms                  Update 0.00ms

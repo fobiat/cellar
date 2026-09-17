@@ -1,6 +1,4 @@
-//! The one event vocabulary. Everything downstream (webhooks, the TUI, the web
-//! UI, the ops tables) consumes this rather than raw log lines, so a change to
-//! an engine log string reaches exactly one module.
+//! The one event vocabulary. Everything downstream (webhooks, the TUI, the web UI, the ops tables) consumes this rather than raw log lines, so a change to an engine log string reaches exactly one module.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -9,16 +7,8 @@ use serde::{Deserialize, Serialize};
 pub type SteamId = u64;
 
 /// A SteamID on the wire is a string, because JSON numbers are doubles.
-///
-/// Every real SteamID64 is above 2^53, so `JSON.parse` rounds one to the
-/// nearest multiple of 16 and hands the browser a different account. It looked
-/// right for years: the id is 17 digits either way, and only the last one or
-/// two move. Measured against three connected players whose ids differ by one,
-/// the dashboard showed all three as the same person and the kick button sent
-/// that id back.
-///
-/// Serialising as a string is what Steam's own Web API does, and for this
-/// reason. Deserialising accepts either, so an older payload still reads.
+/// Every real SteamID64 is above 2^53, so `JSON.parse` rounds one to the nearest multiple of 16 and hands the browser a different account. It looked right for years: the id is 17 digits either way, and only the last one or two move. Measured against three connected players whose ids differ by one, the dashboard showed all three as the same person and the kick button sent that id back.
+/// Serialising as a string is what Steam's own Web API does, and for this reason. Deserialising accepts either, so an older payload still reads.
 pub mod steam_id_wire {
     use serde::{Deserialize, Deserializer, Serializer, de};
 
@@ -89,13 +79,11 @@ impl Level {
     }
 }
 
-/// Where a line came from. The two channels carry different fidelity, and a
-/// consumer sometimes needs to know which one it is reading.
+/// Where a line came from. The two channels carry different fidelity, and a consumer sometimes needs to know which one it is reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Origin {
-    /// The pseudo-terminal the server was spawned on. Truncates logger names to
-    /// eight characters and carries no date.
+    /// The pseudo-terminal the server was spawned on. Truncates logger names to eight characters and carries no date.
     Console,
     /// `logs/sbox-server.log`. Tab separated, dated, complete logger names.
     LogFile,
@@ -108,18 +96,13 @@ pub enum Origin {
 pub struct LogLine {
     pub at: DateTime<Utc>,
     pub level: Level,
-    /// Engine logger category, for example `Identity` or `Storage`. Truncated to
-    /// eight characters when `origin` is `Console`.
+    /// Engine logger category, for example `Identity` or `Storage`. Truncated to eight characters when `origin` is `Console`.
     pub logger: String,
     pub message: String,
     pub origin: Origin,
 
     /// Which bucket of the console's category filter this falls into.
-    ///
-    /// Decided once, here, by the gamemode's profile. The browser used to
-    /// reimplement the rule in JavaScript and the two copies had already
-    /// diverged on the gamemode arm. `default` so a line deserialised from an
-    /// older recording still parses.
+    /// Decided once, here, by the gamemode's profile. The browser used to reimplement the rule in JavaScript and the two copies had already diverged on the gamemode arm. `default` so a line deserialised from an older recording still parses.
     #[serde(default = "other_category")]
     pub category: crate::profile::Category,
 }
@@ -137,12 +120,8 @@ pub enum LeaveReason {
 }
 
 /// What the supervisor observed.
-///
-/// `Unparsed` is deliberate: a line the grammar does not recognise is counted
-/// and surfaced, never dropped. A parser that quietly stops matching after an
-/// engine update is the failure mode worth engineering against.
-// Not `Eq`: the status bar and the resource sample both carry frame timings as
-// floats, and a float has no total equality.
+/// `Unparsed` is deliberate: a line the grammar does not recognise is counted and surfaced, never dropped. A parser that quietly stops matching after an engine update is the failure mode worth engineering against.
+// Not `Eq`: the status bar and the resource sample both carry frame timings as floats, and a float has no total equality.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Event {
@@ -182,6 +161,7 @@ pub enum Event {
     CommandDispatched { command: String, actor: String },
     CommandReplied {
         command: String,
+        actor: String,
         reply: Vec<String>,
         ok: bool,
     },
@@ -191,13 +171,7 @@ pub enum Event {
 }
 
 /// An [`Event`] with the instance it came from.
-///
-/// A wrapper rather than a field on `Event`, because `Event` is internally
-/// tagged and consumed by four independent things: the tracker, the TUI, the
-/// notifier, and the browser, which switches on `kind`. `flatten` over an
-/// internally-tagged enum produces exactly the JSON the dashboard already
-/// parses plus one `instance` key, so nothing downstream has to change to keep
-/// working and everything downstream gains the ability to filter.
+/// A wrapper rather than a field on `Event`, because `Event` is internally tagged and consumed by four independent things: the tracker, the TUI, the notifier, and the browser, which switches on `kind`. `flatten` over an internally-tagged enum produces exactly the JSON the dashboard already parses plus one `instance` key, so nothing downstream has to change to keep working and everything downstream gains the ability to filter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstanceEvent {
     pub instance: crate::config::InstanceId,
@@ -205,8 +179,7 @@ pub struct InstanceEvent {
     pub event: Event,
 }
 
-/// The dedicated server console's status line, which is the only place the
-/// engine reports its own frame timings.
+/// The dedicated server console's status line, which is the only place the engine reports its own frame timings.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StatusBar {
     pub hostname: String,
@@ -223,10 +196,7 @@ pub struct StatusBar {
 }
 
 /// A resource sample over the whole process tree.
-///
-/// The tree, not the direct child: under Wine the process Cellar spawns is
-/// `wine`, and the memory and cpu that matter belong to `sbox-server.exe`
-/// beneath it. Sampling only the child reports near zero.
+/// The tree, not the direct child: under Wine the process Cellar spawns is `wine`, and the memory and cpu that matter belong to `sbox-server.exe` beneath it. Sampling only the child reports near zero.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ResourceSample {
     pub at: DateTime<Utc>,
@@ -277,18 +247,9 @@ impl Event {
         )
     }
 
-    /// What this event is worth writing into the operations record, beyond its
-    /// kind: a logger, an account, and a sentence a person can read.
-    ///
-    /// Every notable event used to be stored as a bare kind and a timestamp,
-    /// because the recorder passed `None` for all three. Nothing read the table
-    /// back, so nothing noticed that "a player joined" recorded neither who nor
-    /// when they left. The activity screen is what made it visible.
-    ///
-    /// The payload is a sentence rather than the serialised event. An audit row
-    /// is read by a person asking what happened at 21:04, and a JSON blob of the
-    /// variant's fields answers that worse than one line does. The full event
-    /// is still on the websocket for anything that wants structure.
+    /// What this event is worth writing into the operations record, beyond its kind: a logger, an account, and a sentence a person can read.
+    /// Every notable event used to be stored as a bare kind and a timestamp, because the recorder passed `None` for all three. Nothing read the table back, so nothing noticed that "a player joined" recorded neither who nor when they left. The activity screen is what made it visible.
+    /// The payload is a sentence rather than the serialised event. An audit row is read by a person asking what happened at 21:04, and a JSON blob of the variant's fields answers that worse than one line does. The full event is still on the websocket for anything that wants structure.
     pub fn record(&self) -> EventRecord<'_> {
         match self {
             Self::ProcessStarted { pid, command } => EventRecord {
@@ -330,9 +291,7 @@ impl Event {
             } => EventRecord {
                 logger: Some("players"),
                 steam_id: Some(*steam_id),
-                // Not `leave_reason_label`, which is deliberately short for its
-                // `VARCHAR(32)` column and drops the kick reason. Why somebody
-                // was kicked is most of what an audit row about a kick is for.
+                // Not `leave_reason_label`, which is deliberately short for its `VARCHAR(32)` column and drops the kick reason. Why somebody was kicked is most of what an audit row about a kick is for.
                 detail: Some(match reason {
                     LeaveReason::Disconnected => format!("{name} disconnected"),
                     LeaveReason::Kicked { reason } => format!("{name} was kicked: {reason}"),
@@ -343,11 +302,13 @@ impl Event {
                 steam_id: None,
                 detail: Some(format!("{actor} ran {command}")),
             },
-            Self::CommandReplied { command, ok, .. } => EventRecord {
+            Self::CommandReplied {
+                command, actor, ok, ..
+            } => EventRecord {
                 logger: Some("console"),
                 steam_id: None,
                 detail: Some(format!(
-                    "{command} {}",
+                    "{actor}'s {command} {}",
                     if *ok { "replied" } else { "was refused" }
                 )),
             },
@@ -359,8 +320,7 @@ impl Event {
                     if *healthy { "healthy" } else { "unhealthy" }
                 )),
             },
-            // The three that are never notable, plus `Log`. Reached only if
-            // somebody records one deliberately.
+            // The three that are never notable, plus `Log`. Reached only if somebody records one deliberately.
             Self::Log(_) | Self::Status(_) | Self::Resources(_) | Self::Unparsed { .. } => {
                 EventRecord {
                     logger: None,
@@ -395,9 +355,7 @@ mod instance_event_tests {
         serde_json::to_value(wrapped).unwrap()
     }
 
-    /// A wire-format assumption rather than an obvious truth. `flatten` over an
-    /// internally-tagged enum could have nested the variant instead, and the
-    /// browser switches on a top-level `kind`.
+    /// A wire-format assumption rather than an obvious truth. `flatten` over an internally-tagged enum could have nested the variant instead, and the browser switches on a top-level `kind`.
     #[test]
     fn kind_stays_top_level_for_every_variant_shape() {
         let cases = [
@@ -424,12 +382,7 @@ mod instance_event_tests {
     }
 
     /// A SteamID is a string on the wire, and the reason is the reader.
-    ///
-    /// This test used to assert the opposite, that the id stayed a JSON
-    /// number through `flatten`. It did, and that was the defect: serde keeps
-    /// a u64 exact, and then `JSON.parse` in the browser turns it into a
-    /// double and rounds it to the nearest multiple of 16. The test proved the
-    /// hop it checked and stopped one short of the consumer that breaks.
+    /// This test used to assert the opposite, that the id stayed a JSON number through `flatten`. It did, and that was the defect: serde keeps a u64 exact, and then `JSON.parse` in the browser turns it into a double and rounds it to the nearest multiple of 16. The test proved the hop it checked and stopped one short of the consumer that breaks.
     #[test]
     fn a_seventeen_digit_steam_id_reaches_a_double_precision_reader_intact() {
         let json = wrap(Event::PlayerJoined {
@@ -439,8 +392,7 @@ mod instance_event_tests {
 
         assert_eq!(json["steam_id"], serde_json::json!("76561198000000001"));
 
-        // What the browser does with it, done here: every real SteamID64 is
-        // above 2^53, so a number would come back as ...000 rather than ...001.
+        // What the browser does with it, done here: every real SteamID64 is above 2^53, so a number would come back as ...000 rather than ...001.
         let text = serde_json::to_string(&json).unwrap();
         let reparsed: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(reparsed["steam_id"].as_str(), Some("76561198000000001"));

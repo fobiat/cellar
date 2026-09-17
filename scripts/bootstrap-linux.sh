@@ -77,7 +77,6 @@ case "$(uname -m)" in
     *) die "the s&box dedicated server is x86_64-only. This host is $(uname -m)." ;;
 esac
 
-# ------------------------------------------------------------ package manager
 
 # Resolved once. Each entry is the install verb, because that is the only part
 # that differs between them for this script's purposes.
@@ -160,7 +159,6 @@ want() {
     have "$1" && green "  ok    $1"
 }
 
-# ----------------------------------------------------------------- core tools
 
 grey "  Core tools"
 want curl curl || true
@@ -181,7 +179,6 @@ if [ "$WANT_WINE" -eq 1 ]; then
     fi
 fi
 
-# ------------------------------------------------------------------- steamcmd
 
 if [ "$WANT_STEAMCMD" -eq 1 ]; then
     printf '\n'
@@ -209,7 +206,6 @@ if [ "$WANT_STEAMCMD" -eq 1 ]; then
     fi
 fi
 
-# --------------------------------------------------------- Windows .NET, Wine
 
 if [ "$WANT_DOTNET" -eq 1 ]; then
     printf '\n'
@@ -248,7 +244,6 @@ if [ "$WANT_DOTNET" -eq 1 ]; then
     fi
 fi
 
-# -------------------------------------------------------------------- MariaDB
 
 if [ "$WANT_MARIADB" -eq 1 ]; then
     printf '\n'
@@ -260,7 +255,6 @@ if [ "$WANT_MARIADB" -eq 1 ]; then
     fi
 fi
 
-# --------------------------------------------------------------------- Cellar
 
 printf '\n'
 grey "  Cellar itself"
@@ -294,7 +288,6 @@ else
     sh "${HERE}/install.sh" --version "$VERSION"
 fi
 
-# ---------------------------------------------------------------------- close
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/cellar"
 

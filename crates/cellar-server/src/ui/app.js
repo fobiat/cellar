@@ -1,17 +1,10 @@
 /* Cellar's dispatch console.
- *
- * No framework and no build step: the whole page is three files embedded in the
- * binary, because a server manager that needs npm to render its own status page
- * is a server manager with a second thing to keep working.
+ * No framework and no build step: the whole page is three files embedded in the binary, because a server manager that needs npm to render its own status page is a server manager with a second thing to keep working.
  */
 
 const $ = (selector) => document.querySelector(selector);
 /* The third argument is text, or a node to put inside.
- *
- * It used to be text only, and `el("td", null, someButton)` therefore rendered
- * the string "[object HTMLButtonElement]" into the cell. It reads correctly,
- * it throws nothing, and the Access allowlist shipped with a revoke button
- * spelled out that way. Accepting a node here closes the whole class rather
+ * It used to be text only, and `el("td", null, someButton)` therefore rendered the string "[object HTMLButtonElement]" into the cell. It reads correctly, it throws nothing, and the Access allowlist shipped with a revoke button spelled out that way. Accepting a node here closes the whole class rather
  * than the two call sites that were caught. */
 const el = (tag, className, content) => {
   const node = document.createElement(tag);
@@ -22,8 +15,7 @@ const el = (tag, className, content) => {
 };
 
 /* Every value from the server is inserted as text, never as HTML. A player's
- * display name is chosen by the account holder and reaches this page through
- * the log; treating it as markup would be a stored cross-site scripting hole
+ * display name is chosen by the account holder and reaches this page through the log; treating it as markup would be a stored cross-site scripting hole
  * with a Steam account as the input field. */
 const text = (value) => (value === null || value === undefined ? "" : String(value));
 
@@ -79,10 +71,7 @@ function drainToasts() {
 }
 
 /* An empty pane has to say why it is empty.
- *
- * A blank table and a table whose fetch silently returned nothing look the
- * same, and during an incident the second is what an operator will assume. The
- * text is the point: "no documents" says nothing, "the gamemode has not written
+ * A blank table and a table whose fetch silently returned nothing look the same, and during an incident the second is what an operator will assume. The text is the point: "no documents" says nothing, "the gamemode has not written
  * any yet" says where to look next. */
 function emptyRow(body, columns, why) {
   const row = el("tr");
@@ -95,20 +84,12 @@ function emptyRow(body, columns, why) {
 /* ---- theme --------------------------------------------------------------- */
 
 /* Dark by default, whatever the system says.
- *
- * An operations console that repaints itself white because a phone is in light
- * mode is a console nobody can read outdoors at night, which is when it gets
- * read. So `prefers-color-scheme` is not the default here; it is the third
- * option, chosen deliberately.
- *
- * The light theme was dead until 2026-09-01 for one reason: the `ink` token
- * carried the dark value in both themes, so light mode painted #201F1D body
- * text on a #0E0F11 ground at 1.15:1. Two tokens moved and the palette test
+ * An operations console that repaints itself white because a phone is in light mode is a console nobody can read outdoors at night, which is when it gets read. So `prefers-color-scheme` is not the default here; it is the third option, chosen deliberately.
+ * The light theme was dead until 2026-09-01 for one reason: the `ink` token carried the dark value in both themes, so light mode painted #201F1D body text on a #0E0F11 ground at 1.15:1. Two tokens moved and the palette test
  * now holds both halves to WCAG AA, so this option leads somewhere. */
 function applyTheme(choice) {
   if (choice === "system") {
-    // Removing the attribute is what lets the generated palette's
-    // `prefers-color-scheme` block take over.
+    // Removing the attribute is what lets the generated palette's `prefers-color-scheme` block take over.
     document.documentElement.removeAttribute("data-theme");
   } else {
     document.documentElement.setAttribute("data-theme", choice);
@@ -116,8 +97,7 @@ function applyTheme(choice) {
   try {
     localStorage.setItem("cellar-theme", choice);
   } catch {
-    // Private browsing, or storage denied. The choice still applies to this
-    // page; it just will not survive a reload.
+    // Private browsing, or storage denied. The choice still applies to this page; it just will not survive a reload.
   }
 }
 
@@ -137,16 +117,8 @@ function restoreTheme() {
 }
 
 /* Confirming a destructive action, as a dialog rather than window.confirm.
- *
- * `window.confirm` cannot say which server, cannot count who is about to be
- * disconnected, and cannot ask for the name typed back. Some browsers also let
- * a user suppress it permanently, which turns "really stop the production
- * server?" into a silent yes. A native <dialog> brings the focus trap, Escape
- * and the backdrop with it and needs no library.
- *
- * `typed` is the tier-2 guard: pass the string that has to be entered before
- * Confirm becomes available. Everything else is tier 1, and tier 0 does not
- * call this at all.
+ * `window.confirm` cannot say which server, cannot count who is about to be disconnected, and cannot ask for the name typed back. Some browsers also let a user suppress it permanently, which turns "really stop the production server?" into a silent yes. A native <dialog> brings the focus trap, Escape and the backdrop with it and needs no library.
+ * `typed` is the tier-2 guard: pass the string that has to be entered before Confirm becomes available. Everything else is tier 1, and tier 0 does not call this at all.
  */
 function confirmAction({ title, body, typed }) {
   return new Promise((resolve) => {
@@ -163,16 +135,22 @@ function confirmAction({ title, body, typed }) {
     input.placeholder = typed ? `type ${typed} to confirm` : "";
     go.disabled = Boolean(typed);
     input.oninput = () => { go.disabled = input.value.trim() !== typed; };
+    dialog.onkeydown = (event) => {
+      if (event.key !== "Tab") return;
+      const focusable = [input, cancel, go].filter((control) => !control.hidden && !control.disabled);
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
 
     /* Resolved from the buttons and from `cancel`, never from `close`.
-     *
-     * A <form method="dialog"> closes the dialog natively, which reads as the
-     * obvious way to write this, and it is a trap: the `close` event does not
-     * fire in every engine that ships <dialog>. Measured here, in the browser
-     * this was driven in: the dialog closed, `returnValue` was `go`, and
-     * neither an `onclose` property nor an added `close` listener ran, so the
-     * promise hung forever and every confirmed stop silently did nothing.
-     *
+     * A <form method="dialog"> closes the dialog natively, which reads as the obvious way to write this, and it is a trap: the `close` event does not fire in every engine that ships <dialog>. Measured here, in the browser this was driven in: the dialog closed, `returnValue` was `go`, and neither an `onclose` property nor an added `close` listener ran, so the promise hung forever and every confirmed stop silently did nothing.
      * `settle` guards against a second resolution, since Escape fires `cancel`
      * and a click fires its own handler. */
     let settled = false;
@@ -183,6 +161,7 @@ function confirmAction({ title, body, typed }) {
       go.onclick = null;
       cancel.onclick = null;
       dialog.oncancel = null;
+      dialog.onkeydown = null;
       if (dialog.open) dialog.close();
       resolve(answer);
     };
@@ -198,12 +177,7 @@ function confirmAction({ title, body, typed }) {
 }
 
 /* The load-state contract every pane uses.
- *
- * A pane is loading, or it holds an answer, or it holds a reason it does not.
- * There is no fourth state, and in particular there is no blank one: a fetch
- * that threw used to leave whatever was on screen before, which during a phase
- * of killing processes deliberately is the most misleading thing it could do.
- *
+ * A pane is loading, or it holds an answer, or it holds a reason it does not. There is no fourth state, and in particular there is no blank one: a fetch that threw used to leave whatever was on screen before, which during a phase of killing processes deliberately is the most misleading thing it could do.
  * `load` takes the node the pane renders into so a failure has somewhere to go
  * that is not only a toast. Pass null for a loader with no single container. */
 async function load(what, node, work) {
@@ -238,9 +212,7 @@ async function api(path, options) {
 }
 
 /* Which instance the dashboard is looking at.
- *
- * `null` means the primary, which is what every route already defaults to when
- * `?instance=` is absent, so a single-server config never sends the parameter
+ * `null` means the primary, which is what every route already defaults to when `?instance=` is absent, so a single-server config never sends the parameter
  * and its access log stays as it was. */
 let selectedInstance = null;
 let knownInstances = [];
@@ -713,9 +685,7 @@ function renderOverviewCards() {
 /* ---- the instance strip -------------------------------------------------- */
 
 /* Draw one tile per declared instance and remember which is selected.
- *
- * Hidden for a single-server config: a selector with one option is furniture
- * that teaches an operator nothing, and every route already defaults to the
+ * Hidden for a single-server config: a selector with one option is furniture that teaches an operator nothing, and every route already defaults to the
  * primary when no instance is named. */
 async function loadInstances() {
   const data = await api("/api/instances");
@@ -725,9 +695,7 @@ async function loadInstances() {
     selectedInstance = null;
   }
   /* Deliberately left null for a single-server config, rather than filled in
-   * with the primary. Naming the only instance would be correct and would also
-   * put `?instance=default` in every request and `#/i/default/` in every
-   * bookmark of a deployment that has never heard of instances. Measured: it
+   * with the primary. Naming the only instance would be correct and would also put `?instance=default` in every request and `#/i/default/` in every bookmark of a deployment that has never heard of instances. Measured: it
    * did exactly that until this line existed. */
   if (!selectedInstance && knownInstances.length > 1) {
     selectedInstance = data.primary || null;
@@ -750,10 +718,7 @@ async function loadInstances() {
     tile.append(el("span", "instance-id", entry.id));
 
     /* One muted suffix, and only what is not already obvious.
-     *
-     * The scope is shown when it differs from the id, because that is the case
-     * where deleting a document in the wrong place is possible. A running
-     * server says nothing: running is the expectation, and a word for it is a
+     * The scope is shown when it differs from the id, because that is the case where deleting a document in the wrong place is possible. A running server says nothing: running is the expectation, and a word for it is a
      * word on every tile forever. Everything else lives in the tooltip. */
     const notes = [];
     if (entry.scope !== entry.id) notes.push(entry.scope);
@@ -776,10 +741,7 @@ async function loadInstances() {
 }
 
 /* Switch instance and reload everything that was about the old one.
- *
- * Reloading rather than patching in place, because a partial switch is the
- * failure mode that matters here: a console still streaming the old server
- * under a header naming the new one is how an operator types `quit` into the
+ * Reloading rather than patching in place, because a partial switch is the failure mode that matters here: a console still streaming the old server under a header naming the new one is how an operator types `quit` into the
  * wrong thing. */
 function selectInstance(id, tab, sub) {
   if (id === selectedInstance) return;
@@ -799,8 +761,7 @@ function selectInstance(id, tab, sub) {
 }
 
 /* Append `?instance=` when one is selected. Every call that is about a
- * particular server goes through this rather than building the query inline,
- * so making a new route instance-aware is one call site rather than a search
+ * particular server goes through this rather than building the query inline, so making a new route instance-aware is one call site rather than a search
  * for string concatenation. */
 function forInstance(path) {
   const id = instanceId();
@@ -848,22 +809,12 @@ function notifyOperator(title, body) {
 /* ---- routing ------------------------------------------------------------- */
 
 /* The location hash is the tab state, not a JS variable.
- *
- * It was a variable, which is why the PWA's two manifest shortcuts both landed
- * on whichever tab happened to be default, why a reload lost the tab, and why
- * a link to "the console on the dev instance" could not be written down at all.
- *
+ * It was a variable, which is why the PWA's two manifest shortcuts both landed on whichever tab happened to be default, why a reload lost the tab, and why a link to "the console on the dev instance" could not be written down at all.
  * `#/i/<id>/<tab>` names both; `#/<tab>` is the primary's. `?tab=` still works
  * and redirects, because it is in the wild in bookmarks and in the manifest. */
 /* Tabs that no longer exist, and where they went.
- *
- * A bookmark, a PWA shortcut or a link in a runbook outlives a restructure, and
- * dropping it on the default tab teaches nothing. Precinct dissolved into the
- * console. Roster, Registry and Access became one Players tab, and Configs,
- * the convar tables and the build half of Releases became one Config tab.
- *
- * `players` is in here as well as in the nav, which looks like a contradiction
- * and is not: a canonical route always carries its sub-tab, so a bare
+ * A bookmark, a PWA shortcut or a link in a runbook outlives a restructure, and dropping it on the default tab teaches nothing. Precinct dissolved into the console. Roster, Registry and Access became one Players tab, and Configs, the convar tables and the build half of Releases became one Config tab.
+ * `players` is in here as well as in the nav, which looks like a contradiction and is not: a canonical route always carries its sub-tab, so a bare
  * `#/players` can only be an old link, and the old one meant the registry. */
 const MOVED_TABS = {
   precinct: "dispatch",
@@ -993,8 +944,7 @@ function showSub(tab, sub, moveFocus) {
 }
 
 /* Left, Right, Home and End inside a tab bar, per the WAI-ARIA tabs pattern.
- * Without it the bar is a row of buttons a keyboard user tabs through one at a
- * time to reach anything. The same handler serves the sub-tab bars, which are
+ * Without it the bar is a row of buttons a keyboard user tabs through one at a time to reach anything. The same handler serves the sub-tab bars, which are
  * tablists too and would otherwise be the exception nobody tested. */
 function tablistKey(event) {
   const bar = event.currentTarget.closest("nav");
@@ -1019,9 +969,7 @@ function tablistKey(event) {
 }
 
 /* What each tab loads, where a failure goes, and what to call the thing in the
- * message. One table rather than a try/catch inside each loader, so a loader
- * added later cannot quietly be the one without error handling.
- *
+ * message. One table rather than a try/catch inside each loader, so a loader added later cannot quietly be the one without error handling.
  * A sub-tab is keyed `tab/sub` and is loaded when it is shown, so opening
  * Players does not fetch the allowlist of a panel nobody is looking at. */
 const TAB_LOADERS = {
@@ -1060,10 +1008,7 @@ const TAB_LOADERS = {
 /* ---- diagnostics --------------------------------------------------------- */
 
 /* The same checks `cellar doctor` runs, from the same crate.
- *
- * They used to live inside the CLI and print as they went, so the dashboard
- * could not reach them and reimplementing them here would have been a second
- * copy that drifts. They live in `cellar-diagnostics` now and this renders
+ * They used to live inside the CLI and print as they went, so the dashboard could not reach them and reimplementing them here would have been a second copy that drifts. They live in `cellar-diagnostics` now and this renders
  * whatever it returns, so a check added later appears here without a change. */
 async function loadDiagnostics() {
   const data = await api("/api/diagnostics");
@@ -1098,14 +1043,26 @@ async function loadDiagnostics() {
 }
 
 /* What runs on a timer, when it last ran, and whether it worked.
- *
- * "Run now" answers 202 rather than 200 and does not wait: it nudges the job's
- * own loop, so a job cannot be running twice at once however many operators
+ * "Run now" answers 202 rather than 200 and does not wait: it nudges the job's own loop, so a job cannot be running twice at once however many operators
  * press the button. The row shows the outcome on the next poll. */
 async function loadJobs() {
   const data = await api("/api/jobs");
   const body = $("#jobs");
   body.replaceChildren();
+
+  const maintenance = data.maintenance || {};
+  const maintenanceStatus = $("#maintenance-status");
+  if (maintenance.active) {
+    maintenanceStatus.textContent = `${maintenance.active.name} started ${new Date(maintenance.active.started_at).toLocaleString()}.`;
+    maintenanceStatus.className = "wait lamp";
+  } else if (maintenance.last) {
+    const outcome = maintenance.last.ok ? "completed" : "failed";
+    maintenanceStatus.textContent = `Last maintenance: ${maintenance.last.name} ${outcome}. ${maintenance.last.detail}`;
+    maintenanceStatus.className = maintenance.last.ok ? "up lamp" : "down lamp";
+  } else {
+    maintenanceStatus.textContent = "No maintenance operation has run in this process.";
+    maintenanceStatus.className = "muted small";
+  }
 
   const jobs = data.jobs || [];
   if (!jobs.length) {
@@ -1136,7 +1093,7 @@ async function loadJobs() {
     if (job.running) {
       result.append(el("span", "wait lamp", " running"));
     } else if (job.last_ok === null || job.last_ok === undefined) {
-      result.append(el("span", "muted", "—"));
+      result.append(el("span", "muted", "not yet"));
     } else {
       result.append(el("span", job.last_ok ? "up lamp" : "down lamp", " "));
       result.append(document.createTextNode(job.last_detail || (job.last_ok ? "ok" : "failed")));
@@ -1144,7 +1101,7 @@ async function loadJobs() {
     if (job.failures) result.append(el("div", "muted small", `${job.failures} failure(s) so far`));
     row.append(result);
 
-    row.append(el("td", "muted", job.next_run ? new Date(job.next_run).toLocaleString() : "—"));
+    row.append(el("td", "muted", job.next_run ? new Date(job.next_run).toLocaleString() : "not scheduled"));
 
     const action = el("td");
     const now = el("button", "chip", "run now");
@@ -1174,8 +1131,7 @@ async function runJob(name) {
     return;
   }
   showToast(`Asked ${name} to run.`, "success");
-  // Long enough for a quick job to have finished and short enough to feel
-  // like a response. A slow one shows as running until the next load.
+  // Long enough for a quick job to have finished and short enough to feel like a response. A slow one shows as running until the next load.
   setTimeout(() => load("jobs", $("#jobs"), () => loadJobs()), 1200);
 }
 
@@ -1206,9 +1162,7 @@ function renderChecks(body, checks) {
 /* ---- activity ------------------------------------------------------------ */
 
 /* The audit and the observation record, read back at last.
- *
- * `record_command` has written every console command since the console existed
- * and `record_event` every lifecycle event; neither was ever rendered. No new
+ * `record_command` has written every console command since the console existed and `record_event` every lifecycle event; neither was ever rendered. No new
  * backend writes were needed for this screen, only a query. */
 async function loadActivity() {
   const params = new URLSearchParams();
@@ -1344,10 +1298,7 @@ async function loadAccess() {
 }
 
 /* Which files this panel writes, and which servers read them.
- *
- * The gate and the allowlist are `features.json` and `permissions.json` in one
- * instance's data directory. Two instances normally have different ones, and
- * nothing stops a config pointing both at the same directory, at which point
+ * The gate and the allowlist are `features.json` and `permissions.json` in one instance's data directory. Two instances normally have different ones, and nothing stops a config pointing both at the same directory, at which point
  * an edit here is an edit to both servers and the screen should say so. */
 function renderAccessScope() {
   const target = $("#access-scope");
@@ -1414,8 +1365,7 @@ async function loadSettings() {
 
     const actions = el("td");
     if (feature.toggle === "core") {
-      // Core is not toggleable at all; the gamemode refuses it. Showing a
-      // button that always fails would be worse than showing none.
+      // Core is not toggleable at all; the gamemode refuses it. Showing a button that always fails would be worse than showing none.
       actions.append(el("span", "muted small", "core"));
     } else {
       const button = el("button", "chip", feature.enabled ? "turn off" : "turn on");
@@ -1503,8 +1453,7 @@ async function exportSettings(format, overrides) {
 /* ---- the build, and Cellar's own release --------------------------------- */
 
 /* Three versions used to share one table: Cellar's, the gamemode's and the
- * engine's. They update for different reasons, on different schedules, and
- * only one of them is Cellar's to update, so Cellar's own goes to Settings and
+ * engine's. They update for different reasons, on different schedules, and only one of them is Cellar's to update, so Cellar's own goes to Settings and
  * the two the operator builds and ships stay with the build controls. */
 async function loadCellarUpdate() {
   const rows = $("#cellar-update");
@@ -1534,9 +1483,7 @@ async function loadCellarUpdate() {
 /* ---- backups ------------------------------------------------------------- */
 
 /* What has been taken, whether it is real, and how to put one back.
- *
- * The restore path has existed since Phase 1 with no button, which is the
- * shape that matters: a restore is looked for under pressure, and a command
+ * The restore path has existed since Phase 1 with no button, which is the shape that matters: a restore is looked for under pressure, and a command
  * nobody has run is a command nobody will find at 3am. */
 async function loadBackups() {
   const rows = $("#backups");
@@ -1573,10 +1520,7 @@ async function loadBackups() {
   fact("before an update", settings.before_update ? "yes" : "no");
 
   /* The job's own verdict, on the screen the backups are on.
-   *
-   * Pressing "back up now" and seeing no new row is exactly when the reason
-   * is wanted, and it was two screens away in the job register: measured
-   * here, a passwordless URL failed the dump and the only tell on this
+   * Pressing "back up now" and seeing no new row is exactly when the reason is wanted, and it was two screens away in the job register: measured here, a passwordless URL failed the dump and the only tell on this
    * screen was that nothing appeared. */
   const job = (await api("/api/jobs").catch(() => null))?.jobs
     ?.find((entry) => entry.name === "database-backup");
@@ -1592,8 +1536,7 @@ async function loadBackups() {
   const dumps = data.dumps || [];
   if (!dumps.length) {
     /* "None scheduled" and "none taken yet" are different problems and an
-     * empty table is the same picture for both. The no-database case cannot
-     * reach here, because `validate` refuses that config at parse time, but
+     * empty table is the same picture for both. The no-database case cannot reach here, because `validate` refuses that config at parse time, but
      * it is answered anyway rather than falling through to the wrong one. */
     emptyRow(rows, 4, !data.database_configured
       ? "No dumps: no database is configured, so there is nothing to dump."
@@ -1630,9 +1573,7 @@ async function loadBackups() {
 }
 
 /* Through the scheduler, not through `POST /api/db/backup`.
- *
- * The job owns the timer and the retention pass, so asking the job to run is
- * what makes "back up now" and the scheduled backup the same operation. Two
+ * The job owns the timer and the retention pass, so asking the job to run is what makes "back up now" and the scheduled backup the same operation. Two
  * of them at once would race `prune` against the dump it is about to count. */
 async function backupNow() {
   await runJob("database-backup");
@@ -1977,9 +1918,7 @@ async function refreshStatus() {
 }
 
 /* Which server the console below belongs to, said in full.
- *
- * The strip says which tile is lit and the masthead says the mode; neither
- * says the join address, and the address is the thing an operator is asked for
+ * The strip says which tile is lit and the masthead says the mode; neither says the join address, and the address is the thing an operator is asked for
  * while they are looking at the console. */
 function renderIdentity(data) {
   const target = $("#identity-facts");
@@ -2132,12 +2071,7 @@ const tableTools = [
 ];
 
 /* Filtering and sorting are user actions, not a refresh concern.
- *
- * This used to be called from `refreshStatus`, on a two second interval.
- * `body.append(row)` on a row that is already attached is a remove and an
- * insert, which blurs anything focused inside it, and the Settings table holds
- * live inputs: typing a convar value there lost focus twice a second. It is
- * called from the search and sort controls now, and it still refuses to
+ * This used to be called from `refreshStatus`, on a two second interval. `body.append(row)` on a row that is already attached is a remove and an insert, which blurs anything focused inside it, and the Settings table holds live inputs: typing a convar value there lost focus twice a second. It is called from the search and sort controls now, and it still refuses to
  * reorder a table somebody is typing into. */
 function applyTableTools() {
   for (const [inputId, bodyId, sortId] of tableTools) {
@@ -2156,16 +2090,13 @@ function applyTableTools() {
   }
 }
 
-// An exit with no code was killed by a signal, which is not the same as a
-// clean exit and must not read as one.
+// An exit with no code was killed by a signal, which is not the same as a clean exit and must not read as one.
 function describeExit(exit) {
   if (!exit || exit.code === null || exit.code === undefined) return "killed by a signal";
   return exit.code === 0 ? "code 0, cleanly" : `code ${exit.code}`;
 }
 
-// A state with no process reads as an absence unless it says how the last run
-// ended. Exit 0 after a stop and exit 137 after an OOM kill are the same word
-// otherwise.
+// A state with no process reads as an absence unless it says how the last run ended. Exit 0 after a stop and exit 137 after an OOM kill are the same word otherwise.
 function stateLabel(server) {
   const word = server.state.replace("_", " ");
   if (!server.last_exit || (server.state !== "stopped" && server.state !== "crash_looping")) {
@@ -2176,12 +2107,7 @@ function stateLabel(server) {
 
 /* The state classes a lamp may hold. Named here so `setLamp` can remove the
  * old one without knowing which it was.
- *
- * It used to assign `className` outright, which was correct for the `#stat-*`
- * lamps and wrong for `#connection-state`: that element starts as
- * `connection lamp wait`, so the first WebSocket open dropped `.connection`,
- * the mobile rule hiding it stopped applying, and the element gained `.value`
- * at 20px. A phone showed a large "live" label that was designed to be
+ * It used to assign `className` outright, which was correct for the `#stat-*` lamps and wrong for `#connection-state`: that element starts as `connection lamp wait`, so the first WebSocket open dropped `.connection`, the mobile rule hiding it stopped applying, and the element gained `.value` at 20px. A phone showed a large "live" label that was designed to be
  * invisible. */
 const LAMP_STATES = ["up", "down", "wait", "warn", "live"];
 
@@ -2193,7 +2119,6 @@ function setLamp(node, state, label) {
 }
 
 /* The last few minutes of status bars, for the average column.
- *
  * One sample is a spike, and a spike is what an operator sees when they happen
  * to look. Five minutes at the two second poll is 150. */
 let timingHistory = [];
@@ -2247,9 +2172,7 @@ function renderTimings(bar) {
   }
 
   /* The engine's status bar reports no frame rate, so a frame rate here would
-   * be Cellar inventing one. What it does report is the time each stage took,
-   * and their sum is the measured work in a tick. That sum is honest, and so
-   * is the ceiling it implies: what the tick rate could reach if nothing else
+   * be Cellar inventing one. What it does report is the time each stage took, and their sum is the measured work in a tick. That sum is honest, and so is the ceiling it implies: what the tick rate could reach if nothing else
    * on the machine cost anything. Both are labelled as derived. */
   const total = entries.reduce((sum, [, value]) => sum + value, 0);
   const totalMean = TIMING_FIELDS
@@ -2330,8 +2253,7 @@ function renderRoster(players) {
     actions.append(kick);
 
     /* A dash rather than a guess. Somebody absent from the history could be
-     * here for the first time, or could have joined after this panel read it,
-     * or the database could be off; "first visit" would be Cellar deciding
+     * here for the first time, or could have joined after this panel read it, or the database could be off; "first visit" would be Cellar deciding
      * which without knowing. */
     const seen = playerHistory.get(String(player.steam_id));
     row.append(
@@ -2357,12 +2279,7 @@ function appendLine(kind, at, who, message, live = false, level = "info", catego
   if (consoleRecords.length > 5000) consoleRecords.shift();
 
   /* Append one node, rather than tearing the whole console down and rebuilding
-   * it. The old version cleared the whole node and re-created up to 1500
-   * elements for every single arriving line, which is O(n) DOM work per line
-   * and locks the tab under a server that is talking fast. That is also what
-   * "slow mode" existed to paper over, so slow mode is gone: the fix is to make
-   * rendering cheap, not to render less often and call it a feature.
-   *
+   * it. The old version cleared the whole node and re-created up to 1500 elements for every single arriving line, which is O(n) DOM work per line and locks the tab under a server that is talking fast. That is also what "slow mode" existed to paper over, so slow mode is gone: the fix is to make rendering cheap, not to render less often and call it a feature.
    * Paused still collects. A pause that dropped lines would be a pause that
    * loses the ones you paused to read around. */
   if (consolePaused) return;
@@ -2441,11 +2358,7 @@ function renderAddresses(addresses) {
 }
 
 /* Whether the event stream will render this command for us.
- *
- * `command_dispatched` and `command_replied` are broadcast to every connected
- * browser, so rendering the reply locally as well shows it twice. Rendering it
- * only locally would instead hide every command another operator, the CLI or
- * MCP ran. The stream is the source when there is one; the local copy is the
+ * `command_dispatched` and `command_replied` are broadcast to every connected browser, so rendering the reply locally as well shows it twice. Rendering it only locally would instead hide every command another operator, the CLI or MCP ran. The stream is the source when there is one; the local copy is the
  * fallback for a dropped socket, where showing nothing would be worse. */
 function commandsArriveOnTheStream() {
   return socket && socket.readyState === WebSocket.OPEN;
@@ -2465,8 +2378,7 @@ async function runCommand(command) {
     const data = await response.json();
 
     if (!response.ok) {
-      // Always shown: a refusal never reaches the event stream, because
-      // nothing was dispatched.
+      // Always shown: a refusal never reaches the event stream, because nothing was dispatched.
       appendLine("error", now(), "cellar", text(data.error));
       return;
     }
@@ -2482,10 +2394,7 @@ async function runCommand(command) {
 /* ---- live events -------------------------------------------------------- */
 
 /* What the console knows about its own completeness.
- *
- * A console that silently skips lines and still looks complete is worse than
- * one that says it lost some. `missedEvents` counts what the broadcast channel
- * told us it dropped; `backfilled` counts what was recovered from the log file
+ * A console that silently skips lines and still looks complete is worse than one that says it lost some. `missedEvents` counts what the broadcast channel told us it dropped; `backfilled` counts what was recovered from the log file
  * after a reconnect; `lastSeen` is the high-water mark the recovery asks from. */
 let missedEvents = 0;
 let backfilledLines = 0;
@@ -2513,9 +2422,7 @@ function renderIntegrity() {
 }
 
 /* Fill the hole a dropped socket left, from the log file.
- *
- * The engine's log is the persistent record, so a reconnect can recover what
- * the stream missed rather than resuming mid-gap and looking complete. Only
+ * The engine's log is the persistent record, so a reconnect can recover what the stream missed rather than resuming mid-gap and looking complete. Only
  * lines strictly after the last one already shown, so nothing is doubled. */
 async function backfillSince(mark) {
   if (!mark) {
@@ -2558,8 +2465,7 @@ function connect() {
     switch (event.kind) {
       case "log":
         /* The category comes from the server. It used to be recomputed here
-         * from a hand-copied regex chain, and the two copies had already
-         * diverged: the JavaScript one still tested for a specific gamemode
+         * from a hand-copied regex chain, and the two copies had already diverged: the JavaScript one still tested for a specific gamemode
          * after the Rust one started asking the gamemode profile. */
         appendLine(event.level === "error" ? "error" : "", clock(event.at), text(event.logger), text(event.message), true, event.level, text(event.category) || "other");
         noteSeen(event.at);
@@ -2588,11 +2494,7 @@ function connect() {
         refreshStatus();
         break;
       /* A command and its reply, as one block.
-       *
-       * Both of these were broadcast and both fell through to `default`, so a
-       * command run from `cellar exec`, from MCP, or by another operator's
-       * browser was invisible to anyone watching this one. The console is a
-       * shared surface; a second operator typing `quit` into it should not be
+       * Both of these were broadcast and both fell through to `default`, so a command run from `cellar exec`, from MCP, or by another operator's browser was invisible to anyone watching this one. The console is a shared surface; a second operator typing `quit` into it should not be
        * something you find out about from the exit line. */
       case "command_dispatched":
         appendLine("echo", now(), text(event.actor), `> ${text(event.command)}`);
@@ -2610,9 +2512,7 @@ function connect() {
         appendLine(event.healthy ? "echo" : "error", now(), "bridge", text(event.detail));
         break;
       /* Everything the grammar did not recognise, and everything Cellar says
-       * about itself: the start timeout, a kill escalation, and the whole
-       * shutdown transcript, which graceful_stop publishes as unparsed lines
-       * and this used to drop on the floor. A clean shutdown was invisible
+       * about itself: the start timeout, a kill escalation, and the whole shutdown transcript, which graceful_stop publishes as unparsed lines and this used to drop on the floor. A clean shutdown was invisible
        * from the web UI. */
       case "unparsed":
       case "notice":
@@ -2632,8 +2532,7 @@ function connect() {
     }
   };
 
-  // Reconnect rather than going quietly dead: a dashboard that stops updating
-  // without saying so is worse than one that is obviously offline.
+  // Reconnect rather than going quietly dead: a dashboard that stops updating without saying so is worse than one that is obviously offline.
   socket.onclose = () => {
     setLamp($("#connection-state"), "down", "reconnecting");
     appendLine("error", now(), "cellar", "--- disconnected: lines from here are recovered on reconnect ---");
@@ -2947,8 +2846,7 @@ function formatDuration(seconds) {
   const minutes = Math.floor((seconds % 3600) / 60);
   if (hours) return `${hours}h${String(minutes).padStart(2, "0")}m`;
   if (minutes) return `${minutes}m`;
-  // Whole seconds: the uptime is computed from a timestamp, so the fraction
-  // was three digits of noise repainting twice a second.
+  // Whole seconds: the uptime is computed from a timestamp, so the fraction was three digits of noise repainting twice a second.
   return `${Math.floor(seconds)}s`;
 }
 
@@ -2973,12 +2871,7 @@ function redrawCharts() {
 }
 
 /* The chart is drawn in real pixels, not in a stretched coordinate space.
- *
- * It used to carry a fixed `viewBox` and `preserveAspectRatio="none"`, so a
- * 320-unit box painted across a 1180px panel stretched every unit by 3.7 while
- * leaving the height alone. The line survived that; the axis labels did not,
- * and "100%" came out nearly four times as wide as it was tall. Matching the
- * viewBox to the element's own box means one unit is one pixel and nothing is
+ * It used to carry a fixed `viewBox` and `preserveAspectRatio="none"`, so a 320-unit box painted across a 1180px panel stretched every unit by 3.7 while leaving the height alone. The line survived that; the axis labels did not, and "100%" came out nearly four times as wide as it was tall. Matching the viewBox to the element's own box means one unit is one pixel and nothing is
  * distorted. */
 function drawPercentChart(svg, series, compact = false) {
   svg.replaceChildren();
@@ -3088,11 +2981,7 @@ async function signIn(event) {
 let started = false;
 
 /* Nothing fails quietly.
- *
- * An async loader whose fetch rejects produces an unhandled rejection and no
- * other trace, which is exactly what a killed server causes and exactly what
- * an operator watching for the kill needs to be told about. The periodic
- * refreshes below stay quiet after the first complaint so a server that is
+ * An async loader whose fetch rejects produces an unhandled rejection and no other trace, which is exactly what a killed server causes and exactly what an operator watching for the kill needs to be told about. The periodic refreshes below stay quiet after the first complaint so a server that is
  * down for a minute does not produce thirty toasts. */
 function watchForSilentFailures() {
   let lastComplaint = 0;
@@ -3133,8 +3022,7 @@ async function start() {
   renderOverviewCards();
   showTab(document.getElementById(`tab-${route.tab}`) ? route.tab : "overview", false, route.sub);
   window.addEventListener("hashchange", applyRoute);
-  // Null: a failure here must not replace the console, which is where the
-  // operator is reading the very lines that explain the failure.
+  // Null: a failure here must not replace the console, which is where the operator is reading the very lines that explain the failure.
   load("the log", null, () => loadLogs());
   connect();
   refreshStatus();
@@ -3218,8 +3106,7 @@ async function loadLogs() {
   for (const line of data.lines || []) {
     appendLine(line.level === "error" ? "error" : "", clock(line.at), line.tag, line.message, false, line.level, line.category);
     /* Seeds the high-water mark. Without this a reconnect on a quiet server
-     * has nothing to ask from, because only live log events had been marking
-     * it, and a server that has not spoken since the page opened has sent
+     * has nothing to ask from, because only live log events had been marking it, and a server that has not spoken since the page opened has sent
      * none. The gap was then reported and never filled. */
     noteSeen(line.at);
   }
@@ -3279,8 +3166,7 @@ async function scanLogs() {
   for (const line of data.lines || []) {
     appendLine(line.level === "error" ? "error" : "", clock(line.at), line.tag, line.message, false, line.level, line.category);
     /* Seeds the high-water mark. Without this a reconnect on a quiet server
-     * has nothing to ask from, because only live log events had been marking
-     * it, and a server that has not spoken since the page opened has sent
+     * has nothing to ask from, because only live log events had been marking it, and a server that has not spoken since the page opened has sent
      * none. The gap was then reported and never filled. */
     noteSeen(line.at);
   }
@@ -3317,10 +3203,7 @@ async function loadConfigs() {
   }
 
   /* Refusals are shown next to the profile, not after the click.
-   *
-   * Every one of these is a fact about the file that was knowable before the
-   * operator chose it: a different web bind, a different log path, a second
-   * instance making the whole question ambiguous. Refusing afterwards taught
+   * Every one of these is a fact about the file that was knowable before the operator chose it: a different web bind, a different log path, a second instance making the whole question ambiguous. Refusing afterwards taught
    * nothing except that the attempt failed. */
   for (const profile of profiles) {
     const mode = profile.mode === "published" ? "Published" : "Development";
@@ -3413,10 +3296,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   /* History and completion.
-   *
-   * A console with no history is a console where a mistyped long command is
-   * retyped from scratch, and completion comes from the gamemode's own profile
-   * rather than a list Cellar maintains, so it is right for a gamemode nobody
+   * A console with no history is a console where a mistyped long command is retyped from scratch, and completion comes from the gamemode's own profile rather than a list Cellar maintains, so it is right for a gamemode nobody
    * anticipated. */
   $("#command").addEventListener("keydown", (event) => {
     const input = $("#command");
@@ -3562,9 +3442,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 /* Ctrl-K. Three kinds of entry in one list: a tab to jump to, an instance to
  * switch to, and a command from the gamemode's profile to run.
- *
- * This is where the Precinct tab went. A tab existed only because there was
- * nowhere to put buttons; a palette is where a command belongs, and it costs
+ * This is where the Precinct tab went. A tab existed only because there was nowhere to put buttons; a palette is where a command belongs, and it costs
  * nothing per gamemode because the entries come from the profile. */
 let paletteEntries = [];
 let paletteCursor = 0;
@@ -3696,10 +3574,7 @@ function globalKeys(event) {
 }
 
 /* Confirming a stop or restart names the server and counts who is on it.
- *
- * "Really stop the server?" is a question an operator can only answer wrongly:
- * it does not say which server, and with two instances that is the whole
- * decision, nor how many people are about to be disconnected. Both come from
+ * "Really stop the server?" is a question an operator can only answer wrongly: it does not say which server, and with two instances that is the whole decision, nor how many people are about to be disconnected. Both come from
  * the snapshot that is already on screen. */
 async function control(action) {
   const server = lastStatus && lastStatus.server;
@@ -3714,8 +3589,7 @@ async function control(action) {
   const going = await confirmAction({
     title: `Really ${action} ${named}?`,
     body: cost,
-    // Typing the id back is the tier-2 guard, and only earned when there is
-    // more than one server to confuse.
+    // Typing the id back is the tier-2 guard, and only earned when there is more than one server to confuse.
     typed: knownInstances.length > 1 ? selectedInstance : undefined,
   });
   if (!going) return;
@@ -3747,8 +3621,7 @@ async function emergencyKill() {
   try {
     response = await fetch("/api/control/kill", { method: "POST" });
   } catch {
-    // Cellar dies a fraction of a second after it replies, so a dropped
-    // connection here is the request working, not the request failing.
+    // Cellar dies a fraction of a second after it replies, so a dropped connection here is the request working, not the request failing.
     showToast("Cellar is gone. This page has nothing left to talk to.", "warn");
     return;
   }

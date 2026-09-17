@@ -66,7 +66,20 @@ The authenticated Database panel then exposes a separate write action that
 requires typing `EXECUTE`. It applies one DML or schema statement, blocks
 privilege, filesystem, database-admin, and multi-statement operations, and
 records the operator action without storing SQL values in the audit detail.
-Keep this off for normal operation and use a least-privilege database account.
+Executable MySQL and MariaDB comments are refused because the server executes
+their contents. Keep direct control off for normal operation. The statement
+checker prevents mistakes, while the database account's grant is the final
+security boundary. External databases should use a dedicated account limited
+to the operations the deployment needs. Omit database-level `CREATE` and
+`DROP` when schema control and restore are not required, since MariaDB also
+uses those privileges for `CREATE DATABASE` and `DROP DATABASE`. Cellar's
+managed account first has any old grants revoked, then receives an explicit
+schema privilege set for migrations, bridge writes, backup and restore, plus
+the global `SHUTDOWN` privilege needed for graceful managed-database stop.
+`mariadb-dump --routines` also needs read access to `mysql.proc`, so that one
+system table is granted separately. The account does not receive `ALL
+PRIVILEGES`. The direct-control statement policy remains necessary for a
+managed account because restore requires database-level `DROP`.
 
 ## Prometheus and Grafana
 

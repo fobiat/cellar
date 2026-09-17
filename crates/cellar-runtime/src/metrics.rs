@@ -1,9 +1,5 @@
 //! Process resource sampling: the htop's input.
-//!
-//! Over the whole process tree, not the direct child. Under Wine the process
-//! Cellar spawns is `wine`, and the cpu and memory that matter belong to
-//! `sbox-server.exe` beneath it. Sampling only the child reports near zero and
-//! the dashboard confidently shows an idle server under full load.
+//! Over the whole process tree, not the direct child. Under Wine the process Cellar spawns is `wine`, and the cpu and memory that matter belong to `sbox-server.exe` beneath it. Sampling only the child reports near zero and the dashboard confidently shows an idle server under full load.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -12,9 +8,7 @@ use cellar_core::event::ResourceSample;
 use sysinfo::{Networks, Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
 /// Samples a process tree, keeping the `sysinfo` state that cpu percentages need.
-///
-/// A cpu reading is a delta between two refreshes, so the first sample after
-/// construction is meaningless and is reported as zero rather than as a spike.
+/// A cpu reading is a delta between two refreshes, so the first sample after construction is meaningless and is reported as zero rather than as a spike.
 pub struct Sampler {
     system: System,
     networks: Networks,
@@ -42,9 +36,7 @@ impl Sampler {
     }
 
     /// Sample the tree rooted at `root_pid`.
-    ///
-    /// Returns `None` when the root is gone, which is how a caller learns the
-    /// process died between the exit check and the sample.
+    /// Returns `None` when the root is gone, which is how a caller learns the process died between the exit check and the sample.
     pub fn sample(&mut self, root_pid: u32) -> Option<ResourceSample> {
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::All,
@@ -119,8 +111,7 @@ impl Sampler {
     fn tree_of(&self, root: Pid) -> HashSet<Pid> {
         let mut children: HashMap<Pid, Vec<Pid>> = HashMap::new();
         for (pid, process) in self.system.processes() {
-            // Linux exposes each task in the process map. Tasks share the
-            // process memory mapping, so including them would multiply RSS/PSS.
+            // Linux exposes each task in the process map. Tasks share the process memory mapping, so including them would multiply RSS/PSS.
             if process.thread_kind().is_some() {
                 continue;
             }
@@ -132,9 +123,7 @@ impl Sampler {
         let mut members = HashSet::new();
         let mut queue = vec![root];
 
-        // A `seen` set as well as `members`, because a pid table can contain a
-        // cycle after pid reuse, and a cycle here is an infinite loop in the
-        // sampler rather than a wrong number.
+        // A `seen` set as well as `members`, because a pid table can contain a cycle after pid reuse, and a cycle here is an infinite loop in the sampler rather than a wrong number.
         while let Some(pid) = queue.pop() {
             if !members.insert(pid) {
                 continue;
@@ -150,8 +139,7 @@ impl Sampler {
 
 #[cfg(target_os = "linux")]
 fn measured_memory(pid: Pid, process: &sysinfo::Process) -> u64 {
-    // RSS counts pages shared by Wine processes once per process. PSS assigns
-    // shared pages proportionally, which keeps the dashboard near real use.
+    // RSS counts pages shared by Wine processes once per process. PSS assigns shared pages proportionally, which keeps the dashboard near real use.
     std::fs::read_to_string(format!("/proc/{}/smaps_rollup", pid.as_u32()))
         .ok()
         .and_then(|contents| parse_pss_bytes(&contents))
@@ -175,7 +163,6 @@ fn parse_pss_bytes(contents: &str) -> Option<u64> {
 }
 
 /// Bytes as a short human string, for the TUI and the CLI.
-///
 /// Decimal, matching how disks and dashboards are labelled everywhere else.
 pub fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
@@ -212,12 +199,7 @@ pub fn format_uptime(seconds: i64) -> String {
 }
 
 /// Bytes free on the filesystem holding `path`, and the mount point it is on.
-///
-/// Matched by the longest mount point that is a prefix of the path, because on
-/// Linux `/` is a prefix of everything and answering with the root filesystem's
-/// free space for a path on a separate `/var` mount would be a confident wrong
-/// answer. Returns `None` when no mount point matches, which happens for a path
-/// that does not exist yet.
+/// Matched by the longest mount point that is a prefix of the path, because on Linux `/` is a prefix of everything and answering with the root filesystem's free space for a path on a separate `/var` mount would be a confident wrong answer. Returns `None` when no mount point matches, which happens for a path that does not exist yet.
 pub fn disk_free(path: &std::path::Path) -> Option<(u64, std::path::PathBuf)> {
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let resolved = without_verbatim_prefix(resolved);
@@ -228,14 +210,11 @@ pub fn disk_free(path: &std::path::Path) -> Option<(u64, std::path::PathBuf)> {
         .map(|disk| (disk.available_space(), disk.mount_point().to_path_buf()))
 }
 
-/// Windows `canonicalize` answers `\\?\C:\...`, whose prefix component does not
-/// compare equal to the `C:\` sysinfo calls the mount point, so every path on
-/// the machine matched no disk and Cellar reported no free space at all.
+/// Windows `canonicalize` answers `\\?\C:\...`, whose prefix component does not compare equal to the `C:\` sysinfo calls the mount point, so every path on the machine matched no disk and Cellar reported no free space at all.
 #[cfg(windows)]
 fn without_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
     match path.to_str().and_then(|text| text.strip_prefix(r"\\?\")) {
-        // A verbatim UNC share is `\\?\UNC\server\share`, and dropping only the
-        // marker there would leave a path naming nothing.
+        // A verbatim UNC share is `\\?\UNC\server\share`, and dropping only the marker there would leave a path naming nothing.
         Some(rest) if !rest.starts_with("UNC\\") => std::path::PathBuf::from(rest),
         _ => path,
     }
@@ -277,11 +256,7 @@ mod tests {
     fn a_dead_root_samples_as_nothing_rather_than_as_zero() {
         let mut sampler = Sampler::new();
 
-        // Pid 0 is not a usable stand-in for "dead": it is the kernel idle
-        // process, and on Windows sysinfo reports it as a live entry, so the
-        // sample would come back Some and this test would lie about the
-        // platform it just failed on. Spawn something real and wait for it
-        // to exit instead, so the pid is genuinely gone rather than reserved.
+        // Pid 0 is not a usable stand-in for "dead": it is the kernel idle process, and on Windows sysinfo reports it as a live entry, so the sample would come back Some and this test would lie about the platform it just failed on. Spawn something real and wait for it to exit instead, so the pid is genuinely gone rather than reserved.
         #[cfg(windows)]
         let mut child = std::process::Command::new("cmd")
             .args(["/C", "exit"])
@@ -301,8 +276,7 @@ mod tests {
         let mut sampler = Sampler::new();
         sampler.sample(std::process::id());
 
-        // The whole tree from pid 1 on unix, or the root of this session on
-        // windows, must be larger than one process on any real machine.
+        // The whole tree from pid 1 on unix, or the root of this session on windows, must be larger than one process on any real machine.
         #[cfg(unix)]
         {
             let all = sampler.tree_of(Pid::from_u32(1));

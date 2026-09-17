@@ -1,24 +1,13 @@
 //! What a gamemode tells Cellar about itself.
-//!
-//! A profile is the optional adapter between Cellar and a gamemode. Cellar
-//! does not own a gamemode's readiness line, command names, maps or source
-//! layout. A gamemode can declare those details without a Cellar code change.
-//!
-//! Deliberately small, and it must stay that way. This is not a Pterodactyl
-//! egg. No install script, no config-rewrite language, no per-gamemode UI
-//! layout. The boundary is: a profile describes a gamemode, it does not
-//! configure one.
+//! A profile is the optional adapter between Cellar and a gamemode. Cellar does not own a gamemode's readiness line, command names, maps or source layout. A gamemode can declare those details without a Cellar code change.
+//! Deliberately small, and it must stay that way. This is not a Pterodactyl egg. No install script, no config-rewrite language, no per-gamemode UI layout. The boundary is: a profile describes a gamemode, it does not configure one.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 /// A gamemode's declarative description of itself.
-///
-/// Every field is optional. A profile that sets only `ready_pattern` is a
-/// legitimate profile, and it is the one that fixes the defect this type was
-/// written for: `facepunch.sandbox` failing readiness forever because it never
-/// logs AppleJack Framework's line.
+/// Every field is optional. A profile that sets only `ready_pattern` is a legitimate profile, and it is the one that fixes the defect this type was written for: `facepunch.sandbox` failing readiness forever because it never logs AppleJack Framework's line.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GamemodeProfile {
@@ -27,23 +16,17 @@ pub struct GamemodeProfile {
     pub name: Option<String>,
 
     /// The log line that means "serving".
-    ///
-    /// A substring match, not a regex, matching what `grammar::classify` does
-    /// with it. `server.ready_pattern` still overrides this per instance.
+    /// A substring match, not a regex, matching what `grammar::classify` does with it. `server.ready_pattern` still overrides this per instance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready_pattern: Option<String>,
 
     /// The prefix this gamemode's convars share, without a trailing underscore.
-    ///
-    /// Drives automatic `find <prefix>` discovery and the log category
-    /// heuristic. The prefix is data supplied by the gamemode profile.
+    /// Drives automatic `find <prefix>` discovery and the log category heuristic. The prefix is data supplied by the gamemode profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub convar_prefix: Option<String>,
 
     /// Console commands worth offering as one click.
-    ///
-    /// `[[profile.command]]` in the file. Named singular there because that is
-    /// how a TOML array of tables reads at the point of use.
+    /// `[[profile.command]]` in the file. Named singular there because that is how a TOML array of tables reads at the point of use.
     #[serde(
         default,
         rename = "command",
@@ -53,14 +36,8 @@ pub struct GamemodeProfile {
     pub commands: Vec<ProfileCommand>,
 
     /// Map package idents this gamemode ships or supports.
-    ///
-    /// A map is a package, `org.name`, passed as the optional second positional
-    /// argument to `+game`. There is no `+map` switch. Declaring them turns a
-    /// typo'd `server.map` from a server that starts and never becomes ready
-    /// into a `cellar doctor` failure naming the maps that do exist.
-    ///
-    /// Empty means "this gamemode did not say", never "this gamemode has no
-    /// maps", so an empty list checks nothing.
+    /// A map is a package, `org.name`, passed as the optional second positional argument to `+game`. There is no `+map` switch. Declaring them turns a typo'd `server.map` from a server that starts and never becomes ready into a `cellar doctor` failure naming the maps that do exist.
+    /// Empty means "this gamemode did not say", never "this gamemode has no maps", so an empty list checks nothing.
     #[serde(
         default,
         rename = "map",
@@ -94,19 +71,13 @@ pub struct ProfileCommand {
     pub group: Option<String>,
 
     /// Ask before running it.
-    ///
-    /// The profile's own judgement about its commands: Cellar cannot know that
-    /// `applejack_wipe` is destructive and the gamemode can say so.
+    /// The profile's own judgement about its commands: Cellar cannot know that `applejack_wipe` is destructive and the gamemode can say so.
     #[serde(default)]
     pub confirm: bool,
 }
 
 /// Parse command names returned by the engine's `find <prefix>` command.
-///
-/// The console has changed the decoration around this output over time, so
-/// Cellar accepts a command token at the start of each line and ignores the
-/// rest. A command is shown only when it starts with the requested prefix and
-/// contains characters that can safely be sent as one command name.
+/// The console has changed the decoration around this output over time, so Cellar accepts a command token at the start of each line and ignores the rest. A command is shown only when it starts with the requested prefix and contains characters that can safely be sent as one command name.
 pub fn parse_discovered_commands<'a, I>(lines: I, prefix: &str) -> Vec<ProfileCommand>
 where
     I: IntoIterator<Item = &'a str>,
@@ -147,11 +118,7 @@ where
 }
 
 /// A file in the gamemode's source tree that must contain given strings.
-///
-/// Resolved relative to the directory holding `server.project`, which is what
-/// the AppleJack Framework check it replaces did. A profile cannot name an absolute
-/// path, and cannot look outside that tree: a config file is not a licence to
-/// read arbitrary host files back through `cellar doctor`'s output.
+/// Resolved relative to the directory holding `server.project`, which is what the AppleJack Framework check it replaces did. A profile cannot name an absolute path, and cannot look outside that tree: a config file is not a licence to read arbitrary host files back through `cellar doctor`'s output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileCheck {
@@ -161,13 +128,11 @@ pub struct ProfileCheck {
     /// Relative to the project directory. Forward slashes on every platform.
     pub file: PathBuf,
 
-    /// Every one of these must appear in the file. Empty means the file must
-    /// merely exist.
+    /// Every one of these must appear in the file. Empty means the file must merely exist.
     #[serde(default)]
     pub contains: Vec<String>,
 
-    /// What goes wrong when the check fails. This is the whole value of the
-    /// check: "missing" tells an operator nothing they can act on.
+    /// What goes wrong when the check fails. This is the whole value of the check: "missing" tells an operator nothing they can act on.
     pub reason: String,
 }
 
@@ -182,8 +147,7 @@ impl std::fmt::Display for ProfileError {
 }
 
 impl GamemodeProfile {
-    /// Refuse a profile that would misbehave at the point of use rather than at
-    /// the point of parse.
+    /// Refuse a profile that would misbehave at the point of use rather than at the point of parse.
     pub fn validate(&self) -> Result<(), ProfileError> {
         if let Some(prefix) = &self.convar_prefix {
             let usable = !prefix.is_empty()
@@ -215,9 +179,7 @@ impl GamemodeProfile {
         }
 
         for check in &self.checks {
-            // A check is read by `cellar doctor` and its path is printed. A
-            // profile that could name `/etc/shadow` and assert what it contains
-            // turns a config file into an oracle over the host filesystem.
+            // A check is read by `cellar doctor` and its path is printed. A profile that could name `/etc/shadow` and assert what it contains turns a config file into an oracle over the host filesystem.
             let file_text = check.file.to_string_lossy();
             if check.file.is_absolute()
                 || file_text.starts_with('/')
@@ -245,22 +207,14 @@ impl GamemodeProfile {
         Ok(())
     }
 
-    /// True when nothing was declared, so callers can tell "no profile" from
-    /// "a profile that happens to be quiet".
+    /// True when nothing was declared, so callers can tell "no profile" from "a profile that happens to be quiet".
     pub fn is_empty(&self) -> bool {
         self == &Self::default()
     }
 
     /// Which bucket of the console's category filter a log line belongs to.
-    ///
-    /// Lives here rather than in the server crate because the only thing that
-    /// made it gamemode-specific was a test for the literal `applejack`, which
-    /// is now `convar_prefix`. A gamemode that declares no prefix loses nothing:
-    /// every other rule is about the engine, which is the same for all of them.
-    ///
-    /// Order matters. The first match wins, and the arms are ordered from the
-    /// most specific subject to the least, so a line about a player's document
-    /// counts as storage rather than players.
+    /// Lives here rather than in the server crate because the only thing that made it gamemode-specific was a test for the literal `applejack`, which is now `convar_prefix`. A gamemode that declares no prefix loses nothing: every other rule is about the engine, which is the same for all of them.
+    /// Order matters. The first match wins, and the arms are ordered from the most specific subject to the least, so a line about a player's document counts as storage rather than players.
     pub fn category(&self, tag: &str, message: &str) -> Category {
         let text = format!("{tag} {message}").to_ascii_lowercase();
         let mentions = |needles: &[&str]| needles.iter().any(|needle| text.contains(needle));
@@ -289,10 +243,7 @@ impl GamemodeProfile {
 }
 
 /// The console's category filter, as a closed set.
-///
-/// An enum rather than a `String` because the browser renders one checkbox per
-/// category and a typo on either side silently produces a filter that matches
-/// nothing. The wire form is the lowercase name.
+/// An enum rather than a `String` because the browser renders one checkbox per category and a typo on either side silently produces a filter that matches nothing. The wire form is the lowercase name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Category {
@@ -379,8 +330,7 @@ mod tests {
         assert!(refused.is_err(), "deny_unknown_fields must apply");
     }
 
-    /// The whole point of the type. A profile that says only this is enough to
-    /// stop `facepunch.sandbox` failing readiness forever.
+    /// The whole point of the type. A profile that says only this is enough to stop `facepunch.sandbox` failing readiness forever.
     #[test]
     fn a_ready_pattern_alone_is_a_valid_profile() {
         let parsed = profile(r#"ready_pattern = "Connected to Steam""#);
@@ -463,8 +413,7 @@ mod tests {
         assert_eq!(sandbox.category("Sbox", "tool used"), Category::Gameplay);
     }
 
-    /// Every rule except the prefix one is about the engine, so a profile-free
-    /// config categorises exactly as it did before profiles existed.
+    /// Every rule except the prefix one is about the engine, so a profile-free config categorises exactly as it did before profiles existed.
     #[test]
     fn the_engine_rules_do_not_need_a_profile() {
         let bare = GamemodeProfile::default();

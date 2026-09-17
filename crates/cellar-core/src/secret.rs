@@ -1,12 +1,6 @@
 //! A string that refuses to print itself.
-//!
-//! Cellar handles a GSLT, a database password, a Discord webhook URL and an
-//! operator password hash. Every one of them passes through a struct that is at
-//! some point `Debug`-formatted into a log line or serialised into
-//! `status --json`, and the house rule is that a webhook URL is never echoed.
-//!
-//! Making redaction the type's own behaviour is the only version of that rule
-//! which cannot be forgotten at a call site.
+//! Cellar handles a GSLT, a database password, a Discord webhook URL and an operator password hash. Every one of them passes through a struct that is at some point `Debug`-formatted into a log line or serialised into `status --json`, and the house rule is that a webhook URL is never echoed.
+//! Making redaction the type's own behaviour is the only version of that rule which cannot be forgotten at a call site.
 
 use std::fmt;
 
@@ -24,8 +18,7 @@ impl Secret {
         Self(value.into())
     }
 
-    /// Read the real value. Every call site is a place to ask "does this end up
-    /// in a log?".
+    /// Read the real value. Every call site is a place to ask "does this end up in a log?".
     pub fn expose(&self) -> &str {
         &self.0
     }
@@ -55,8 +48,7 @@ impl fmt::Display for Secret {
     }
 }
 
-/// Serialises as `***`, so a secret cannot reach `status --json` or a webhook
-/// payload by being a field of something that got serialised.
+/// Serialises as `***`, so a secret cannot reach `status --json` or a webhook payload by being a field of something that got serialised.
 impl Serialize for Secret {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(REDACTED)
@@ -70,16 +62,12 @@ impl<'de> Deserialize<'de> for Secret {
 }
 
 /// Remove a secret from arbitrary text before it is logged.
-///
-/// The child process writes its own command line and its own errors, and an
-/// engine stack trace can contain a connection string. This is the belt to
+/// The child process writes its own command line and its own errors, and an engine stack trace can contain a connection string. This is the belt to
 /// [`Secret`]'s braces.
 pub fn redact_all(text: &str, secrets: &[&Secret]) -> String {
     let mut out = text.to_owned();
     for secret in secrets {
-        // A very short secret would match everywhere and destroy the line; a
-        // real token is never this short, so a misconfigured empty value is
-        // skipped rather than turning every log line into asterisks.
+        // A very short secret would match everywhere and destroy the line; a real token is never this short, so a misconfigured empty value is skipped rather than turning every log line into asterisks.
         if secret.0.len() >= 8 {
             out = out.replace(&secret.0, REDACTED);
         }

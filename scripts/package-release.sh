@@ -1,17 +1,5 @@
 #!/usr/bin/env bash
-# Package release artifacts from binaries that are already built.
-#
-# The same two artifacts per platform the release workflow produces, so a
-# release cut by hand is indistinguishable from one cut by CI:
-#
-#   cellar-<target>.tar.gz / .zip   the archive, for the installer scripts
-#   cellar-<target> / .exe          the bare binary, for `cellar self-update`
-#
-# plus a .sha256 beside each. Both installers and self-update refuse to install
-# anything whose checksum was not published, so a missing one is a broken
-# release rather than an inconvenience.
-#
-#   ./scripts/package-release.sh          package whatever is built
+# Package built archives, bare self-update binaries, and required checksums.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

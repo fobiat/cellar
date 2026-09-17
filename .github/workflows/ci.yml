@@ -165,7 +165,7 @@ jobs:
         run: npm ci --prefix tests/browser
 
       - name: install Chromium
-        run: npx playwright install --with-deps chromium
+        run: npm exec --prefix tests/browser -- playwright install --with-deps chromium
 
       - name: run browser and accessibility tests
         run: npm test --prefix tests/browser

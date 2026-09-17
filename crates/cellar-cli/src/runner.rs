@@ -1,11 +1,5 @@
 //! `cellar run`: the supervising foreground mode.
-//!
-//! Everything that runs continuously is started here and shut down here, in an
-//! order that matters. `hosting.json` is written before the child starts,
-//! because the gamemode reads it once at boot; the bridge binds before the child
-//! starts, because the child will call it during map load; and the signal
-//! handler is installed before any of it, because the interesting failure is a
-//! rollout arriving mid-startup.
+//! Everything that runs continuously is started here and shut down here, in an order that matters. `hosting.json` is written before the child starts, because the gamemode reads it once at boot; the bridge binds before the child starts, because the child will call it during map load; and the signal handler is installed before any of it, because the interesting failure is a rollout arriving mid-startup.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -15,7 +9,7 @@ use cellar_core::config::{Config, DatabaseSchemaOwner, Instance, InstanceId, Upd
 use cellar_core::event::Event;
 use cellar_runtime::{Handle, Supervisor};
 use cellar_server::auth::Policy;
-use cellar_server::state::{AppState, BridgeState, Documents, ProgramUpdateStatus};
+use cellar_server::state::{AppState, BridgeState, Documents, ProgramUpdateStatus, ShutdownSignal};
 
 struct BridgeBinding {
     id: InstanceId,
@@ -72,10 +66,7 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
     let config =
         Config::load(config_path).with_context(|| format!("reading {}", config_path.display()))?;
 
-    // Started before the database connects, and given a moment to come up:
-    // connecting while `mariadbd` is still initializing would just be the
-    // first of a string of retries. `database.url` is unchanged either way,
-    // see `[mariadb]` in cellar-core::config for why the two stay decoupled.
+    // Started before the database connects, and given a moment to come up: connecting while `mariadbd` is still initializing would just be the first of a string of retries. `database.url` is unchanged either way, see `[mariadb]` in cellar-core::config for why the two stay decoupled.
     let mariadb = start_mariadb(&config).await?;
 
     let pool = open_database(&config).await?;
@@ -88,19 +79,12 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         None => Documents::memory(),
     };
 
-    // One supervisor per enabled instance. A disabled one still reaches the
-    // registry, marked unavailable with its reason, so the dashboard shows a
-    // declared server rather than nothing at all.
+    // One supervisor per enabled instance. A disabled one still reaches the registry, marked unavailable with its reason, so the dashboard shows a declared server rather than nothing at all.
     let mut supervisors = Vec::new();
     let mut entries: Vec<cellar_server::registry::Entry> = Vec::new();
 
     for instance in &mut instances {
-        // The real player ceiling, before a single player connects.
-        // `+maxplayers` is not a convar and not a launch switch; the old
-        // `entrypoint.sh` passed it for years and it was inert. Reading it here
-        // rather than in the supervisor keeps `cellar-runtime` free of a
-        // dependency on the update crate, and it is a config-resolution
-        // question rather than a process one.
+        // The real player ceiling, before a single player connects. `+maxplayers` is not a convar and not a launch switch; the old `entrypoint.sh` passed it for years and it was inert. Reading it here rather than in the supervisor keeps `cellar-runtime` free of a dependency on the update crate, and it is a config-resolution question rather than a process one.
         match cellar_update::project::read(&instance.server.project) {
             Ok(Some(project)) => {
                 if let Some(ceiling) = project.max_players {
@@ -120,6 +104,10 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         }
     }
 
+    config
+        .validate_exclusive_resources()
+        .context("rechecking instance filesystem isolation before startup")?;
+
     let bindings = bridge_bindings(&instances, &documents)?;
 
     for instance in instances {
@@ -133,11 +121,7 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
             continue;
         }
 
-        // Probed before spawning, because the alternative is what it used to
-        // do: back off and retry into a missing binary five times and then
-        // report a crash loop, which reads as a broken server rather than a
-        // wrong path. `doctor` says the same thing, but nothing makes an
-        // operator run it first.
+        // Probed before spawning, because the alternative is what it used to do: back off and retry into a missing binary five times and then report a crash loop, which reads as a broken server rather than a wrong path. `doctor` says the same thing, but nothing makes an operator run it first.
         if let Some(why) = unavailable_reason(&instance) {
             tracing::warn!("instance '{}' will not be started: {why}", instance.id);
             entry.unavailable = Some(why);
@@ -154,9 +138,7 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         supervisors.push((id, supervisor, handle, control));
     }
 
-    // The primary is whichever instance actually started, not whichever the
-    // config nominates. They differ exactly when the first one could not start,
-    // and that is the case where an operator most needs the dashboard up.
+    // The primary is whichever instance actually started, not whichever the config nominates. They differ exactly when the first one could not start, and that is the case where an operator most needs the dashboard up.
     let registry = cellar_server::registry::Registry::new(entries);
     let runtime_primary = active_primary(&registry).cloned();
     let primary_handle = runtime_primary
@@ -235,10 +217,7 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
             .collect::<Vec<_>>(),
     );
 
-    // The merged stream, not the primary's. This used to subscribe to one
-    // handle, so on a two-instance deployment a crash on the second server
-    // notified nobody, which is exactly the server an unattended deployment
-    // hears about last.
+    // The merged stream, not the primary's. This used to subscribe to one handle, so on a two-instance deployment a crash on the second server notified nobody, which is exactly the server an unattended deployment hears about last.
     if let Some(notifier) = cellar_notify::Notifier::new(
         &config.notify,
         &primary.server.hostname,
@@ -276,94 +255,60 @@ pub async fn run(config_path: &Path, with_tui: bool) -> Result<()> {
         .collect();
 
     if with_tui {
-        // The TUI is a single-server htop with a command line, and that is a
-        // good thing for it to be. It follows the primary, and now says so when
-        // there is more than one server it could have followed.
+        // The TUI is a single-server htop with a command line, and that is a good thing for it to be. It follows the primary, and now says so when there is more than one server it could have followed.
         let handle = primary_handle
             .clone()
             .context("no instance started, so there is nothing for the TUI to follow")?;
         let followed = state.instances.primary();
-        cellar_tui::run(
+        let tui = cellar_tui::run(
             handle,
             (running.len() > 1)
                 .then(|| followed.map(|entry| entry.id.to_string()))
                 .flatten(),
             followed.and_then(|entry| entry.descriptor.profile.name.clone()),
-        )
-        .await?;
+        );
+        tokio::select! {
+            result = tui => result?,
+            _ = wait_for_shutdown(state.shutdown_requested.clone()) => {
+                tracing::info!("shutdown requested while the TUI was open");
+            }
+        }
     } else {
         wait_for_shutdown(state.shutdown_requested.clone()).await;
         tracing::info!("stopping the server gracefully");
     }
 
-    // `quit` through the console, not a signal: the engine installs no SIGTERM
-    // handler, and a kill skips the Steam logoff and the convar save. Shutdown
-    // rather than stop, because a stopped server leaves the supervisor resting
-    // and still answering, which is what the dashboard wants and not what an
-    // exiting process does.
-    // One shared budget over every instance, not sixty seconds each. With two
-    // servers the sequential version blows the Kubernetes grace period and the
-    // pod is SIGKILLed mid-logoff, which is exactly the shutdown the engine has
-    // no handler for.
+    // `quit` through the console, not a signal: the engine installs no SIGTERM handler, and a kill skips the Steam logoff and the convar save. Shutdown rather than stop, because a stopped server leaves the supervisor resting and still answering, which is what the dashboard wants and not what an exiting process does. One shared budget over every instance, not sixty seconds each. With two servers the sequential version blows the Kubernetes grace period and the pod is SIGKILLed mid-logoff, which is exactly the shutdown the engine has no handler for.
     let budget = std::time::Duration::from_secs(60);
-    let shutdown_result = tokio::time::timeout(budget, async {
-        // Asked concurrently. Each `quit` waits out its own engine's nine
-        // shutdown steps, and doing that in sequence is what turns one grace
-        // period into N of them.
-        let asks: Vec<_> = running
-            .iter()
-            .map(|(id, handle, _)| {
-                let (id, handle) = (id.clone(), handle.clone());
-                tokio::spawn(async move {
-                    tracing::info!("stopping instance '{id}'");
-                    handle.shutdown().await.map_err(|why| {
-                        format!("could not confirm that instance '{id}' stopped: {why}")
-                    })
-                })
-            })
-            .collect();
-        for ask in asks {
-            ask.await
-                .map_err(|error| format!("a shutdown task failed: {error}"))??;
-        }
-        for (_, _, task) in running {
-            task.await
-                .map_err(|error| format!("a supervisor task failed: {error}"))?;
-        }
-        Ok::<(), String>(())
-    })
-    .await
-    .map_err(|_| {
-        anyhow::anyhow!("the 60s shutdown budget expired before every server exit was confirmed")
-    })
-    .and_then(|result| result.map_err(anyhow::Error::msg));
+    let shutdown_result = shutdown_instances(running, budget)
+        .await
+        .map_err(anyhow::Error::msg);
+
+    if let Err(error) = shutdown_result {
+        tracing::error!(
+            "graceful process shutdown failed: {error}; killing Cellar and every remaining child"
+        );
+        cellar_runtime::process::emergency_kill_current_process_tree();
+        std::future::pending::<()>().await;
+        unreachable!("the emergency process killer always terminates Cellar");
+    }
 
     for server in servers {
         server.abort();
     }
 
-    // Stopped last: nothing above needs the database once it has stopped
-    // accepting requests, and stopping it earlier would just make the game
-    // server's own shutdown, and any in-flight bridge write, fail instead.
+    // Stopped last: nothing above needs the database once it has stopped accepting requests, and stopping it earlier would just make the game server's own shutdown, and any in-flight bridge write, fail instead.
     if let Some(mariadb) = &mariadb {
         tracing::info!("stopping mariadb");
         mariadb.stop().await;
     }
 
-    shutdown_result
+    Ok(())
 }
 
 /// Every recurring job this process runs, in one register.
-///
-/// These were three separate `tokio::spawn`ed loops that each slept and did a
-/// thing, invisible from anywhere but this file, so nothing said when a backup
-/// last ran or whether it worked. Worse, `database.event_retention_days` was
-/// configured and had **no loop at all**: the setting has done nothing since it
-/// was added, and only the manual `cellar db prune` ever acted on it.
-///
-/// The supervisor's tail tick and the MariaDB supervisor's are deliberately not
-/// here. They are a state machine's clock inside a `select!`, with no result to
-/// report and no meaning to "run now".
+/// These were three separate `tokio::spawn`ed loops that each slept and did a thing, invisible from anywhere but this file, so nothing said when a backup last ran or whether it worked. Worse, `database.event_retention_days` was configured and had **no loop at all**: the setting has done nothing since it was added, and only the manual `cellar db prune` ever acted on it.
+/// The supervisor's tail tick and the MariaDB supervisor's are deliberately not here. They are a state machine's clock inside a `select!`, with no result to report and no meaning to "run now".
 fn build_scheduler(
     config: &Config,
     state: &Arc<AppState>,
@@ -379,6 +324,7 @@ fn build_scheduler(
                 let url = url.expose().to_owned();
                 let mariadb = config.mariadb.clone();
                 let backup = config.backup.clone();
+                let maintenance = state.maintenance.clone();
                 scheduler.register(
                     Spec {
                         name: "database-backup".to_owned(),
@@ -387,24 +333,36 @@ fn build_scheduler(
                         interval: std::time::Duration::from_secs(
                             config.backup.interval_hours.max(1) * 3600,
                         ),
-                        // Never at startup. A Cellar being restarted in a loop
-                        // would otherwise take a dump per restart and prune the
-                        // good ones out of the retention window.
+                        // Never at startup. A Cellar being restarted in a loop would otherwise take a dump per restart and prune the good ones out of the retention window.
                         at_startup: false,
                     },
                     move || {
                         let url = url.clone();
                         let mariadb = mariadb.clone();
                         let backup = backup.clone();
+                        let maintenance = maintenance.clone();
                         // Blocking process work, off the async threads.
                         async move {
-                            tokio::task::spawn_blocking(move || {
+                            let guard = maintenance
+                                .try_start("scheduled database backup")
+                                .map_err(|why| why.to_string())?;
+                            let result = tokio::task::spawn_blocking(move || {
                                 cellar_mariadb::backup(&url, &mariadb, &backup)
                                     .map(|path| format!("wrote {}", path.display()))
                                     .map_err(|why| why.to_string())
                             })
                             .await
-                            .unwrap_or_else(|why| Err(why.to_string()))
+                            .unwrap_or_else(|why| Err(why.to_string()));
+                            match result {
+                                Ok(detail) => {
+                                    guard.succeed(detail.clone());
+                                    Ok(detail)
+                                }
+                                Err(why) => {
+                                    guard.fail(why.clone());
+                                    Err(why)
+                                }
+                            }
                         }
                     },
                 );
@@ -413,12 +371,11 @@ fn build_scheduler(
         }
     }
 
-    // The job that never existed. `event_retention_days` defaults to 90 and
-    // nothing has ever enforced it, so a long-running deployment's `srv_event`
-    // and `srv_command` grow without bound.
+    // The job that never existed. `event_retention_days` defaults to 90 and nothing has ever enforced it, so a long-running deployment's `srv_event` and `srv_command` grow without bound.
     if let Some(pool) = pool.clone() {
         let days = config.database.event_retention_days;
         if days > 0 {
+            let maintenance = state.maintenance.clone();
             scheduler.register(
                 Spec {
                     name: "event-retention".to_owned(),
@@ -428,11 +385,25 @@ fn build_scheduler(
                 },
                 move || {
                     let pool = pool.clone();
+                    let maintenance = maintenance.clone();
                     async move {
-                        cellar_store::ops::prune_events(&pool, days)
+                        let guard = maintenance
+                            .try_start("event retention")
+                            .map_err(|why| why.to_string())?;
+                        let result = cellar_store::ops::prune_events(&pool, days)
                             .await
                             .map(|deleted| format!("deleted {deleted} row(s)"))
-                            .map_err(|why| why.to_string())
+                            .map_err(|why| why.to_string());
+                        match result {
+                            Ok(detail) => {
+                                guard.succeed(detail.clone());
+                                Ok(detail)
+                            }
+                            Err(why) => {
+                                guard.fail(why.clone());
+                                Err(why)
+                            }
+                        }
                     }
                 },
             );
@@ -443,6 +414,7 @@ fn build_scheduler(
         && let Some(handle) = primary
     {
         let config = config.clone();
+        let maintenance = state.maintenance.clone();
         scheduler.register(
             Spec {
                 name: "game-update-check".to_owned(),
@@ -454,7 +426,8 @@ fn build_scheduler(
             move || {
                 let config = config.clone();
                 let handle = handle.clone();
-                async move { check_for_updates(&config, &handle).await }
+                let maintenance = maintenance.clone();
+                async move { check_for_updates(&config, &handle, &maintenance).await }
             },
         );
     }
@@ -483,9 +456,7 @@ fn build_scheduler(
 }
 
 /// Start and wait for the locally-hosted MariaDB, when `[mariadb].managed`.
-///
-/// Absent otherwise: `database.url` already works unchanged for a remote
-/// database, and this is the only thing that differs.
+/// Absent otherwise: `database.url` already works unchanged for a remote database, and this is the only thing that differs.
 async fn start_mariadb(config: &Config) -> Result<Option<cellar_mariadb::Handle>> {
     if !config.mariadb.managed {
         return Ok(None);
@@ -568,12 +539,14 @@ fn build_state(
         config.update.program_release_url.clone(),
     )));
     state.release_config = config.release.clone();
-    if let Ok(mut path) = state.config_path.lock() {
-        *path = Some(config_path.to_owned());
-    }
     state.web_bind = config.web.bind.clone();
     state.web_enabled = config.web.enabled;
     state.instances = instances;
+    if let Some(primary) = config.primary() {
+        state
+            .commit_active_runtime(config_path.to_owned(), config, &primary)
+            .map_err(anyhow::Error::msg)?;
+    }
     state.version_probe = Some(cellar_update::Probe {
         project_dir: project_dir(config),
         steam_dir: config.update.steam_dir.clone(),
@@ -634,11 +607,7 @@ async fn bind(
 }
 
 /// Why an instance cannot be started here, if it cannot.
-///
-/// Deliberately narrow: only conditions that are certain and cheap to check.
-/// Anything that might be true by the time the server actually needs it belongs
-/// in `doctor`, not here, because refusing to start a server that would have
-/// worked is worse than starting one that fails.
+/// Deliberately narrow: only conditions that are certain and cheap to check. Anything that might be true by the time the server actually needs it belongs in `doctor`, not here, because refusing to start a server that would have worked is worse than starting one that fails.
 fn unavailable_reason(instance: &cellar_core::config::Instance) -> Option<String> {
     let executable = &instance.server.executable;
     if !executable.exists() {
@@ -659,12 +628,7 @@ fn unavailable_reason(instance: &cellar_core::config::Instance) -> Option<String
 }
 
 /// Merge every instance's event stream into one, tagged by instance.
-///
-/// A task per instance rather than a select over N receivers, because the set
-/// is fixed at startup and a task is the simpler thing to reason about. Each
-/// one handles `Lagged` by continuing: returning would end that task and leave
-/// the instance silent on the merged stream while its own channel is perfectly
-/// healthy, which is the failure that looks like a dead server and is not one.
+/// A task per instance rather than a select over N receivers, because the set is fixed at startup and a task is the simpler thing to reason about. Each one handles `Lagged` by continuing: returning would end that task and leave the instance silent on the merged stream while its own channel is perfectly healthy, which is the failure that looks like a dead server and is not one.
 fn fan_in(
     instances: &[(cellar_core::config::InstanceId, Handle)],
 ) -> tokio::sync::broadcast::Sender<cellar_core::event::InstanceEvent> {
@@ -696,12 +660,7 @@ fn fan_in(
 }
 
 /// Which session row is open for which instance.
-///
-/// One `Option<u64>` used to hold this, which was correct for one server and
-/// silently wrong for two: on a merged stream one instance's exit would
-/// `take()` the id and close the other instance's session row, leaving the
-/// first open forever and the second ended by an event about a different
-/// process.
+/// One `Option<u64>` used to hold this, which was correct for one server and silently wrong for two: on a merged stream one instance's exit would `take()` the id and close the other instance's session row, leaving the first open forever and the second ended by an event about a different process.
 #[derive(Debug, Default)]
 struct SessionLedger {
     open: std::collections::HashMap<cellar_core::config::InstanceId, u64>,
@@ -723,10 +682,7 @@ impl SessionLedger {
 }
 
 /// Mirror the event stream into the operations tables.
-///
-/// Every write here is best effort. An operations insert must never be the
-/// reason a player's join is not handled, so a failure is a warning and the
-/// stream carries on.
+/// Every write here is best effort. An operations insert must never be the reason a player's join is not handled, so a failure is a warning and the stream carries on.
 async fn record_events(
     pool: sqlx::MySqlPool,
     mut events: tokio::sync::broadcast::Receiver<cellar_core::event::InstanceEvent>,
@@ -788,10 +744,7 @@ async fn record_events(
         }
 
         if event.is_notable() {
-            // The logger, the account and a readable detail, not just the kind.
-            // Every row used to be a kind and a timestamp because all three were
-            // passed as `None`, which nothing noticed while nothing read the
-            // table back.
+            // The logger, the account and a readable detail, not just the kind. Every row used to be a kind and a timestamp because all three were passed as `None`, which nothing noticed while nothing read the table back.
             let record = event.record();
             let detail = record.detail.map(serde_json::Value::String);
             if let Err(why) = cellar_store::ops::record_event(
@@ -810,9 +763,12 @@ async fn record_events(
     }
 }
 
-/// One update check. Was a loop with a `tokio::time::interval`; the scheduler
-/// owns the timing now, so this returns what happened instead of only logging.
-async fn check_for_updates(config: &Config, handle: &Handle) -> Result<String, String> {
+/// One update check. Was a loop with a `tokio::time::interval`; the scheduler owns the timing now, so this returns what happened instead of only logging.
+async fn check_for_updates(
+    config: &Config,
+    handle: &Handle,
+    maintenance: &cellar_server::state::MaintenanceCoordinator,
+) -> Result<String, String> {
     let probe = cellar_update::Probe {
         project_dir: project_dir(config),
         steam_dir: config.update.steam_dir.clone(),
@@ -851,54 +807,59 @@ async fn check_for_updates(config: &Config, handle: &Handle) -> Result<String, S
         cellar_update::Decision::Apply { what } => {
             let what = what.join(", ");
             tracing::warn!("taking update: {what}");
+            let guard = maintenance
+                .try_start("game update")
+                .map_err(|why| why.to_string())?;
+            let result = async {
+                let snapshot = snapshot_before_update(config).await;
 
-            // A snapshot first, because this is the one moment a rollback is
-            // most likely to be wanted and least likely to have been planned
-            // for. Not fatal if it fails: refusing the update would leave a
-            // deployment stuck behind on a box with a full backup disk.
-            let snapshot = snapshot_before_update(config).await;
+                handle
+                    .stop()
+                    .await
+                    .map_err(|why| format!("could not stop the server before updating: {why}"))?;
 
-            // Stop before updating: the engine's files are in use while it
-            // runs, and Steam cannot replace a running binary.
-            handle
-                .stop()
-                .await
-                .map_err(|why| format!("could not stop the server before updating: {why}"))?;
+                let applied =
+                    cellar_update::updater::apply(&config.update, &probe.project_dir).await;
+                let mut failures = Vec::new();
+                for step in &applied.steps {
+                    if step.ok {
+                        tracing::info!("{}: {}", step.name, step.detail);
+                    } else {
+                        tracing::error!("{} failed: {}", step.name, step.detail);
+                        failures.push(step.name.clone());
+                    }
+                }
 
-            let applied = cellar_update::updater::apply(&config.update, &probe.project_dir).await;
-            let mut failures = Vec::new();
-            for step in &applied.steps {
-                if step.ok {
-                    tracing::info!("{}: {}", step.name, step.detail);
+                handle.restart().await.map_err(|why| {
+                    format!("update completed but the server could not restart: {why}")
+                })?;
+
+                if failures.is_empty() {
+                    Ok(format!("applied {what}{snapshot}"))
                 } else {
-                    tracing::error!("{} failed: {}", step.name, step.detail);
-                    failures.push(step.name.clone());
+                    Err(format!(
+                        "applied {what}{snapshot}, but these steps failed: {}",
+                        failures.join(", ")
+                    ))
                 }
             }
-
-            // Restart either way. A half-applied update still needs a running
-            // server more than it needs to stay down.
-            handle.restart().await.map_err(|why| {
-                format!("update completed but the server could not restart: {why}")
-            })?;
-
-            if failures.is_empty() {
-                Ok(format!("applied {what}{snapshot}"))
-            } else {
-                Err(format!(
-                    "applied {what}{snapshot}, but these steps failed: {}",
-                    failures.join(", ")
-                ))
+            .await;
+            match result {
+                Ok(detail) => {
+                    guard.succeed(detail.clone());
+                    Ok(detail)
+                }
+                Err(why) => {
+                    guard.fail(why.clone());
+                    Err(why)
+                }
             }
         }
     }
 }
 
 /// A dump taken immediately before an update is applied, when one is possible.
-///
-/// Returns a suffix for the job's own outcome line rather than a `Result`: an
-/// update that could not be snapshotted is still an update that should proceed,
-/// and the operator needs to know which of the two happened.
+/// Returns a suffix for the job's own outcome line rather than a `Result`: an update that could not be snapshotted is still an update that should proceed, and the operator needs to know which of the two happened.
 async fn snapshot_before_update(config: &Config) -> String {
     if !config.backup.before_update || !config.backup.enabled {
         return String::new();
@@ -974,8 +935,68 @@ fn hostname() -> Option<String> {
     std::env::var("HOSTNAME").ok()
 }
 
+async fn shutdown_instances(
+    running: Vec<(InstanceId, Handle, tokio::task::JoinHandle<()>)>,
+    budget: std::time::Duration,
+) -> Result<(), String> {
+    let mut tasks = tokio::task::JoinSet::new();
+    for (id, handle, supervisor) in running {
+        tasks.spawn(async move {
+            tracing::info!("stopping instance '{id}'");
+            let result = handle.shutdown().await;
+            match result {
+                Ok(()) => supervisor
+                    .await
+                    .map_err(|error| format!("instance '{id}' supervisor failed: {error}")),
+                Err(_) if supervisor.is_finished() => supervisor
+                    .await
+                    .map_err(|error| format!("instance '{id}' supervisor failed: {error}")),
+                Err(why) => Err(format!(
+                    "could not confirm that instance '{id}' stopped: {why}"
+                )),
+            }
+        });
+    }
+    wait_for_shutdown_tasks(budget, tasks).await
+}
+
+async fn wait_for_shutdown_tasks(
+    budget: std::time::Duration,
+    mut tasks: tokio::task::JoinSet<Result<(), String>>,
+) -> Result<(), String> {
+    let completed = tokio::time::timeout(budget, async {
+        let mut failures = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => failures.push(error),
+                Err(error) => failures.push(format!("a shutdown task failed: {error}")),
+            }
+        }
+        failures
+    })
+    .await;
+
+    let failures = match completed {
+        Ok(failures) => failures,
+        Err(_) => {
+            tasks.abort_all();
+            while tasks.join_next().await.is_some() {}
+            return Err(format!(
+                "the shared {budget:?} shutdown budget expired before every server exit was confirmed"
+            ));
+        }
+    };
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
+}
+
 /// Wait for the signal the platform sends to stop a service.
-async fn wait_for_shutdown(shutdown_requested: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+async fn wait_for_shutdown(shutdown_requested: std::sync::Arc<ShutdownSignal>) {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
@@ -1005,21 +1026,53 @@ async fn wait_for_shutdown(shutdown_requested: std::sync::Arc<std::sync::atomic:
     }
 }
 
-async fn wait_for_api_shutdown(requested: std::sync::Arc<std::sync::atomic::AtomicBool>) {
-    while !requested.load(std::sync::atomic::Ordering::Acquire) {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
+async fn wait_for_api_shutdown(requested: std::sync::Arc<ShutdownSignal>) {
+    requested.wait().await;
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use cellar_core::config::InstanceId;
+    use tokio::task::JoinSet;
 
     use super::*;
 
     fn id(name: &str) -> InstanceId {
         InstanceId::new(name).unwrap()
+    }
+
+    #[tokio::test]
+    async fn stalled_instance_shutdowns_share_one_deadline() {
+        let mut tasks = JoinSet::new();
+        for _ in 0..2 {
+            tasks.spawn(async {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                Ok(())
+            });
+        }
+
+        let started = std::time::Instant::now();
+        let error = wait_for_shutdown_tasks(std::time::Duration::from_millis(50), tasks)
+            .await
+            .expect_err("the shared deadline should expire");
+
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+        assert!(error.contains("50ms"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn shutdown_reports_every_instance_failure() {
+        let mut tasks = JoinSet::new();
+        tasks.spawn(async { Err("alpha could not stop".to_owned()) });
+        tasks.spawn(async { Err("beta could not stop".to_owned()) });
+
+        let error = wait_for_shutdown_tasks(std::time::Duration::from_secs(1), tasks)
+            .await
+            .expect_err("both failures should reach the coordinator");
+
+        assert!(error.contains("alpha could not stop"), "{error}");
+        assert!(error.contains("beta could not stop"), "{error}");
     }
 
     #[test]
@@ -1143,11 +1196,7 @@ mod tests {
     }
 
     /// The interleaving that a single `Option<u64>` got wrong.
-    ///
-    /// Two servers start, then the first one exits. With one slot, that exit
-    /// closed whichever session was stored last, which is the *other* server's,
-    /// leaving one row open forever and ending another with an exit code from a
-    /// different process. Nothing would have reported it: both writes succeed.
+    /// Two servers start, then the first one exits. With one slot, that exit closed whichever session was stored last, which is the *other* server's, leaving one row open forever and ending another with an exit code from a different process. Nothing would have reported it: both writes succeed.
     #[test]
     fn one_instance_exiting_does_not_close_another_instance_session() {
         let mut ledger = SessionLedger::default();
@@ -1188,19 +1237,12 @@ mod tests {
     }
 
     /// A recurring job that is not in the register is a job nobody can see.
-    ///
-    /// This file had three `tokio::spawn`ed sleep-and-do loops, none of which
-    /// reported when it last ran or whether it worked, and a fourth thing
-    /// (`event_retention_days`) that was configured and had no loop at all.
-    /// Nothing stops a fifth being added the old way except this test.
+    /// This file had three `tokio::spawn`ed sleep-and-do loops, none of which reported when it last ran or whether it worked, and a fourth thing (`event_retention_days`) that was configured and had no loop at all. Nothing stops a fifth being added the old way except this test.
     #[test]
     fn no_recurring_work_is_spawned_outside_the_scheduler() {
         const SOURCE: &str = include_str!("runner.rs");
 
-        // Only the product half of the file, so the test does not find itself.
-        // `tokio::time::interval` is unambiguous: nothing constructs one except
-        // to do a thing repeatedly. The two `loop`s that remain here are
-        // event-stream consumers, which have no schedule and no result.
+        // Only the product half of the file, so the test does not find itself. `tokio::time::interval` is unambiguous: nothing constructs one except to do a thing repeatedly. The two `loop`s that remain here are event-stream consumers, which have no schedule and no result.
         let product = SOURCE.split("#[cfg(test)]").next().unwrap_or(SOURCE);
 
         let offenders: Vec<&str> = product

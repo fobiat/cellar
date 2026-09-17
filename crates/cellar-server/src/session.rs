@@ -1,12 +1,6 @@
 //! Who is allowed to use the web UI.
-//!
-//! A single operator password, Argon2-hashed, exchanged for a random session
-//! token held in a cookie. Not a user system: there is one operator, and
-//! pretending otherwise would be building an account model nobody asked for.
-//!
-//! A loopback listener may complete setup in the browser. A reachable listener
-//! still needs a pre-provisioned hash, because the console behind it runs at
-//! full engine privilege.
+//! A single operator password, Argon2-hashed, exchanged for a random session token held in a cookie. Not a user system: there is one operator, and pretending otherwise would be building an account model nobody asked for.
+//! A loopback listener may complete setup in the browser. A reachable listener still needs a pre-provisioned hash, because the console behind it runs at full engine privilege.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -66,20 +60,28 @@ where
         let Some(expected) = &state.external_api_token else {
             return Err((StatusCode::NOT_FOUND, "external API is not enabled"));
         };
-        let Some(header) = parts.headers.get(axum::http::header::AUTHORIZATION) else {
-            return Err((StatusCode::UNAUTHORIZED, "missing bearer token"));
-        };
-        let Ok(header) = header.to_str() else {
-            return Err((StatusCode::UNAUTHORIZED, "invalid bearer token"));
-        };
-        let Some(token) = header.strip_prefix("Bearer ") else {
-            return Err((StatusCode::UNAUTHORIZED, "expected bearer token"));
-        };
-        if token != expected.expose() {
-            return Err((StatusCode::UNAUTHORIZED, "invalid bearer token"));
-        }
+        check_external_bearer(&parts.headers, expected.expose())?;
         Ok(Self)
     }
+}
+
+fn check_external_bearer(
+    headers: &axum::http::HeaderMap,
+    expected: &str,
+) -> Result<(), (StatusCode, &'static str)> {
+    let Some(header) = headers.get(axum::http::header::AUTHORIZATION) else {
+        return Err((StatusCode::UNAUTHORIZED, "missing bearer token"));
+    };
+    let Ok(header) = header.to_str() else {
+        return Err((StatusCode::UNAUTHORIZED, "invalid bearer token"));
+    };
+    let Some(token) = header.strip_prefix("Bearer ") else {
+        return Err((StatusCode::UNAUTHORIZED, "expected bearer token"));
+    };
+    if !crate::auth::constant_time_eq(token.as_bytes(), expected.as_bytes()) {
+        return Err((StatusCode::UNAUTHORIZED, "invalid bearer token"));
+    }
+    Ok(())
 }
 
 /// Live sessions.
@@ -101,8 +103,7 @@ impl Sessions {
         let now = Instant::now();
 
         if let Ok(mut tokens) = self.tokens.lock() {
-            // Expired entries are swept here rather than on a timer: the map is
-            // small and the only thing that grows it is a login.
+            // Expired entries are swept here rather than on a timer: the map is small and the only thing that grows it is a login.
             tokens.retain(|_, (_, seen, created)| {
                 seen.elapsed() < SESSION_TTL && created.elapsed() < SESSION_MAX_AGE
             });
@@ -139,9 +140,7 @@ impl Sessions {
     }
 }
 
-/// The default password file is beside the selected config, but hidden and
-/// separate from TOML so a config directory can be copied without copying a
-/// credential by accident.
+/// The default password file is beside the selected config, but hidden and separate from TOML so a config directory can be copied without copying a credential by accident.
 pub fn password_path(config_path: &Path) -> PathBuf {
     let stem = config_path
         .file_stem()
@@ -154,8 +153,7 @@ pub fn password_path(config_path: &Path) -> PathBuf {
         .join(format!(".{stem}.web-password"))
 }
 
-/// Read a previously completed first-run setup, refusing files that are
-/// accessible to group or other users on Unix.
+/// Read a previously completed first-run setup, refusing files that are accessible to group or other users on Unix.
 pub fn load_password_hash(path: &Path) -> Result<Option<String>, String> {
     let metadata = match std::fs::metadata(path) {
         Ok(metadata) => metadata,
@@ -219,9 +217,7 @@ pub fn save_password_hash(path: &Path, hash: &str) -> Result<(), String> {
 }
 
 /// Hash a password for configuration or first-run storage.
-///
-/// `cellar hash-password` prints this, so a plaintext password never has to be
-/// typed into a file that might be committed.
+/// `cellar hash-password` prints this, so a plaintext password never has to be typed into a file that might be committed.
 pub fn hash_password(password: &str) -> Result<String, String> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
@@ -359,5 +355,36 @@ mod tests {
         assert_eq!(cookie_value(&parts, COOKIE).as_deref(), Some("abc123"));
         assert_eq!(cookie_value(&parts, "theme").as_deref(), Some("dark"));
         assert!(cookie_value(&parts, "absent").is_none());
+    }
+
+    #[test]
+    fn external_api_bearers_accept_only_the_complete_configured_token() {
+        let expected = "cellar-test-token";
+        let headers = |value: Option<&str>| {
+            let mut headers = axum::http::HeaderMap::new();
+            if let Some(value) = value {
+                headers.insert(axum::http::header::AUTHORIZATION, value.parse().unwrap());
+            }
+            headers
+        };
+
+        assert!(
+            check_external_bearer(&headers(Some("Bearer cellar-test-token")), expected).is_ok()
+        );
+        for value in [
+            None,
+            Some("Basic cellar-test-token"),
+            Some("Bearer "),
+            Some("Bearer cellar-test-toke"),
+            Some("Bearer cellar-test-token-extra"),
+            Some("Bearer cellar-test-tokfn"),
+        ] {
+            assert_eq!(
+                check_external_bearer(&headers(value), expected)
+                    .unwrap_err()
+                    .0,
+                StatusCode::UNAUTHORIZED
+            );
+        }
     }
 }

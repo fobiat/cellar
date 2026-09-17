@@ -15,14 +15,8 @@ pub enum InstallError {
     UnexpectedLayout { expected: String },
 }
 
-/// Unpack `bytes` (the archive for `version`) into `install_dir`, stripping
-/// the archive's own top-level directory so `install_dir/bin/mariadbd.exe`
-/// is the result.
-///
-/// Idempotent: does nothing if `install_dir` already holds this version's
-/// binaries, so a re-run after an interrupted provision does not re-download
-/// or re-extract. Runs the extraction on a blocking thread: it is synchronous
-/// file I/O, one-time and multi-second, not worth blocking the async runtime.
+/// Unpack `bytes` (the archive for `version`) into `install_dir`, stripping the archive's own top-level directory so `install_dir/bin/mariadbd.exe` is the result.
+/// Idempotent: does nothing if `install_dir` already holds this version's binaries, so a re-run after an interrupted provision does not re-download or re-extract. Runs the extraction on a blocking thread: it is synchronous file I/O, one-time and multi-second, not worth blocking the async runtime.
 pub async fn install(
     install_dir: &Path,
     version: &str,
@@ -43,9 +37,7 @@ pub async fn install(
     Ok(())
 }
 
-/// Extract into a staging directory beside `install_dir`, then rename into
-/// place last. A half-extracted archive must never look installed:
-/// `release::already_installed` checks for `install_dir` existing at all.
+/// Extract into a staging directory beside `install_dir`, then rename into place last. A half-extracted archive must never look installed: `release::already_installed` checks for `install_dir` existing at all.
 fn extract(bytes: &[u8], root: &str, install_dir: &Path) -> Result<(), InstallError> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
 
@@ -66,10 +58,7 @@ fn extract(bytes: &[u8], root: &str, install_dir: &Path) -> Result<(), InstallEr
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
 
-        // `mangled_name`, not `name`: it strips `..` and rooted components,
-        // so a crafted archive cannot write outside `staging` even though
-        // the checksum already verified this one came from the pinned
-        // config value.
+        // `mangled_name`, not `name`: it strips `..` and rooted components, so a crafted archive cannot write outside `staging` even though the checksum already verified this one came from the pinned config value.
         let mangled = entry.mangled_name();
         let mut components = mangled.components();
         let under_root = matches!(
@@ -167,9 +156,7 @@ mod tests {
 
         install(&install_dir, "11.4.5", bytes).await.unwrap();
 
-        // A second call with a *different* payload must not re-extract, or an
-        // interrupted-then-retried provision could silently downgrade a
-        // partially-initialized install.
+        // A second call with a *different* payload must not re-extract, or an interrupted-then-retried provision could silently downgrade a partially-initialized install.
         let different = archive_bytes("mariadb-11.4.5-winx64", &[("bin/mariadbd.exe", b"second")]);
         install(&install_dir, "11.4.5", different).await.unwrap();
 

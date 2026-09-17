@@ -36,7 +36,6 @@ a { color: var(--aj-azure); }
 .security-banner.danger { border-color: color-mix(in srgb, var(--aj-russet) 65%, transparent); }
 .security-banner.danger strong { color: var(--aj-russet-text); }
 
-/* ---- shell -------------------------------------------------------------- */
 
 .masthead {
   display: flex;
@@ -85,7 +84,6 @@ a { color: var(--aj-azure); }
 
 .connection { white-space: nowrap; font-size: 11px; }
 
-/* ---- the status strip --------------------------------------------------- */
 
 .strip {
   display: grid;
@@ -239,9 +237,7 @@ body.overview-resizing { cursor: ew-resize; user-select: none; }
 .warn  { color: var(--aj-log-warning); }
 .live  { color: var(--aj-azure); }
 
-/* ---- tabs --------------------------------------------------------------- */
 
-/* ---- the instance strip -------------------------------------------------- */
 
 /* A second tab bar, not a panel of cards.
  *
@@ -310,7 +306,6 @@ nav.instances .instance:focus-visible {
   font-size: 11px;
 }
 
-/* ---- the command palette ------------------------------------------------- */
 
 .palette {
   position: fixed;
@@ -439,7 +434,6 @@ main { padding: 18px 20px 48px; }
 section[hidden] { display: none; }
 [role="tabpanel"][hidden] { display: none; }
 
-/* ---- panels ------------------------------------------------------------- */
 
 .panel {
   background: var(--aj-raised);
@@ -549,7 +543,6 @@ section[hidden] { display: none; }
 
 .database-summary strong { font-size: 14px; overflow-wrap: anywhere; }
 
-/* ---- tables ------------------------------------------------------------- */
 
 .scroll { overflow-x: auto; }
 
@@ -583,7 +576,6 @@ tbody tr:hover { background: color-mix(in srgb, var(--aj-azure) 8%, transparent)
 td.null { color: var(--aj-text-muted); font-style: italic; }
 td.wide { max-width: 460px; overflow-wrap: anywhere; }
 
-/* ---- console ------------------------------------------------------------ */
 
 .console {
   background: var(--aj-ink);
@@ -660,13 +652,12 @@ input:focus, textarea:focus, select:focus {
 
 textarea { min-height: 84px; resize: vertical; width: 100%; }
 
-/* ---- buttons ------------------------------------------------------------ */
 
 button.action {
   appearance: none;
   border: 1px solid var(--aj-azure);
   background: transparent;
-  color: var(--aj-azure);
+  color: var(--aj-azure-hover);
   font: inherit;
   font-size: 12px;
   letter-spacing: 0.06em;
@@ -694,7 +685,6 @@ button.action.critical:hover {
 
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
-/* ---- command shortcuts -------------------------------------------------- */
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 
@@ -746,7 +736,6 @@ button.action.critical:hover {
    above them, not more of the same. */
 .timing-total td { border-top: 1px solid color-mix(in srgb, var(--aj-frost) 22%, transparent); }
 
-/* ---- sparkline ---------------------------------------------------------- */
 
 .spark { width: 100%; height: 64px; display: block; }
 .spark.large { height: 154px; color: var(--aj-azure); background: color-mix(in srgb, var(--aj-ink) 70%, var(--aj-shell)); }
@@ -759,7 +748,6 @@ button.action.critical:hover {
 .chart-key-process { color: var(--aj-azure); }
 .chart-key-host { color: var(--aj-orchard); }
 
-/* ---- login -------------------------------------------------------------- */
 
 .gate {
   max-width: 340px;
@@ -816,7 +804,6 @@ button.action.critical:hover {
 
 .skip-link:focus { top: 12px; }
 
-/* ---- the confirmation dialog -------------------------------------------- */
 
 dialog.confirm {
   border: 1px solid color-mix(in srgb, var(--aj-frost) 30%, transparent);

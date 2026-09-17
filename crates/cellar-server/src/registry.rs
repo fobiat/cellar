@@ -1,10 +1,5 @@
 //! Every supervised server this process owns.
-//!
-//! Fixed at startup, on purpose. Instances are declared in `cellar.toml` and the
-//! set does not change while Cellar runs, so this is a slice rather than a
-//! locked map. A registry that can grow needs a lifecycle, an id allocator and a
-//! create route, and this product's instances are the development, staging and
-//! production of one gamemode rather than tenants.
+//! Fixed at startup, on purpose. Instances are declared in `cellar.toml` and the set does not change while Cellar runs, so this is a slice rather than a locked map. A registry that can grow needs a lifecycle, an id allocator and a create route, and this product's instances are the development, staging and production of one gamemode rather than tenants.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,10 +10,8 @@ use cellar_runtime::Handle;
 use serde::Serialize;
 
 /// What the routes need to know about one instance without reading its config.
-///
-/// A snapshot taken at startup rather than a borrow of the config, because
-/// `SwitchConfig` can replace a supervisor's config underneath it and a route
-/// reading a stale field is better than a route holding a lock.
+/// Startup descriptors live in the registry. The active primary descriptor is
+/// replaced atomically with the rest of the live profile state.
 #[derive(Debug, Clone, Serialize)]
 pub struct Descriptor {
     pub log_file: Option<PathBuf>,
@@ -30,19 +23,30 @@ pub struct Descriptor {
     pub direct_connect: bool,
     pub bridge_bind: String,
     pub bridge_enabled: bool,
-    /// What gamemode this instance runs. Carried here so a route can categorise
-    /// a log line or render a command palette without reaching back into the
-    /// config, which `SwitchConfig` can replace underneath it.
-    ///
-    /// Not serialised as part of the descriptor: `/api/instances` lifts it to
-    /// the instance level, because a gamemode is a property of the instance
-    /// rather than of its `[server]` table.
+    /// What gamemode this instance runs. Carried here so a route can categorise a log line or render a command palette without reaching back into the config, which `SwitchConfig` can replace underneath it.
+    /// Not serialised as part of the descriptor: `/api/instances` lifts it to the instance level, because a gamemode is a property of the instance rather than of its `[server]` table.
     #[serde(skip)]
     pub profile: GamemodeProfile,
-    /// The resolved readiness line, after `server.ready_pattern` and the
-    /// profile have both had their say. Shown in diagnostics: a wrong one is
-    /// invisible otherwise, and it is the defect the profile exists to fix.
+    /// The resolved readiness line, after `server.ready_pattern` and the profile have both had their say. Shown in diagnostics: a wrong one is invisible otherwise, and it is the defect the profile exists to fix.
     pub ready_pattern: String,
+}
+
+impl Descriptor {
+    pub fn from_instance(instance: &Instance) -> Self {
+        Self {
+            log_file: Some(instance.server.engine_log_file()),
+            game: instance.server.game.clone(),
+            map: instance.server.map.clone(),
+            data_dir: instance.server.game_data_dir(),
+            port: instance.server.port,
+            query_port: instance.server.query_port,
+            direct_connect: instance.server.direct_connect,
+            bridge_bind: instance.bridge.bind.clone(),
+            bridge_enabled: instance.bridge.enabled,
+            profile: instance.profile.clone(),
+            ready_pattern: instance.ready_pattern().to_owned(),
+        }
+    }
 }
 
 /// One instance, running or not.
@@ -51,8 +55,7 @@ pub struct Entry {
     pub id: InstanceId,
     /// The storage key, which is not the id. See `Config::instances`.
     pub scope: String,
-    /// Absent when the instance is declared but not started here. `unavailable`
-    /// is why, and it is what the dashboard shows in place of a state.
+    /// Absent when the instance is declared but not started here. `unavailable` is why, and it is what the dashboard shows in place of a state.
     pub handle: Option<Handle>,
     pub unavailable: Option<String>,
     /// Whether `/readyz` speaks for this instance.
@@ -61,8 +64,7 @@ pub struct Entry {
 }
 
 impl Entry {
-    /// Build the parts that come from the config. The handle is attached once
-    /// the supervisor for it exists.
+    /// Build the parts that come from the config. The handle is attached once the supervisor for it exists.
     pub fn from_instance(instance: &Instance) -> Self {
         Self {
             id: instance.id.clone(),
@@ -71,19 +73,7 @@ impl Entry {
             unavailable: (!instance.enabled)
                 .then(|| "declared but not enabled in this config".to_owned()),
             required: instance.required,
-            descriptor: Descriptor {
-                log_file: Some(instance.server.engine_log_file()),
-                game: instance.server.game.clone(),
-                map: instance.server.map.clone(),
-                data_dir: instance.server.game_data_dir(),
-                port: instance.server.port,
-                query_port: instance.server.query_port,
-                direct_connect: instance.server.direct_connect,
-                bridge_bind: instance.bridge.bind.clone(),
-                bridge_enabled: instance.bridge.enabled,
-                profile: instance.profile.clone(),
-                ready_pattern: instance.ready_pattern().to_owned(),
-            },
+            descriptor: Descriptor::from_instance(instance),
         }
     }
 }
@@ -96,9 +86,7 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// Build from the desugared config. `primary` is the first enabled entry,
-    /// matching `Config::primary`, so an unqualified request means the same
-    /// instance everywhere.
+    /// Build from the desugared config. `primary` is the first enabled entry, matching `Config::primary`, so an unqualified request means the same instance everywhere.
     pub fn new(entries: Vec<Entry>) -> Self {
         let primary = entries
             .iter()
@@ -128,9 +116,7 @@ impl Registry {
     }
 
     /// Look one up by id.
-    ///
-    /// Returns `None` rather than falling back to the primary. A typo'd id must
-    /// never quietly run `quit` against production.
+    /// Returns `None` rather than falling back to the primary. A typo'd id must never quietly run `quit` against production.
     pub fn get(&self, id: &str) -> Option<&Entry> {
         self.entries.iter().find(|entry| entry.id.as_str() == id)
     }
@@ -159,17 +145,8 @@ impl Default for Registry {
 }
 
 /// The instance a request is about.
-///
-/// `?instance=<id>`, defaulting to the primary, rather than a path prefix. The
-/// reason is compatibility: `cellar-mcp` calls six routes, the CLI's live-server
-/// commands call two more, and `app.js` calls about twenty-five. A prefix means
-/// changing all of them to gain nothing a parameter does not already give, and
-/// Cellar's authorization is a per-handler extractor rather than a path policy,
-/// so nothing depends on the instance being in the path.
-///
-/// An unknown id is a 404 naming the ids that do exist. It is never a silent
-/// fallback to the primary, because the request that gets misrouted that way is
-/// `quit`.
+/// `?instance=<id>`, defaulting to the primary, rather than a path prefix. The reason is compatibility: `cellar-mcp` calls six routes, the CLI's live-server commands call two more, and `app.js` calls about twenty-five. A prefix means changing all of them to gain nothing a parameter does not already give, and Cellar's authorization is a per-handler extractor rather than a path policy, so nothing depends on the instance being in the path.
+/// An unknown id is a 404 naming the ids that do exist. It is never a silent fallback to the primary, because the request that gets misrouted that way is `quit`.
 pub struct Target(pub Entry);
 
 impl std::ops::Deref for Target {
@@ -261,8 +238,7 @@ mod tests {
 
     #[test]
     fn the_primary_skips_an_instance_that_is_not_running_here() {
-        // A development instance that cannot start on a Linux host must not be
-        // what an unqualified request lands on.
+        // A development instance that cannot start on a Linux host must not be what an unqualified request lands on.
         let registry = Registry::new(vec![entry("dev", false), entry("published", true)]);
 
         assert_eq!(registry.primary().unwrap().id.as_str(), "published");
@@ -270,8 +246,7 @@ mod tests {
 
     #[test]
     fn an_unknown_id_is_a_miss_rather_than_the_primary() {
-        // The whole reason `get` returns Option: a typo'd id resolving to the
-        // primary means `quit` reaching production.
+        // The whole reason `get` returns Option: a typo'd id resolving to the primary means `quit` reaching production.
         let registry = Registry::new(vec![entry("dev", true)]);
 
         assert!(registry.get("devv").is_none());

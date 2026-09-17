@@ -1,8 +1,5 @@
 //! MySQL for Cellar.
-//!
-//! Two tenants in one database: `aj_*` is the bridge's document store, which the
-//! gamemode owns and which outlives Cellar, and `srv_*` is Cellar's own
-//! operations record. See `migrations/0001_initial.sql`.
+//! Two tenants in one database: `aj_*` is the bridge's document store, which the gamemode owns and which outlives Cellar, and `srv_*` is Cellar's own operations record. See `migrations/0001_initial.sql`.
 
 pub mod admin;
 pub mod document;
@@ -13,8 +10,7 @@ use std::time::Duration;
 use sqlx::mysql::MySqlPoolOptions;
 use sqlx::{MySqlPool, migrate::Migrator};
 
-/// The embedded schema. `cellar db migrate` and `database.migrate_on_start`
-/// both run this.
+/// The embedded schema. `cellar db migrate` and `database.migrate_on_start` both run this.
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[derive(Debug, thiserror::Error)]
@@ -25,17 +21,16 @@ pub enum StoreError {
     #[error("migration failed: {0}")]
     Migrate(#[from] sqlx::migrate::MigrateError),
 
-    /// A stored body did not parse. Never mapped to "absent": that is the
-    /// distinction 20_PERSISTENCE.md §4.1 exists to protect.
+    /// A stored body did not parse. Never mapped to "absent": that is the distinction 20_PERSISTENCE.md §4.1 exists to protect.
     #[error("a stored document was not readable JSON: {0}")]
     Corrupt(#[source] serde_json::Error),
+
+    #[error("invalid document replacement: {0}")]
+    InvalidReplacement(String),
 }
 
 /// Open a pool.
-///
-/// Timeouts are short on purpose. The gamemode's client gives a read 3 seconds
-/// and a write 5, and opens its circuit breaker after three failures, so a
-/// bridge that waits 30 seconds on a connection has already lost.
+/// Timeouts are short on purpose. The gamemode's client gives a read 3 seconds and a write 5, and opens its circuit breaker after three failures, so a bridge that waits 30 seconds on a connection has already lost.
 pub async fn connect(url: &str, max_connections: u32) -> Result<MySqlPool, StoreError> {
     let pool = MySqlPoolOptions::new()
         .max_connections(max_connections.max(1))
@@ -65,9 +60,7 @@ pub async fn ping(pool: &MySqlPool) -> Result<(), StoreError> {
 mod tests {
     use super::*;
 
-    /// The migrator is embedded at compile time, so a syntactically broken or
-    /// missing migration is a build failure rather than a startup failure on a
-    /// machine nobody is watching.
+    /// The migrator is embedded at compile time, so a syntactically broken or missing migration is a build failure rather than a startup failure on a machine nobody is watching.
     #[test]
     fn the_schema_is_embedded_and_not_empty() {
         assert!(

@@ -1,11 +1,5 @@
 //! Supervising a local `mariadbd` for the lifetime of `cellar run`.
-//!
-//! A smaller sibling of `cellar_runtime::supervisor::Supervisor`: the same
-//! restart/backoff shape, reusing `cellar_core::lifecycle::RestartTracker`
-//! as-is, but none of the PTY/console-grammar machinery that exists there
-//! specifically for the game server's console. `mariadbd` is a normal
-//! console application with plain stdout/stderr, so this drives it with
-//! `tokio::process` directly.
+//! A smaller sibling of `cellar_runtime::supervisor::Supervisor`: the same restart/backoff shape, reusing `cellar_core::lifecycle::RestartTracker` as-is, but none of the PTY/console-grammar machinery that exists there specifically for the game server's console. `mariadbd` is a normal console application with plain stdout/stderr, so this drives it with `tokio::process` directly.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -17,8 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::provision;
 
-/// What an outside caller can ask the supervisor to do. Deliberately no
-/// `Exec`: nothing here runs operator commands the way the game console does.
+/// What an outside caller can ask the supervisor to do. Deliberately no `Exec`: nothing here runs operator commands the way the game console does.
 #[derive(Debug)]
 pub enum Control {
     /// Graceful stop: `mariadb-admin shutdown`, then wait, then kill.
@@ -66,11 +59,7 @@ impl Handle {
     }
 
     /// Block until the instance reports `Running`, or the timeout elapses.
-    ///
-    /// `cellar run` awaits this before opening the database pool: connecting
-    /// while `mariadbd` is still initializing would just be the first of a
-    /// string of retries, and this is the one place that already knows when
-    /// to stop waiting.
+    /// `cellar run` awaits this before opening the database pool: connecting while `mariadbd` is still initializing would just be the first of a string of retries, and this is the one place that already knows when to stop waiting.
     pub async fn wait_ready(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         loop {
@@ -90,9 +79,7 @@ impl Handle {
 /// Owns the `mariadbd` child process.
 pub struct Supervisor {
     config: MariaDbConfig,
-    /// The app user's password, recovered from `CELLAR_DATABASE_URL` at
-    /// startup (see `credentials::password_from_database_url`), needed to
-    /// authenticate a graceful `mariadb-admin shutdown`.
+    /// The app user's password, recovered from `CELLAR_DATABASE_URL` at startup (see `credentials::password_from_database_url`), needed to authenticate a graceful `mariadb-admin shutdown`.
     password: String,
     restarts: RestartTracker,
     started: Instant,
@@ -120,9 +107,7 @@ impl Supervisor {
     }
 
     fn bin_dir(&self) -> PathBuf {
-        // `Config::validate` refuses `mariadb.managed = true` without
-        // `install_dir` set, and this is only ever constructed when managed,
-        // so an absent value here would be that guarantee having failed.
+        // `Config::validate` refuses `mariadb.managed = true` without `install_dir` set, and this is only ever constructed when managed, so an absent value here would be that guarantee having failed.
         self.config
             .install_dir
             .clone()
@@ -162,26 +147,43 @@ impl Supervisor {
                 }
                 RunOutcome::RestartAfter(delay) => {
                     self.state = State::Backoff;
-
-                    tokio::select! {
-                        () = tokio::time::sleep(delay) => {}
-                        message = control.recv() => {
-                            match message {
-                                Some(Control::Stop { reply }) => {
-                                    let _ = reply.send(());
-                                    self.state = State::Stopped;
-                                    return;
-                                }
-                                Some(Control::Snapshot { reply }) => {
-                                    let _ = reply.send(self.status());
-                                }
-                                Some(Control::Restart { reply }) => {
-                                    self.restarts.record_healthy_run();
-                                    let _ = reply.send(());
-                                }
-                                None => return,
-                            }
+                    match self.wait_backoff(&mut control, delay).await {
+                        BackoffOutcome::Elapsed => {}
+                        BackoffOutcome::Restart => self.restarts.record_healthy_run(),
+                        BackoffOutcome::Stopped => {
+                            self.state = State::Stopped;
+                            return;
                         }
+                        BackoffOutcome::Done => return,
+                    }
+                }
+            }
+        }
+    }
+
+    async fn wait_backoff(
+        &mut self,
+        control: &mut mpsc::Receiver<Control>,
+        delay: Duration,
+    ) -> BackoffOutcome {
+        let deadline = tokio::time::Instant::now() + delay;
+        loop {
+            tokio::select! {
+                () = tokio::time::sleep_until(deadline) => return BackoffOutcome::Elapsed,
+                message = control.recv() => {
+                    match message {
+                        Some(Control::Stop { reply }) => {
+                            let _ = reply.send(());
+                            return BackoffOutcome::Stopped;
+                        }
+                        Some(Control::Snapshot { reply }) => {
+                            let _ = reply.send(self.status());
+                        }
+                        Some(Control::Restart { reply }) => {
+                            let _ = reply.send(());
+                            return BackoffOutcome::Restart;
+                        }
+                        None => return BackoffOutcome::Done,
                     }
                 }
             }
@@ -284,11 +286,7 @@ impl Supervisor {
     }
 
     /// `mariadb-admin shutdown` as the app user, then wait, then kill.
-    ///
-    /// A killed `mariadbd` is not catastrophic, InnoDB crash-recovers its redo
-    /// log on the next start, but it is slower and logs a warning, the same
-    /// tone `cellar_runtime::supervisor::graceful_stop` takes with the game
-    /// server's own kill fallback.
+    /// A killed `mariadbd` is not catastrophic, InnoDB crash-recovers its redo log on the next start, but it is slower and logs a warning, the same tone `cellar_runtime::supervisor::graceful_stop` takes with the game server's own kill fallback.
     async fn graceful_stop(
         &mut self,
         child: &mut tokio::process::Child,
@@ -325,6 +323,14 @@ enum RunOutcome {
     RestartAfter(Duration),
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum BackoffOutcome {
+    Elapsed,
+    Restart,
+    Stopped,
+    Done,
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -344,12 +350,31 @@ mod tests {
         }
     }
 
-    /// A stand-in binary directory: `spawn` just needs *something* runnable
-    /// at `bin/mariadbd.exe`. On the platform tests actually run on this is
-    /// never really invoked as `mariadbd`; the point of these tests is the
-    /// restart/backoff wiring, not a real server, mirroring how
-    /// `cellar-runtime`'s own supervisor tests never spawn a real
-    /// `sbox-server.exe` either.
+    #[tokio::test(start_paused = true)]
+    async fn snapshots_do_not_shorten_backoff() {
+        let (mut supervisor, handle, mut control) = Supervisor::new(
+            config(PathBuf::from("/nowhere"), PathBuf::from("/nowhere/data"), 0),
+            "x".into(),
+        );
+        let observer_handle = handle.clone();
+        let observer = tokio::spawn(async move {
+            for _ in 0..5 {
+                assert!(observer_handle.snapshot().await.is_some());
+            }
+        });
+        let started = tokio::time::Instant::now();
+
+        let outcome = supervisor
+            .wait_backoff(&mut control, Duration::from_millis(100))
+            .await;
+
+        observer.await.unwrap();
+        assert_eq!(outcome, BackoffOutcome::Elapsed);
+        assert_eq!(started.elapsed(), Duration::from_millis(100));
+        drop(handle);
+    }
+
+    /// A stand-in binary directory: `spawn` just needs *something* runnable at `bin/mariadbd.exe`. On the platform tests actually run on this is never really invoked as `mariadbd`; the point of these tests is the restart/backoff wiring, not a real server, mirroring how `cellar-runtime`'s own supervisor tests never spawn a real `sbox-server.exe` either.
     #[test]
     fn a_fresh_supervisor_reports_stopped() {
         let (supervisor, _handle, _control) = Supervisor::new(

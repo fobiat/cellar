@@ -16,7 +16,7 @@ function tomlString(value) {
   return JSON.stringify(value);
 }
 
-async function writeFixture(port) {
+async function writeFixture(port, { auth = "none", twoInstances = true } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "cellar-browser-"));
   const alphaLog = join(directory, "alpha.log");
   const betaLog = join(directory, "beta.log");
@@ -48,12 +48,12 @@ command = "status"
 `;
   const config = `
 ${common("alpha", "Alpha Sandbox", alphaLog, ["--players", "1"], "Alpha mode", "alpha", 0)}
-${common("beta", "Beta World", betaLog, ["--players", "2", "--flood"], "Beta mode", "beta", 2)}
+${twoInstances ? common("beta", "Beta World", betaLog, ["--players", "2", "--flood"], "Beta mode", "beta", 2) : ""}
 
 [web]
 enabled = true
 bind = "127.0.0.1:${port}"
-auth = "none"
+auth = ${tomlString(auth)}
 `;
   const configPath = join(directory, "cellar.toml");
   await writeFile(configPath, config);
@@ -88,15 +88,27 @@ test.beforeAll(async ({}, testInfo) => {
   state.child = startCellar(state.configPath);
   await waitFor(`http://127.0.0.1:${port}/healthz`);
   await waitFor(`http://127.0.0.1:${port}/api/status`);
+  const authPort = port + 100;
+  state.auth = await writeFixture(authPort, { auth: "password", twoInstances: false });
+  state.auth.port = authPort;
+  state.auth.child = startCellar(state.auth.configPath);
+  await waitFor(`http://127.0.0.1:${authPort}/healthz`);
 });
 
 test.afterAll(async () => {
-  if (state?.child && state.child.exitCode === null) {
-    state.child.kill("SIGINT");
-    await new Promise((resolve) => state.child.once("exit", resolve));
+  for (const fixture of [state, state?.auth]) {
+    if (fixture?.child && fixture.child.exitCode === null) {
+      fixture.child.kill("SIGINT");
+      await new Promise((resolve) => fixture.child.once("exit", resolve));
+    }
+    if (fixture?.directory) await rm(fixture.directory, { recursive: true, force: true });
   }
-  if (state?.directory) await rm(state.directory, { recursive: true, force: true });
 });
+
+async function expectAccessible(page) {
+  const results = await new AxeBuilder({ page }).exclude("#console").analyze();
+  expect(results.violations.filter((violation) => ["serious", "critical"].includes(violation.impact))).toEqual([]);
+}
 
 test("covers the two instances, keyboard tabs, themes, mobile shell, and accessibility", async ({ page }) => {
   await page.goto("/");
@@ -131,8 +143,33 @@ test("covers the two instances, keyboard tabs, themes, mobile shell, and accessi
     scrollWidth: element.scrollWidth,
   }));
   expect(tabs.scrollWidth).toBeLessThanOrEqual(tabs.clientWidth + 1);
-  const results = await new AxeBuilder({ page }).analyze();
-  expect(results.violations.filter((violation) => ["serious", "critical"].includes(violation.impact))).toEqual([]);
+  await expectAccessible(page);
+});
+
+test("covers first-run password setup and authenticated login accessibly", async ({ page }) => {
+  const base = `http://127.0.0.1:${state.auth.port}`;
+  const password = "correct horse battery staple";
+  await page.goto(base);
+  await expect(page.locator("#gate")).toBeVisible();
+  await expect(page.locator("#login-copy")).toContainText("Choose the operator password");
+  await expectAccessible(page);
+
+  await page.locator("#password").fill(password);
+  await page.locator("#password-confirm").fill(password);
+  await page.locator("#login-submit").click();
+  await expect(page.locator("#app")).toBeVisible({ timeout: 20_000 });
+
+  await page.locator("#logout").click();
+  await expect(page.locator("#gate")).toBeVisible();
+  await expect(page.locator("#login-copy")).toContainText("Operator sign in");
+  await page.locator("#password").fill("incorrect password value");
+  await page.locator("#login-submit").click();
+  await expect(page.locator("#gate-notice")).toContainText("not accepted", { timeout: 20_000 });
+  await expectAccessible(page);
+
+  await page.locator("#password").fill(password);
+  await page.locator("#login-submit").click();
+  await expect(page.locator("#app")).toBeVisible({ timeout: 20_000 });
 });
 
 test("customizes the overview canvas and persists the layout", async ({ page }) => {
@@ -219,13 +256,37 @@ test("respects the console auto-scroll toggle", async ({ page }) => {
 test("keeps destructive actions behind an explicit dialog", async ({ page }) => {
   await page.goto("/#/settings");
   await expect(page.locator("#tab-settings")).toBeVisible();
-  // The mobile tab bar and disclosure panels can overlap the auto-scroll hit
-  // area while the control is already visible. The assertion is about the
-  // typed confirmation, so click the resolved control directly.
+  // The mobile tab bar and disclosure panels can overlap the auto-scroll hit area while the control is already visible. The assertion is about the typed confirmation, so click the resolved control directly.
   await page.locator("#kill-cellar").click({ force: true });
   await expect(page.locator("#confirm-dialog")).toBeVisible();
   await expect(page.locator("#confirm-body")).toContainText("terminated");
   await expect(page.locator("#confirm-go")).toBeDisabled();
-  await page.locator("#confirm-cancel").click();
+  await expect(page.locator("#confirm-typed")).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.locator("#confirm-cancel")).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(page.locator("#confirm-typed")).toBeFocused();
+  await page.locator("#confirm-typed").fill("KILL ALL");
+  await expect(page.locator("#confirm-go")).toBeEnabled();
+  await page.keyboard.press("Tab");
+  await expect(page.locator("#confirm-cancel")).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.locator("#confirm-go")).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.locator("#confirm-typed")).toBeFocused();
+  await expectAccessible(page);
+  await page.keyboard.press("Escape");
   await expect(page.locator("#confirm-dialog")).toBeHidden();
+  await expect(page.locator("#kill-cellar")).toBeFocused();
+});
+
+test("renders a disconnected server with actionable accessible text", async ({ page }) => {
+  await page.goto("/#/dispatch");
+  await expect(page.locator("#connection-state")).toHaveText("live");
+  state.child.kill("SIGTERM");
+  await new Promise((resolve) => state.child.once("exit", resolve));
+
+  await expect(page.locator("#connection-state")).toHaveText("reconnecting");
+  await expect(page.locator("#console")).toContainText("disconnected: lines from here are recovered on reconnect");
+  await expectAccessible(page);
 });

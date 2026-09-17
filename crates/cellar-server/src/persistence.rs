@@ -134,12 +134,20 @@ pub fn read(path: &Path) -> Result<Snapshot, String> {
             snapshot.format
         ));
     }
-    if snapshot
-        .documents
-        .iter()
-        .any(|document| document.key.is_empty())
-    {
-        return Err("persistence snapshot contains an empty document key".to_owned());
+    let mut keys = std::collections::HashSet::with_capacity(snapshot.documents.len());
+    for document in &snapshot.documents {
+        cellar_core::doc_key::check(&document.key).map_err(|why| {
+            format!(
+                "persistence snapshot contains invalid key '{}': {why}",
+                document.key
+            )
+        })?;
+        if !keys.insert(&document.key) {
+            return Err(format!(
+                "persistence snapshot contains duplicate key '{}'",
+                document.key
+            ));
+        }
     }
     Ok(snapshot)
 }
@@ -203,6 +211,33 @@ mod tests {
         std::fs::create_dir_all(&source).unwrap();
         let path = create(&source, None, 7, true, "one", Vec::new()).unwrap();
         assert!(verify_snapshot(&path, "two").is_err());
+        std::fs::remove_dir_all(source).unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_or_duplicate_document_keys_before_restore() {
+        let source = test_directory("invalid-keys");
+        std::fs::remove_dir_all(&source).ok();
+        std::fs::create_dir_all(&source).unwrap();
+        let path = source.join("snapshot.json");
+        let snapshot = Snapshot {
+            format: FORMAT,
+            scope: "one".to_owned(),
+            created_at: Utc::now(),
+            documents: vec![
+                SnapshotDocument {
+                    key: "bad key.json".to_owned(),
+                    body: serde_json::json!({}),
+                },
+                SnapshotDocument {
+                    key: "bad key.json".to_owned(),
+                    body: serde_json::json!({}),
+                },
+            ],
+        };
+        std::fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+
+        assert!(verify_snapshot(&path, "one").is_err());
         std::fs::remove_dir_all(source).unwrap();
     }
 }

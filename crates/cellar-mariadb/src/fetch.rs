@@ -10,11 +10,8 @@ pub enum FetchError {
     Release(#[from] release::ReleaseError),
 }
 
-/// Download the archive for `version` and verify it against
-/// `expected_sha256`, the value pinned in `mariadb.sha256`.
-///
-/// Never trusts a checksum fetched alongside the archive itself: see
-/// `release::verify` for why.
+/// Download the archive for `version` and verify it against `expected_sha256`, the value pinned in `mariadb.sha256`.
+/// Never trusts a checksum fetched alongside the archive itself: see `release::verify` for why.
 pub async fn download(
     client: &reqwest::Client,
     version: &str,

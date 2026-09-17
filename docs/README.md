@@ -32,6 +32,7 @@ the repository checkout.
 | **[Security](SECURITY.md)** | Threat model, privacy, credentials, and release controls. |
 | **[Troubleshooting](TROUBLESHOOTING.md)** | Symptoms, causes and fixes, including the ones that look like something else. |
 | **[Architecture](ARCHITECTURE.md)** | How it is built and why, including the engine findings the design rests on. |
+| **[Development standards](DEVELOPMENT.md)** | Source comment budget and where implementation rationale belongs. |
 | **[Branding](BRANDING.md)** | Cellar logo assets, shared AppleJack Framework visual language, and package usage. |
 | **[AppleJack Framework integration](integrations/applejack-framework.md)** | Optional profile and workflow notes for AppleJack Framework. |
 

@@ -1,20 +1,9 @@
 //! Making a pseudo-terminal stream readable.
-//!
-//! The dedicated console is an interactive overlay: it colours log lines and it
-//! redraws a status bar in place using cursor movement and carriage returns. A
-//! supervisor reading the pty gets all of that mixed into the log text.
-//!
-//! Rather than track cursor state (which needs a full terminal emulator to do
-//! correctly), this strips control sequences and then lets the caller identify
-//! the status bar by its *shape*, via `grammar::parse_status_bar`. That is both
-//! simpler and more robust: it survives the engine changing how it positions the
-//! bar, and it fails by treating a status line as a log line rather than by
-//! losing output.
+//! The dedicated console is an interactive overlay: it colours log lines and it redraws a status bar in place using cursor movement and carriage returns. A supervisor reading the pty gets all of that mixed into the log text.
+//! Rather than track cursor state (which needs a full terminal emulator to do correctly), this strips control sequences and then lets the caller identify the status bar by its *shape*, via `grammar::parse_status_bar`. That is both simpler and more robust: it survives the engine changing how it positions the bar, and it fails by treating a status line as a log line rather than by losing output.
 
 /// Strip ANSI escape sequences from a chunk of terminal output.
-///
-/// Handles the two forms the engine's colouring produces, CSI (`ESC [ ... cmd`)
-/// and OSC (`ESC ] ... BEL` or `ESC ] ... ESC \`), plus two-character escapes.
+/// Handles the two forms the engine's colouring produces, CSI (`ESC [ ... cmd`) and OSC (`ESC ] ... BEL` or `ESC ] ... ESC \`), plus two-character escapes.
 pub fn strip_escapes(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
@@ -55,9 +44,7 @@ pub fn strip_escapes(input: &str) -> String {
 }
 
 /// Reduce in-place redraws to what a reader would finally see.
-///
-/// A status bar redrawn with `\r` leaves several versions of itself in one
-/// physical line. Only the last one was ever visible, so that is the one kept.
+/// A status bar redrawn with `\r` leaves several versions of itself in one physical line. Only the last one was ever visible, so that is the one kept.
 pub fn collapse_carriage_returns(line: &str) -> &str {
     match line.rfind('\r') {
         Some(at) => &line[at + 1..],
@@ -66,9 +53,7 @@ pub fn collapse_carriage_returns(line: &str) -> &str {
 }
 
 /// Accumulates pty bytes and yields whole, cleaned lines.
-///
-/// A pty read boundary lands anywhere, including inside a UTF-8 sequence and
-/// inside an escape sequence, so partial input is held rather than parsed.
+/// A pty read boundary lands anywhere, including inside a UTF-8 sequence and inside an escape sequence, so partial input is held rather than parsed.
 #[derive(Debug, Default)]
 pub struct LineAssembler {
     buffer: Vec<u8>,
@@ -96,9 +81,7 @@ impl LineAssembler {
     }
 
     /// Whatever is buffered but unterminated, for a final flush at exit.
-    ///
-    /// The engine's last words before a crash are often unterminated, and they
-    /// are exactly the words worth having.
+    /// The engine's last words before a crash are often unterminated, and they are exactly the words worth having.
     pub fn flush(&mut self) -> Option<String> {
         if self.buffer.is_empty() {
             return None;

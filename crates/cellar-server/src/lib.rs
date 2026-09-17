@@ -1,8 +1,5 @@
 //! Cellar's HTTP surface.
-//!
-//! Three things on one server, deliberately separable by config: the bridge the
-//! gamemode calls, the health endpoints Kubernetes calls, and the web UI a
-//! person calls. The bridge is the one with a contract it does not own; see
+//! Three things on one server, deliberately separable by config: the bridge the gamemode calls, the health endpoints Kubernetes calls, and the web UI a person calls. The bridge is the one with a contract it does not own; see
 //! [`bridge`].
 
 pub mod api;
@@ -39,11 +36,7 @@ pub fn bridge_router(bridge: Arc<BridgeState>, app: Arc<AppState>) -> Router {
 }
 
 /// The operator's web UI, its API and its live stream.
-///
-/// Bound separately from the bridge on purpose. The bridge is called by the game
-/// server and wants a loopback bind with no human near it; the web UI is called
-/// by a person and may be exposed. Sharing one listener would mean one exposure
-/// decision for two very different audiences.
+/// Bound separately from the bridge on purpose. The bridge is called by the game server and wants a loopback bind with no human near it; the web UI is called by a person and may be exposed. Sharing one listener would mean one exposure decision for two very different audiences.
 pub fn web_router(state: Arc<AppState>) -> Router {
     Router::new()
         .merge(ui::routes())
@@ -103,14 +96,19 @@ async fn add_security_headers(request: Request<Body>, next: Next) -> Response {
     response
 }
 
-/// Browser state-changing requests must prove they came from this origin.
-/// Native clients do not send browser metadata, so the authenticated TUI and
-/// CLI remain usable without a second CSRF token protocol.
+/// Browser state-changing requests must prove they came from this origin. Native clients do not send browser metadata, so the authenticated TUI and CLI remain usable without a second CSRF token protocol.
 async fn enforce_browser_origin(request: Request<Body>, next: Next) -> Response {
-    if !matches!(
+    let websocket = request.uri().path() == "/api/events"
+        && request
+            .headers()
+            .get(header::UPGRADE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+    let state_changing = !matches!(
         request.method(),
         &Method::GET | &Method::HEAD | &Method::OPTIONS
-    ) {
+    );
+    if websocket || state_changing {
         let headers = request.headers();
         if let Some(site) = headers
             .get("sec-fetch-site")
@@ -119,11 +117,13 @@ async fn enforce_browser_origin(request: Request<Body>, next: Next) -> Response 
         {
             return (StatusCode::FORBIDDEN, "cross-origin request refused").into_response();
         }
-        if let Some(origin) = headers
+        let origin = headers
             .get(header::ORIGIN)
-            .and_then(|value| value.to_str().ok())
-            && !origin_matches_host(origin, headers)
-        {
+            .and_then(|value| value.to_str().ok());
+        if websocket && origin.is_none() {
+            return (StatusCode::FORBIDDEN, "websocket origin required").into_response();
+        }
+        if origin.is_some_and(|origin| !origin_matches_host(origin, headers)) {
             return (StatusCode::FORBIDDEN, "cross-origin request refused").into_response();
         }
     }
@@ -131,10 +131,17 @@ async fn enforce_browser_origin(request: Request<Body>, next: Next) -> Response 
 }
 
 fn origin_matches_host(origin: &str, headers: &HeaderMap) -> bool {
-    let Some((scheme, remainder)) = origin.split_once("://") else {
+    let Some((scheme, authority)) = origin.split_once("://") else {
         return false;
     };
     if !matches!(scheme, "http" | "https") {
+        return false;
+    }
+    if authority.is_empty()
+        || authority
+            .bytes()
+            .any(|byte| matches!(byte, b'/' | b'?' | b'#'))
+    {
         return false;
     }
     let Some(host) = headers
@@ -143,21 +150,14 @@ fn origin_matches_host(origin: &str, headers: &HeaderMap) -> bool {
     else {
         return false;
     };
-    remainder
-        .split('/')
-        .next()
-        .is_some_and(|authority| authority.eq_ignore_ascii_case(host))
+    authority.eq_ignore_ascii_case(host)
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod contract_tests {
     //! The bridge's half of a contract the other half already ships.
-    //!
-    //! These assert the status codes `HostedDocumentProtocol.cs` maps, and the
-    //! expectations are taken from `RuleTests/HostedDocumentProtocolTests.cs`
-    //! rather than invented, so the two halves are provably talking about the
-    //! same protocol.
+    //! These assert the status codes `HostedDocumentProtocol.cs` maps, and the expectations are taken from `RuleTests/HostedDocumentProtocolTests.cs` rather than invented, so the two halves are provably talking about the same protocol.
 
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -220,6 +220,34 @@ mod contract_tests {
     }
 
     #[tokio::test]
+    async fn a_restore_barrier_refuses_bridge_writes_before_mutation() {
+        let (app, state) = app();
+        let guard = state
+            .maintenance
+            .try_start_exclusive("database restore")
+            .unwrap();
+
+        let (status, _) = send(
+            &app,
+            request("PUT", "features.json")
+                .body(Body::from(r#"{"enabled":true}"#))
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            state
+                .documents
+                .get("test-scope", "features.json")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        guard.fail("test complete");
+    }
+
+    #[tokio::test]
     async fn a_cross_origin_browser_mutation_is_refused_before_login() {
         let state = Arc::new(AppState::new(
             Documents::memory(),
@@ -265,6 +293,72 @@ mod contract_tests {
             .await
             .unwrap();
         assert_ne!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    fn websocket_request(origin: Option<&str>, cookie: Option<&str>) -> Request<Body> {
+        let mut request = Request::builder()
+            .uri("/api/events")
+            .header("Host", "cellar.example")
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==");
+        if let Some(origin) = origin {
+            request = request.header("Origin", origin);
+        }
+        if let Some(cookie) = cookie {
+            request = request.header("Cookie", cookie);
+        }
+        request.body(Body::empty()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn websocket_upgrades_require_an_exact_browser_origin() {
+        let state = Arc::new(AppState::new(
+            Documents::memory(),
+            Policy::Trusted,
+            "test-scope",
+        ));
+        let app = web_router(state);
+
+        let accepted = app
+            .clone()
+            .oneshot(websocket_request(Some("https://cellar.example"), None))
+            .await
+            .unwrap();
+        assert_ne!(accepted.status(), StatusCode::FORBIDDEN);
+
+        for origin in [
+            None,
+            Some("null"),
+            Some("ftp://cellar.example"),
+            Some("https://cellar.example/path"),
+            Some("https://evil.example"),
+        ] {
+            let refused = app
+                .clone()
+                .oneshot(websocket_request(origin, None))
+                .await
+                .unwrap();
+            assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_same_site_sibling_cannot_use_a_valid_session_for_events() {
+        let mut state = AppState::new(Documents::memory(), Policy::Trusted, "test-scope");
+        state.web_auth = cellar_core::config::WebAuthMode::Password;
+        let token = state.sessions.create("operator");
+        let cookie = format!("cellar_session={token}");
+        let response = web_router(Arc::new(state))
+            .oneshot(websocket_request(
+                Some("https://other.cellar.example"),
+                Some(&cookie),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
@@ -711,8 +805,7 @@ mod contract_tests {
             .await
             .unwrap();
 
-        // 401 maps to Unavailable at the client, which journals the write. A 404
-        // here would tell the gamemode the document does not exist.
+        // 401 maps to Unavailable at the client, which journals the write. A 404 here would tell the gamemode the document does not exist.
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -745,8 +838,7 @@ mod contract_tests {
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
-    /// A key the gamemode would never send. Refused, and refused with something
-    /// that is not 404, so it cannot be read as "absent".
+    /// A key the gamemode would never send. Refused, and refused with something that is not 404, so it cannot be read as "absent".
     #[tokio::test]
     async fn an_illegal_key_is_refused_but_not_as_absent() {
         let (app, _) = app();
@@ -811,8 +903,7 @@ mod contract_tests {
         assert_ne!(status, StatusCode::CONFLICT);
     }
 
-    /// The gamemode's client cannot act on a conflict yet, so the bridge does
-    /// not create one.
+    /// The gamemode's client cannot act on a conflict yet, so the bridge does not create one.
     #[tokio::test]
     async fn a_second_write_wins_rather_than_conflicting() {
         let (app, _) = app();
@@ -910,12 +1001,7 @@ mod contract_tests {
     }
 
     /// One Cellar has to be able to recognise another.
-    ///
-    /// This is not decoration. `doctor`'s "another Cellar is already bound"
-    /// case and the refusal that stops `cellar db restore` running while a
-    /// supervised server writes to the database both depend on it, and both
-    /// were unreachable until 2026-09-01 because they sniffed this response
-    /// for `"cellar"` or `"state"` and the body has always been `ok`.
+    /// This is not decoration. `doctor`'s "another Cellar is already bound" case and the refusal that stops `cellar db restore` running while a supervised server writes to the database both depend on it, and both were unreachable until 2026-09-01 because they sniffed this response for `"cellar"` or `"state"` and the body has always been `ok`.
     #[tokio::test]
     async fn liveness_identifies_itself_as_a_cellar() {
         let (app, _) = app();

@@ -1,8 +1,5 @@
 //! The live event stream behind the dashboard.
-//!
-//! One websocket carrying the supervisor's event stream as JSON. The alternative
-//! is polling, and polling a console means either missing lines or asking for
-//! the whole buffer every second.
+//! One websocket carrying the supervisor's event stream as JSON. The alternative is polling, and polling a console means either missing lines or asking for the whole buffer every second.
 
 use std::sync::Arc;
 
@@ -21,8 +18,7 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new().route("/api/events", get(upgrade))
 }
 
-/// Authenticated the same way every other route is: the extractor runs before
-/// the upgrade, so an unauthenticated caller never reaches the stream.
+/// Authenticated the same way every other route is: the extractor runs before the upgrade, so an unauthenticated caller never reaches the stream.
 async fn upgrade(
     upgrade: WebSocketUpgrade,
     _: State<Arc<AppState>>,
@@ -33,10 +29,7 @@ async fn upgrade(
 }
 
 /// One instance's stream, not the primary's.
-///
-/// The dashboard's instance strip switches every other panel; a console still
-/// streaming the previous server under a header naming the new one is how a
-/// command reaches the wrong thing.
+/// The dashboard's instance strip switches every other panel; a console still streaming the previous server under a header naming the new one is how a command reaches the wrong thing.
 async fn pump(mut socket: WebSocket, target: Target) {
     let Some(supervisor) = &target.handle else {
         let _ = socket
@@ -70,15 +63,8 @@ async fn pump(mut socket: WebSocket, target: Target) {
                         return;
                     }
                 }
-                // A slow browser must not stall the supervisor. It is told what
-                // it missed and the stream continues, rather than the connection
-                // being torn down or the sender being blocked.
-                //
-                // Its own kind, not `unparsed`. A gap in the console is a fact
-                // about the console and the browser has to be able to mark it
-                // as one; `unparsed` means the engine said something the
-                // grammar did not recognise, which is a different thing that
-                // wants a different treatment.
+                // A slow browser must not stall the supervisor. It is told what it missed and the stream continues, rather than the connection being torn down or the sender being blocked.
+                // Its own kind, not `unparsed`. A gap in the console is a fact about the console and the browser has to be able to mark it as one; `unparsed` means the engine said something the grammar did not recognise, which is a different thing that wants a different treatment.
                 Err(broadcast::error::RecvError::Lagged(missed)) => {
                     let notice = serde_json::json!({
                         "kind": "lagged",
@@ -93,8 +79,7 @@ async fn pump(mut socket: WebSocket, target: Target) {
                 Err(broadcast::error::RecvError::Closed) => return,
             },
 
-            // Read the client side so a close frame is noticed promptly rather
-            // than on the next event, which on a quiet server could be minutes.
+            // Read the client side so a close frame is noticed promptly rather than on the next event, which on a quiet server could be minutes.
             incoming = socket.recv() => match incoming {
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
                 Some(Ok(_)) => {}

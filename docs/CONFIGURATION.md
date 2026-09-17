@@ -123,7 +123,11 @@ instance with the id `default` and the scope taken from the global
 `data/` follow the executable's own directory, measured rather than assumed, and
 neither `server.working_dir` nor `FACEPUNCH_ENGINE` moves them. See
 [Architecture](ARCHITECTURE.md#where-the-engine-writes-two-instances-cannot-share-an-install-tree).
-`validate()` refuses two enabled instances that would collide.
+`validate()` refuses two enabled instances that would collide. The comparison
+normalizes relative paths and `..`, resolves the longest existing ancestor, and
+follows Unix symlinks or Windows junctions even when the final file does not yet
+exist. Cellar repeats the check immediately before startup writes hosting state
+or launches a server.
 
 **Addressing one instance over HTTP:** `?instance=<id>` on the existing routes,
 defaulting to the primary, which is the first enabled instance in id order. It
@@ -134,13 +138,23 @@ deployment's URLs and access log are exactly as they were.
 `GET /api/instances` lists what a config declares. An unknown id is a 404 naming
 the ids that do exist, never a silent fallback, because the request that would
 get misrouted that way is `quit`. `/api/control/exit` is process-wide and
-deliberately ignores the parameter: exiting with another instance still running
-gets that one killed rather than stopped.
+deliberately ignores the parameter. It records one idempotent exit request, then
+the runner stops every instance concurrently under its shared 60-second budget.
 `/api/control/kill` is process-wide for the same reason and is the harder
 version of it: every descendant of Cellar is killed deepest first and then
 Cellar itself, with no graceful stop anywhere. It is registered ahead of
 `/api/control/{action}`, needs the same operator session as the rest, and is
 reached from the dashboard's Kill everything or from `cellar kill`.
+
+Live profile switching is available only for a single supervised instance. A
+successful switch commits the parsed config path, route metadata, log parsing,
+access-file target, and supervisor instance as one active snapshot after the
+old process is confirmed stopped. Server identity fields such as game, map,
+hostname, executable, ports, and data directory may change. Listener bindings,
+the instance id and scope, project/update probe, bridge policy, database,
+backup, persistence, notification, release, and web policy are startup-bound;
+the profile list names the first differing field instead of accepting a partial
+switch.
 
 **When Wine is selected, each Linux instance needs its own `server.wine_prefix`.** Every Wine process in
 a prefix shares one `wineserver` that jointly holds all their sockets, and
@@ -269,6 +283,9 @@ must be at least this large or the kubelet kills the pod mid-shutdown.
 
 The window matters more than the count: a server that restarted twenty times
 over a month is fine, and one that restarted five times in a minute is not.
+Status and metrics polling continues to answer while a child is in backoff, but
+does not consume or reset the remaining delay. Only an explicit restart or a
+successful live profile switch ends the wait early.
 
 ---
 
@@ -290,7 +307,8 @@ should use a database account with a matching `SELECT` grant. Direct control
 requires `direct_control = true`, an authenticated operator session, and the
 word `EXECUTE` typed into the confirmation. It accepts one DML or schema
 statement at a time and refuses database administration, privilege, file, and
-multi-statement operations. Use a database account whose grant matches the
+multi-statement operations. MySQL and MariaDB executable comments are refused
+before classification. Use a database account whose grant matches the
 intended live control, and take a verified backup first.
 
 For a published game that does not use AppleJack Framework's database contract, see
@@ -432,6 +450,12 @@ which is full engine privilege.
 `web.enabled` must be true for `cellar settings` to work at all, because those
 commands reach the running server through this API.
 
+Browser WebSocket upgrades for `/api/events` require an `http` or `https`
+`Origin` whose authority exactly matches the request `Host`. Missing,
+malformed, cross-origin, and same-site sibling origins are refused before the
+event subscription is created. The remote TUI sends the selected Cellar URL as
+its origin and keeps using the normal operator session.
+
 Cellar does not terminate TLS itself. A non-loopback UI bind must explicitly
 set `allow_insecure_http = true` and `secure_cookies = true`, then sit behind a
 TLS reverse proxy. This prevents an accidental plain-HTTP deployment from
@@ -513,9 +537,10 @@ business holding credentials for an object store whose contents it cannot check.
 It is a copy, not a move; the local dump is what `restore` and the retention
 window are about.
 
-**Only one process may own this.** Two Cellar processes with `enabled = true`
-and the same directory run two loops with the same `retain`, so each prunes the
-other's dumps and neither keeps seven.
+Dump names are reserved with exclusive lock files and include nanosecond time,
+the process id, and a process-local sequence, so concurrent Cellar processes do
+not write the same output. Retention policy is still process-local. Do not point
+independent deployments at one directory when each is allowed to prune it.
 
 ## `[persistence]`
 
@@ -534,11 +559,13 @@ be moved between compatible Cellar databases or kept as a gamemode backup.
 | `verify` | `true` | Read the snapshot back and check its format and scope before it counts. |
 
 The web UI exposes **Back up now** and a restore action under Settings. Restore
-requires typing `restore`, stops the supervised server first, replaces the
-current bridge documents for the configured scope, and leaves the server
-stopped for inspection. The source file is selected by its listed name, never
-by an arbitrary path. Keep `copy_to` on another disk or mounted backup share
-when the local machine is not the only place the data should exist.
+requires typing `restore`, blocks new bridge writes, stops every supervised
+instance, replaces the complete configured scope in one database transaction,
+and leaves every instance stopped for inspection. A validation or database
+failure leaves the scope unchanged. The source file is selected by its listed
+name, never by an arbitrary path. Keep `copy_to` on another disk or mounted
+backup share when the local machine is not the only place the data should
+exist.
 
 ---
 

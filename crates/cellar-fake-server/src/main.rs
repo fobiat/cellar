@@ -1,21 +1,13 @@
 //! A stand-in for `sbox-server.exe`.
-//!
-//! End-to-end testing of a supervisor for a Windows-only game engine otherwise
-//! needs Steam, a GSLT, Wine and a real s&box build, which means it does not
-//! happen in CI and barely happens locally. This emits the engine's actual log
-//! formats, writes a status bar, reads commands from its console, and can be
-//! told to crash, hang or flood.
-//!
-//! Every string it prints is copied from engine source, so a test asserting
-//! against them is asserting against the real thing:
-//!
+//! End-to-end testing of a supervisor for a Windows-only game engine otherwise needs Steam, a GSLT, Wine and a real s&box build, which means it does not happen in CI and barely happens locally. This emits the engine's actual log formats, writes a status bar, reads commands from its console, and can be told to crash, hang or flood.
+//! Every string it prints is copied from engine source, so a test asserting against them is asserting against the real thing:
 //! - console: `hh:mm:ss ` + logger padded to 8 + ` ` + message (`GameLog.cs`)
 //! - file:    `yyyy/MM/dd HH:mm:ss.ffff` TAB `[logger] message` TAB exception
 //! - join:    `{name} [{steamid}] is connected` (`NetworkSystem.Handshake.cs`)
 //! - leave:   `{name} [{steamid}] disconnected` (`NetworkSystem.Connections.cs`)
 //!
 //! Usage: `cellar-fake-server [--log-file PATH] [--crash-after N] [--hang]
-//!         [--ignore-quit] [--players N] [--flood]`
+//! [--ignore-quit] [--players N] [--flood]`
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -62,6 +54,7 @@ struct Options {
     flood: bool,
     hostname: String,
     max_players: u32,
+    independent_status_fixture: bool,
 }
 
 fn main() -> std::process::ExitCode {
@@ -84,16 +77,14 @@ fn main() -> std::process::ExitCode {
     );
 
     if options.hang {
-        // Never becomes ready. The readiness probe must stay 503 and the
-        // graceful stop must escalate to a kill.
+        // Never becomes ready. The readiness probe must stay 503 and the graceful stop must escalate to a kill.
         emit(&mut log, "Bootstrap", "loading map");
         loop {
             std::thread::sleep(std::time::Duration::from_secs(3600));
         }
     }
 
-    // The line AppleJack Framework's NetworkBootstrap logs, and Cellar's default
-    // readiness pattern.
+    // The line AppleJack Framework's NetworkBootstrap logs, and Cellar's default readiness pattern.
     emit(&mut log, "Bootstrap", "Server is ready");
 
     for index in 0..options.players {
@@ -117,8 +108,7 @@ fn main() -> std::process::ExitCode {
     let stdin = std::io::stdin();
     let mut connected = options.players;
 
-    // Feature and setting state, so a write is observable by the next read.
-    // Without that, `settings apply` cannot be tested end to end.
+    // Feature and setting state, so a write is observable by the next read. Without that, `settings apply` cannot be tested end to end.
     let mut features: Vec<String> = vec!["economy.manufacture".to_owned()];
     let mut settings: Vec<(String, String)> = Vec::new();
 
@@ -126,9 +116,7 @@ fn main() -> std::process::ExitCode {
         let Ok(line) = line else { break };
         let command = line.trim();
 
-        // `ConsoleInput.OnEnter` writes the echo before dispatching, and it is
-        // what brackets the start of a reply. Cellar depends on it, so the fake
-        // has to produce it.
+        // `ConsoleInput.OnEnter` writes the echo before dispatching, and it is what brackets the start of a reply. Cellar depends on it, so the fake has to produce it.
         if !command.is_empty() {
             print!("> {command}\r\n");
             let _ = std::io::stdout().flush();
@@ -264,6 +252,16 @@ fn main() -> std::process::ExitCode {
                     "[Storage] provider hosted, journalled - 0 owed write(s)",
                 );
             }
+            other if other.starts_with("delayed ") => {
+                let mut words = other.split_whitespace().skip(1);
+                let label = words.next().unwrap_or("unknown");
+                let delay = words
+                    .next()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(0);
+                std::thread::sleep(std::time::Duration::from_millis(delay));
+                emit(&mut log, "Test", &format!("reply {label}"));
+            }
             other if other.starts_with("kick ") => {
                 let who = other.trim_start_matches("kick ").trim();
                 let steam_id = 76561198000000000u64;
@@ -317,10 +315,7 @@ fn emit(log: &mut Option<std::fs::File>, logger: &str, message: &str) {
     let _ = std::io::stdout().flush();
 
     if let Some(file) = log {
-        // NLog writes `ffff`, four fractional digits. chrono has `%.3f`, `%.6f`
-        // and `%.9f` and no four-digit form, and asking it for `%.4f` panics
-        // inside `write_fmt` rather than failing to parse, so the fraction is
-        // built by hand.
+        // NLog writes `ffff`, four fractional digits. chrono has `%.3f`, `%.6f` and `%.9f` and no four-digit form, and asking it for `%.4f` panics inside `write_fmt` rather than failing to parse, so the fraction is built by hand.
         let tenths_of_a_milli = now.timestamp_subsec_nanos() / 100_000;
         let _ = writeln!(
             file,
@@ -335,12 +330,19 @@ fn emit(log: &mut Option<std::fs::File>, logger: &str, message: &str) {
 }
 
 /// The status block, drawn the way `ConsoleInput.RedrawInputLine` draws it.
-///
-/// Four lines every time: a blank input line, the unset `statusText[0]`, then
-/// the two halves of the bar, each right-padded to the console width. Rendered
-/// by `cellar_core::statusbar` so the fake cannot drift from the format Cellar
-/// parses; both are transcriptions of `DedicatedServerConsole.UpdateStatus`.
+/// Four lines every time: a blank input line, the unset `statusText[0]`, then the two halves of the bar, each right-padded to the console width. Rendered by `cellar_core::statusbar` so the fake cannot drift from the format Cellar parses; both are transcriptions of `DedicatedServerConsole.UpdateStatus`.
 fn status_bar(options: &Options, players: u32, uptime: u64) {
+    if options.independent_status_fixture {
+        print!(
+            "{}",
+            include_str!(
+                "../../cellar-core/tests/fixtures/statusbar/real-status-lines-2026-09-17-build-24826151.txt"
+            )
+        );
+        let _ = std::io::stdout().flush();
+        return;
+    }
+
     let bar = StatusBar {
         hostname: options.hostname.clone(),
         players,
@@ -373,6 +375,7 @@ fn parse_args() -> Options {
         flood: false,
         hostname: "AppleJack Framework Dev".to_owned(),
         max_players: 64,
+        independent_status_fixture: false,
     };
 
     let mut args = std::env::args().skip(1);
@@ -383,19 +386,15 @@ fn parse_args() -> Options {
             "--hang" => options.hang = true,
             "--ignore-quit" => options.ignore_quit = true,
             "--flood" => options.flood = true,
+            "--independent-status-fixture" => options.independent_status_fixture = true,
             "--players" => options.players = args.next().and_then(|v| v.parse().ok()).unwrap_or(0),
-            // `+hostname` is the engine's spelling and the one Cellar actually
-            // passes; `--hostname` is this binary's own. Both set it. It used
-            // to accept `+hostname` and discard it, which made every instance
-            // report the same name and left a two-instance test unable to tell
-            // which server it had reached.
+            // `+hostname` is the engine's spelling and the one Cellar actually passes; `--hostname` is this binary's own. Both set it. It used to accept `+hostname` and discard it, which made every instance report the same name and left a two-instance test unable to tell which server it had reached.
             "--hostname" | "+hostname" => {
                 if let Some(value) = args.next() {
                     options.hostname = value;
                 }
             }
-            // Accept and ignore the real server's flags, so the same config can
-            // point at either binary.
+            // Accept and ignore the real server's flags, so the same config can point at either binary.
             "+game"
             | "+net_game_server_token"
             | "+port"

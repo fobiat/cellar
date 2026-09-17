@@ -1,12 +1,7 @@
 //! The web UI's JSON API.
-//!
-//! Everything here is behind [`crate::session`], because the console it exposes
-//! runs at full engine privilege: `ConVarSystem.Run` from the dedicated console
-//! is called with `allowProtected: true`, so a caller reaching `/api/exec`
-//! reaches `quit`, `kick` and every command exposed by the running game. This is not an
-//! observability endpoint with a console bolted on; it is a console.
+//! Everything here is behind [`crate::session`], because the console it exposes runs at full engine privilege: `ConVarSystem.Run` from the dedicated console is called with `allowProtected: true`, so a caller reaching `/api/exec` reaches `quit`, `kick` and every command exposed by the running game. This is not an observability endpoint with a console bolted on; it is a console.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -14,6 +9,7 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 
 use cellar_core::lifecycle::RestartPolicy;
@@ -36,6 +32,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/release/{action}", post(release))
         .route("/api/exec", post(exec))
         .route("/api/control/kill", post(kill))
+        .route("/api/control/exit", post(exit))
         .route("/api/control/{action}", post(control))
         .route("/api/players", get(players))
         .route("/api/docs", get(documents))
@@ -71,8 +68,11 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/metrics", get(metrics))
 }
 
-async fn discovered_profile(entry: &crate::registry::Entry) -> cellar_core::GamemodeProfile {
-    let mut profile = entry.descriptor.profile.clone();
+async fn discovered_profile(
+    entry: &crate::registry::Entry,
+    descriptor: &crate::registry::Descriptor,
+) -> cellar_core::GamemodeProfile {
+    let mut profile = descriptor.profile.clone();
     let Some(prefix) = profile.convar_prefix.as_deref() else {
         return profile;
     };
@@ -81,7 +81,12 @@ async fn discovered_profile(entry: &crate::registry::Entry) -> cellar_core::Game
     };
 
     let command = format!("find {prefix}");
-    let Ok(reply) = handle.exec(&command, "cellar-discovery").await else {
+    let Ok(Ok(reply)) = tokio::time::timeout(
+        Duration::from_secs(1),
+        handle.exec(&command, "cellar-discovery"),
+    )
+    .await
+    else {
         return profile;
     };
     for discovered in
@@ -411,23 +416,20 @@ async fn external_configs(State(state): State<Arc<AppState>>, _: ExternalApi) ->
     let Some(directory) = state.config_directory() else {
         return error(StatusCode::SERVICE_UNAVAILABLE, "no config file is active");
     };
-    let active = state.config_path.lock().ok().and_then(|path| path.clone());
+    let active = state.active_config_path();
     let running = running_shape(&state);
     let profiles = crate::config_manager::list(&directory, active.as_deref(), Some(&running))
         .await
         .into_iter()
         .map(|profile| {
-            // External integrations get the useful profile identity, not the
-            // host's local paths. The latter are operational details and can
-            // disclose more than a remote dashboard needs.
+            // External integrations get the useful profile identity, not the host's local paths. The latter are operational details and can disclose more than a remote dashboard needs.
             serde_json::json!({
                 "name": profile.name,
                 "mode": profile.mode,
                 "active": profile.active,
                 "game": profile.game,
                 "map": profile.map,
-                // The boolean, not the reason: a refusal names host paths and
-                // listener addresses, which is exactly what this route trims.
+                // The boolean, not the reason: a refusal names host paths and listener addresses, which is exactly what this route trims.
                 "switchable": profile.refusal.is_none(),
             })
         })
@@ -436,19 +438,12 @@ async fn external_configs(State(state): State<Arc<AppState>>, _: ExternalApi) ->
 }
 
 /// Everything the server is currently set to.
-///
-/// Asked of the running server every time rather than cached: a feature toggled
-/// from the in-game admin panel is exactly the change an operator most wants
-/// this screen to be honest about.
-/// The settings catalogue for one instance, or why it has none.
-///
-/// A gamemode that declares no `convar_prefix` has no catalogue Cellar can ask
-/// for. Saying that is the whole improvement: before profiles, every such
-/// server got `applejack_features` sent to it, which the console rejected, and
-/// the tab rendered as empty rather than as unsupported.
-fn catalogue_for(target: &Target) -> Option<cellar_core::convar::Catalogue<'_>> {
-    target
-        .descriptor
+/// Asked of the running server every time rather than cached: a feature toggled from the in-game admin panel is exactly the change an operator most wants this screen to be honest about. The settings catalogue for one instance, or why it has none.
+/// A gamemode that declares no `convar_prefix` has no catalogue Cellar can ask for. Saying that is the whole improvement: before profiles, every such server got `applejack_features` sent to it, which the console rejected, and the tab rendered as empty rather than as unsupported.
+fn catalogue_for(
+    descriptor: &crate::registry::Descriptor,
+) -> Option<cellar_core::convar::Catalogue<'_>> {
+    descriptor
         .profile
         .convar_prefix
         .as_deref()
@@ -463,11 +458,16 @@ fn no_catalogue() -> Response {
     )
 }
 
-async fn settings(_: State<Arc<AppState>>, _operator: Operator, target: Target) -> Response {
+async fn settings(
+    State(state): State<Arc<AppState>>,
+    _operator: Operator,
+    target: Target,
+) -> Response {
     let Some(supervisor) = &target.handle else {
         return error(StatusCode::SERVICE_UNAVAILABLE, unavailable(&target));
     };
-    let Some(catalogue) = catalogue_for(&target) else {
+    let descriptor = state.active_descriptor(&target);
+    let Some(catalogue) = catalogue_for(&descriptor) else {
         return no_catalogue();
     };
 
@@ -488,8 +488,7 @@ async fn settings(_: State<Arc<AppState>>, _operator: Operator, target: Target) 
 struct SetRequest {
     id: String,
     value: String,
-    /// `feature` or `setting`. Sent by the UI, which already knows which table
-    /// the row came from, rather than guessed from the id's shape here.
+    /// `feature` or `setting`. Sent by the UI, which already knows which table the row came from, rather than guessed from the id's shape here.
     kind: String,
 }
 
@@ -503,12 +502,12 @@ async fn set_setting(
     let Some(supervisor) = &target.handle else {
         return error(StatusCode::SERVICE_UNAVAILABLE, unavailable(&target));
     };
-    let Some(catalogue) = catalogue_for(&target) else {
+    let descriptor = state.active_descriptor(&target);
+    let Some(catalogue) = catalogue_for(&descriptor) else {
         return no_catalogue();
     };
 
-    // The id and the value both reach a console that runs at full engine
-    // privilege, so neither may carry a second command.
+    // The id and the value both reach a console that runs at full engine privilege, so neither may carry a second command.
     for field in [&request.id, &request.value] {
         if field.contains(char::is_whitespace) || field.contains(['\n', '\r', ';']) {
             return error(
@@ -558,7 +557,7 @@ struct ExportQuery {
 
 /// The configuration as a file, for committing or for applying elsewhere.
 async fn export_settings(
-    _: State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     _operator: Operator,
     target: Target,
     Query(query): Query<ExportQuery>,
@@ -566,7 +565,8 @@ async fn export_settings(
     let Some(supervisor) = &target.handle else {
         return error(StatusCode::SERVICE_UNAVAILABLE, unavailable(&target));
     };
-    let Some(catalogue) = catalogue_for(&target) else {
+    let descriptor = state.active_descriptor(&target);
+    let Some(catalogue) = catalogue_for(&descriptor) else {
         return no_catalogue();
     };
 
@@ -618,10 +618,9 @@ struct ImportSettingsRequest {
     apply: bool,
 }
 
-/// Preview or apply a TOML/YAML settings snapshot without writing it into the
-/// gamemode checkout. Applying still goes through the live console catalogue.
+/// Preview or apply a TOML/YAML settings snapshot without writing it into the gamemode checkout. Applying still goes through the live console catalogue.
 async fn import_settings(
-    _: State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     operator: Operator,
     target: Target,
     Json(request): Json<ImportSettingsRequest>,
@@ -639,7 +638,8 @@ async fn import_settings(
     let Some(supervisor) = &target.handle else {
         return error(StatusCode::SERVICE_UNAVAILABLE, unavailable(&target));
     };
-    let Some(catalogue) = catalogue_for(&target) else {
+    let descriptor = state.active_descriptor(&target);
+    let Some(catalogue) = catalogue_for(&descriptor) else {
         return no_catalogue();
     };
 
@@ -718,9 +718,7 @@ async fn import_settings(
 }
 
 /// Installed and available versions, plus what the updater would do about them.
-///
-/// Probed on request rather than cached: it runs a `git ls-remote` at most, and
-/// an operator who opened this tab is asking about *now*.
+/// Probed on request rather than cached: it runs a `git ls-remote` at most, and an operator who opened this tab is asking about *now*.
 async fn versions(State(state): State<Arc<AppState>>, _: Operator) -> Response {
     let Some(probe) = &state.version_probe else {
         return error(
@@ -776,6 +774,7 @@ fn error(status: StatusCode, message: impl Into<String>) -> Response {
 
 /// Everything the dashboard header needs, in one call.
 async fn status(State(state): State<Arc<AppState>>, _: Operator, target: Target) -> Response {
+    let (_active_path, active_config, descriptor) = state.active_snapshot(&target);
     let snapshot = match &target.handle {
         Some(supervisor) => supervisor.snapshot().await,
         None => None,
@@ -790,16 +789,9 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator, target: Target)
         Some(handle) => handle.snapshot().await,
         None => None,
     };
-    let active_config = state.config_path.lock().ok().and_then(|path| {
-        path.as_ref()
-            .and_then(|path| crate::config_manager::load(path).ok())
-    });
-    let configured_game = target.descriptor.game.clone();
-    let configured_map = target.descriptor.map.clone();
-    let map_log = match (
-        target.descriptor.log_file.as_deref(),
-        configured_map.as_deref(),
-    ) {
+    let configured_game = descriptor.game.clone();
+    let configured_map = descriptor.map.clone();
+    let map_log = match (descriptor.log_file.as_deref(), configured_map.as_deref()) {
         (Some(path), Some(map)) => tokio::fs::read_to_string(path)
             .await
             .map(|log| log.contains(map) && !log.contains("failed to load map"))
@@ -820,12 +812,12 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator, target: Target)
         });
 
     let addresses = addresses(&state).await;
-    let anti_cheat = crate::security::inspect(target.descriptor.log_file.as_deref()).await;
-    let invite_only = read_access_files(target.descriptor.data_dir.as_deref())
+    let anti_cheat = crate::security::inspect(descriptor.log_file.as_deref()).await;
+    let invite_only = read_access_files(descriptor.data_dir.as_deref())
         .await
         .ok()
         .map(|(features, _)| feature_enabled(&features, "admin.inviteonly"));
-    let mode = if target.descriptor.game.is_some() {
+    let mode = if descriptor.game.is_some() {
         "published"
     } else {
         "development"
@@ -848,7 +840,7 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator, target: Target)
         "health": {
             "map": map_log,
             "spawn_validation": spawn_validation,
-            "console": target.descriptor.log_file.as_deref().is_some_and(std::path::Path::exists),
+            "console": descriptor.log_file.as_deref().is_some_and(std::path::Path::exists),
         },
         "cellar": {
             "version": env!("CARGO_PKG_VERSION"),
@@ -916,7 +908,7 @@ async fn addresses(state: &AppState) -> Vec<serde_json::Value> {
     if state.bridge_enabled()
         && let Some(bind) = state.bridge_bind()
     {
-        result.push(address("Document bridge", bind, &tailscale_ip, false));
+        result.push(address("Document bridge", &bind, &tailscale_ip, false));
     }
     let server_bind = format!("0.0.0.0:{}", state.server_port().unwrap_or_default());
     result.push(address(
@@ -1029,12 +1021,16 @@ async fn set_tailscale_web(
 }
 
 /// The AppleJack invite gate and its SteamID64 allowlist.
-async fn access(_: State<Arc<AppState>>, _operator: Operator, target: Target) -> Response {
-    let (features, permissions) =
-        match read_access_files(target.descriptor.data_dir.as_deref()).await {
-            Ok(files) => files,
-            Err(why) => return error(StatusCode::BAD_GATEWAY, why),
-        };
+async fn access(
+    State(state): State<Arc<AppState>>,
+    _operator: Operator,
+    target: Target,
+) -> Response {
+    let descriptor = state.active_descriptor(&target);
+    let (features, permissions) = match read_access_files(descriptor.data_dir.as_deref()).await {
+        Ok(files) => files,
+        Err(why) => return error(StatusCode::BAD_GATEWAY, why),
+    };
 
     Json(serde_json::json!({
         "invite_only": feature_enabled(&features, "admin.inviteonly"),
@@ -1062,15 +1058,15 @@ struct LogsQuery {
     since: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// Scan current and rotated engine logs. The files are the persistent source,
-/// so search remains useful after Cellar or the browser restarts.
+/// Scan current and rotated engine logs. The files are the persistent source, so search remains useful after Cellar or the browser restarts.
 async fn logs(
-    _: State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     _operator: Operator,
     target: Target,
     Query(query): Query<LogsQuery>,
 ) -> Response {
-    let Some(path) = target.descriptor.log_file.as_deref() else {
+    let descriptor = state.active_descriptor(&target);
+    let Some(path) = descriptor.log_file.as_deref() else {
         return Json(serde_json::json!({
             "lines": [], "matched": 0, "scanned_files": 0, "scanned_lines": 0,
             "persistent": false
@@ -1079,7 +1075,7 @@ async fn logs(
     };
     let result = crate::logs::search(
         path,
-        &target.descriptor.profile,
+        &descriptor.profile,
         &crate::logs::Query {
             text: query.q.filter(|value| !value.trim().is_empty()),
             tag: query.tag.filter(|value| !value.trim().is_empty()),
@@ -1098,7 +1094,7 @@ async fn configs(State(state): State<Arc<AppState>>, _: Operator) -> Response {
     let Some(directory) = state.config_directory() else {
         return error(StatusCode::SERVICE_UNAVAILABLE, "no config file is active");
     };
-    let active = state.config_path.lock().ok().and_then(|path| path.clone());
+    let active = state.active_config_path();
     let running = running_shape(&state);
     Json(serde_json::json!({
         "profiles":
@@ -1108,15 +1104,20 @@ async fn configs(State(state): State<Arc<AppState>>, _: Operator) -> Response {
 }
 
 /// What the running process is, for the switchability rules.
-fn running_shape(state: &AppState) -> crate::config_manager::Running<'_> {
+fn running_shape(state: &AppState) -> crate::config_manager::Running {
+    let active_config = state
+        .instances
+        .primary()
+        .and_then(|entry| state.active_snapshot(entry).1);
     crate::config_manager::Running {
-        web_bind: &state.web_bind,
+        web_bind: state.web_bind.clone(),
         web_enabled: state.web_enabled,
         bridge_bind: state.bridge_bind(),
         bridge_enabled: state.bridge_enabled(),
         log_file: state.log_file(),
         instances: state.instances.len(),
         supervised: state.supervisor.is_some(),
+        active_config,
     }
 }
 
@@ -1141,9 +1142,7 @@ async fn activate_config(
         Ok(config) => config,
         Err(why) => return error(StatusCode::BAD_REQUEST, why),
     };
-    // The same function `/api/configs` used to disable the button, so the
-    // inline reason and the refusal cannot disagree. They were separate rules
-    // before, which is how a switch could look available and still fail.
+    // The same function `/api/configs` used to disable the button, so the inline reason and the refusal cannot disagree. They were separate rules before, which is how a switch could look available and still fail.
     if let Some(why) = crate::config_manager::switch_refusal(&config, &running_shape(&state)) {
         return error(StatusCode::BAD_REQUEST, why);
     }
@@ -1157,11 +1156,17 @@ async fn activate_config(
             "no server is being supervised",
         );
     };
-    if let Err(why) = supervisor.switch_config(candidate).await {
+    let previous = running_shape(&state)
+        .active_config
+        .and_then(|config| config.primary());
+    if let Err(why) = supervisor.switch_config(candidate.clone()).await {
         return error(StatusCode::BAD_GATEWAY, why);
     }
-    if let Ok(mut active) = state.config_path.lock() {
-        *active = Some(path);
+    if let Err(why) = state.commit_active_runtime(path, &config, &candidate) {
+        if let Some(previous) = previous {
+            let _ = supervisor.switch_config(previous).await;
+        }
+        return error(StatusCode::INTERNAL_SERVER_ERROR, why);
     }
     Json(serde_json::json!({ "active": request.name, "restarting": true })).into_response()
 }
@@ -1210,7 +1215,7 @@ async fn change_access(
     target: Target,
     Json(request): Json<AccessRequest>,
 ) -> Response {
-    let root = target.descriptor.data_dir.clone();
+    let root = state.active_descriptor(&target).data_dir;
     let result = match request.action.as_str() {
         "allow" | "revoke" => {
             let Some(steam_id) = request.steam_id.as_deref() else {
@@ -1332,12 +1337,7 @@ async fn edit_gate(
 }
 
 /// `features.json` and `permissions.json` for one instance.
-///
-/// Takes the directory rather than reading the primary's. Two instances of one
-/// gamemode have different data directories by force: the engine appends
-/// `#local` to a local project's ident, so the development and published sides
-/// cannot share these files however much they look like they should. Reading
-/// the primary's for both is a panel that silently describes the wrong server.
+/// Takes the directory rather than reading the primary's. Two instances of one gamemode have different data directories by force: the engine appends `#local` to a local project's ident, so the development and published sides cannot share these files however much they look like they should. Reading the primary's for both is a panel that silently describes the wrong server.
 async fn read_access_files(
     root: Option<&std::path::Path>,
 ) -> Result<(serde_json::Value, serde_json::Value), String> {
@@ -1456,8 +1456,7 @@ async fn exec(
         return error(StatusCode::BAD_REQUEST, "empty command");
     }
 
-    // A newline would let one box submit several commands, which makes the audit
-    // row a lie about what was run.
+    // A newline would let one box submit several commands, which makes the audit row a lie about what was run.
     if command.contains('\n') || command.contains('\r') {
         return error(StatusCode::BAD_REQUEST, "one command at a time");
     }
@@ -1465,8 +1464,7 @@ async fn exec(
     match supervisor.exec(&command, &operator.name).await {
         Ok(reply) => {
             if let Some(pool) = &state.pool {
-                // Best effort: an audit insert must not fail the command that
-                // already ran. It is recorded as a warning instead.
+                // Best effort: an audit insert must not fail the command that already ran. It is recorded as a warning instead.
                 if let Err(why) = cellar_store::ops::record_command(
                     pool,
                     None,
@@ -1496,38 +1494,26 @@ async fn kill(State(_state): State<Arc<AppState>>, operator: Operator) -> Respon
     Json(serde_json::json!({ "ok": true, "action": "kill" })).into_response()
 }
 
-/// Start, stop or restart one server.
-async fn control(
-    State(state): State<Arc<AppState>>,
-    operator: Operator,
-    target: Target,
-    Path(action): Path<String>,
-) -> Response {
-    // `exit` is process-wide and ignores the target deliberately. Exiting with
-    // another instance still running gets that one SIGKILLed by whatever
-    // supervises Cellar, which is exactly the shutdown the engine has no
-    // handler for.
-    if action == "exit" {
-        tracing::info!(
-            "{} asked Cellar to exit after stopping every instance",
-            operator.name
-        );
-        for entry in state.instances.iter() {
-            if let Some(supervisor) = &entry.handle
-                && let Err(why) = supervisor.stop().await
-            {
-                return error(
-                    StatusCode::BAD_GATEWAY,
-                    format!("could not stop instance '{}': {why}", entry.id),
-                );
-            }
-        }
-        state
-            .shutdown_requested
-            .store(true, std::sync::atomic::Ordering::Release);
-        return Json(serde_json::json!({ "ok": true, "action": "exit" })).into_response();
-    }
+async fn exit(State(state): State<Arc<AppState>>, operator: Operator) -> Response {
+    let first = state.shutdown_requested.request();
+    tracing::info!(
+        "{} {} Cellar process shutdown",
+        operator.name,
+        if first { "requested" } else { "repeated" }
+    );
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "ok": true,
+            "action": "exit",
+            "already_requested": !first,
+        })),
+    )
+        .into_response()
+}
 
+/// Start, stop or restart one server.
+async fn control(operator: Operator, target: Target, Path(action): Path<String>) -> Response {
     let Some(supervisor) = &target.handle else {
         return error(StatusCode::SERVICE_UNAVAILABLE, unavailable(&target));
     };
@@ -1626,8 +1612,7 @@ async fn document(
     Json(serde_json::json!({ "document": document, "revisions": history })).into_response()
 }
 
-/// Remove a document. The bridge's own interface has no delete; this is the
-/// operator's, and it is audited by the revision history it leaves behind.
+/// Remove a document. The bridge's own interface has no delete; this is the operator's, and it is audited by the revision history it leaves behind.
 async fn delete_document(
     State(state): State<Arc<AppState>>,
     operator: Operator,
@@ -1641,6 +1626,10 @@ async fn delete_document(
     if let Err(refusal) = cellar_core::doc_key::check(&key) {
         return error(StatusCode::BAD_REQUEST, refusal.to_string());
     }
+    let _write_guard = match state.maintenance.try_bridge_write() {
+        Ok(guard) => guard,
+        Err(busy) => return error(StatusCode::CONFLICT, busy.to_string()),
+    };
 
     match cellar_store::document::delete(pool, &target.scope, &key).await {
         Ok(true) => {
@@ -1696,9 +1685,7 @@ async fn db_info(State(state): State<Arc<AppState>>, _: Operator) -> Response {
 }
 
 /// Write an operator action to the audit table, warning rather than failing.
-///
-/// The action already happened; refusing to answer because the record could not
-/// be written would be a worse outcome than an unrecorded one.
+/// The action already happened; refusing to answer because the record could not be written would be a worse outcome than an unrecorded one.
 async fn record_action(state: &AppState, operator: &Operator, command: &str, detail: &str) {
     let Some(pool) = &state.pool else { return };
     if let Err(why) = cellar_store::ops::record_command(
@@ -1727,11 +1714,7 @@ fn backup_directory(state: &AppState) -> Option<std::path::PathBuf> {
 }
 
 /// The dumps, and the policy that produced them.
-///
-/// The listing alone cannot answer the two questions somebody opening this
-/// asks: is anything taking these, and is the newest one real. The schedule
-/// comes from the config, and `verify` is the same read-back `backup::create`
-/// does before it counts a dump, which is what separates a file from a backup.
+/// The listing alone cannot answer the two questions somebody opening this asks: is anything taking these, and is the newest one real. The schedule comes from the config, and `verify` is the same read-back `backup::create` does before it counts a dump, which is what separates a file from a backup.
 async fn db_backups(State(state): State<Arc<AppState>>, _: Operator) -> Response {
     let backup = &state.backup_config;
     let Some(directory) = backup_directory(&state) else {
@@ -1771,17 +1754,89 @@ async fn db_backups(State(state): State<Arc<AppState>>, _: Operator) -> Response
     .into_response()
 }
 
+fn begin_maintenance(
+    state: &AppState,
+    name: &str,
+) -> Result<crate::state::MaintenanceGuard, Box<Response>> {
+    state.maintenance.try_start(name).map_err(|busy| {
+        Box::new(error(
+            StatusCode::CONFLICT,
+            format!("cannot start {name}: {busy}"),
+        ))
+    })
+}
+
+fn begin_exclusive_maintenance(
+    state: &AppState,
+    name: &str,
+) -> Result<crate::state::MaintenanceGuard, Box<Response>> {
+    state.maintenance.try_start_exclusive(name).map_err(|busy| {
+        Box::new(error(
+            StatusCode::CONFLICT,
+            format!("cannot start {name}: {busy}"),
+        ))
+    })
+}
+
+async fn stop_instances(state: &AppState) -> Result<Vec<String>, String> {
+    let mut pending = tokio::task::JoinSet::new();
+    for entry in state.instances.iter() {
+        let Some(handle) = entry.handle.clone() else {
+            continue;
+        };
+        let id = entry.id.to_string();
+        pending.spawn(async move { (id, handle.stop().await) });
+    }
+
+    let mut stopped = Vec::new();
+    let mut failures = Vec::new();
+    while let Some(result) = pending.join_next().await {
+        match result {
+            Ok((id, Ok(()))) => stopped.push(id),
+            Ok((id, Err(why))) => failures.push(format!("{id}: {why}")),
+            Err(why) => failures.push(format!("stop task failed: {why}")),
+        }
+    }
+    stopped.sort();
+    failures.sort();
+    if failures.is_empty() {
+        Ok(stopped)
+    } else {
+        Err(format!(
+            "could not confirm every instance stopped: {}",
+            failures.join("; ")
+        ))
+    }
+}
+
 async fn db_backup(State(state): State<Arc<AppState>>, operator: Operator) -> Response {
     let Some(url) = &state.database_url else {
         return error(StatusCode::SERVICE_UNAVAILABLE, "no database is configured");
     };
+    let guard = match begin_maintenance(&state, "database backup") {
+        Ok(guard) => guard,
+        Err(response) => return *response,
+    };
+    let url = url.expose().to_owned();
+    let mariadb = state.mariadb_config.clone();
+    let backup = state.backup_config.clone();
+    let result =
+        tokio::task::spawn_blocking(move || cellar_mariadb::backup(&url, &mariadb, &backup)).await;
 
-    match cellar_mariadb::backup(url.expose(), &state.mariadb_config, &state.backup_config) {
-        Ok(path) => {
+    match result {
+        Ok(Ok(path)) => {
+            guard.succeed(format!("wrote {}", path.display()));
             record_action(&state, &operator, "db backup", &path.display().to_string()).await;
             Json(serde_json::json!({ "path": path })).into_response()
         }
-        Err(why) => error(StatusCode::BAD_GATEWAY, why.to_string()),
+        Ok(Err(why)) => {
+            guard.fail(why.to_string());
+            error(StatusCode::BAD_GATEWAY, why.to_string())
+        }
+        Err(why) => {
+            guard.fail(why.to_string());
+            error(StatusCode::INTERNAL_SERVER_ERROR, why.to_string())
+        }
     }
 }
 
@@ -1792,12 +1847,7 @@ struct RestoreRequest {
 }
 
 /// Replace every table the named dump carries.
-///
-/// The supervised server is stopped first, and the reply says so. The gamemode
-/// writes through the bridge continuously and a write landing mid-restore lands
-/// in a table that is about to be dropped, so this is not an optional courtesy.
-/// The server is not started again: whoever restored a database should look at
-/// it before players reach it.
+/// The supervised server is stopped first, and the reply says so. The gamemode writes through the bridge continuously and a write landing mid-restore lands in a table that is about to be dropped, so this is not an optional courtesy. The server is not started again: whoever restored a database should look at it before players reach it.
 async fn db_restore(
     State(state): State<Arc<AppState>>,
     operator: Operator,
@@ -1813,18 +1863,31 @@ async fn db_restore(
         );
     };
 
-    // A name from the listing, resolved inside the directory. Taking a path
-    // would let an operator session read any file on the host into the database
-    // as SQL, and the listing is the only set that makes sense anyway.
-    let Some(dump) = cellar_mariadb::backup::list(&directory)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|dump| {
-            dump.path
-                .file_name()
-                .is_some_and(|name| name == request.name.as_str())
-        })
-    else {
+    let guard = match begin_exclusive_maintenance(&state, "database restore") {
+        Ok(guard) => guard,
+        Err(response) => return *response,
+    };
+    let dump_name = request.name.clone();
+    let dump_directory = directory.clone();
+    let selected = tokio::task::spawn_blocking(move || {
+        cellar_mariadb::backup::list(&dump_directory)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|dump| {
+                dump.path
+                    .file_name()
+                    .is_some_and(|name| name == dump_name.as_str())
+            })
+    })
+    .await;
+    let Some(dump) = (match selected {
+        Ok(dump) => dump,
+        Err(why) => {
+            guard.fail(why.to_string());
+            return error(StatusCode::INTERNAL_SERVER_ERROR, why.to_string());
+        }
+    }) else {
+        guard.fail(format!("dump '{}' was not found", request.name));
         return error(
             StatusCode::NOT_FOUND,
             format!(
@@ -1835,21 +1898,22 @@ async fn db_restore(
         );
     };
 
-    let stopped = match &state.supervisor {
-        Some(supervisor) => {
-            if let Err(why) = supervisor.stop().await {
-                return error(
-                    StatusCode::BAD_GATEWAY,
-                    format!("could not stop the server before restoring the database: {why}"),
-                );
-            }
-            true
+    let stopped = match stop_instances(&state).await {
+        Ok(stopped) => stopped,
+        Err(why) => {
+            guard.fail(why.clone());
+            return error(StatusCode::BAD_GATEWAY, why);
         }
-        None => false,
     };
+    let path = dump.path.clone();
+    let url = url.expose().to_owned();
+    let mariadb = state.mariadb_config.clone();
+    let restored =
+        tokio::task::spawn_blocking(move || cellar_mariadb::restore(&path, &url, &mariadb)).await;
 
-    match cellar_mariadb::restore(&dump.path, url.expose(), &state.mariadb_config) {
-        Ok(restored) => {
+    match restored {
+        Ok(Ok(restored)) => {
+            guard.succeed(format!("restored {}", restored.from.display()));
             record_action(
                 &state,
                 &operator,
@@ -1861,16 +1925,24 @@ async fn db_restore(
                 "restored": restored.from,
                 "database": restored.database,
                 "bytes": restored.bytes,
-                "server_stopped": stopped,
-                "detail": if stopped {
-                    "The server was stopped before the restore and has not been started again."
+                "server_stopped": !stopped.is_empty(),
+                "instances_stopped": stopped,
+                "detail": if state.instances.is_empty() {
+                    "No server is supervised by this process."
                 } else {
-                    "No server was running."
+                    "Every supervised instance was stopped before restore and remains stopped."
                 },
             }))
             .into_response()
         }
-        Err(why) => error(StatusCode::BAD_GATEWAY, why.to_string()),
+        Ok(Err(why)) => {
+            guard.fail(why.to_string());
+            error(StatusCode::BAD_GATEWAY, why.to_string())
+        }
+        Err(why) => {
+            guard.fail(why.to_string());
+            error(StatusCode::INTERNAL_SERVER_ERROR, why.to_string())
+        }
     }
 }
 
@@ -1917,10 +1989,17 @@ async fn persistence_backup(State(state): State<Arc<AppState>>, operator: Operat
             "persistence.directory is unset",
         );
     };
+    let guard = match begin_maintenance(&state, "persistence backup") {
+        Ok(guard) => guard,
+        Err(response) => return *response,
+    };
 
     let documents = match state.documents.snapshot(&state.scope).await {
         Ok(documents) => documents,
-        Err(why) => return error(StatusCode::BAD_GATEWAY, why),
+        Err(why) => {
+            guard.fail(why.clone());
+            return error(StatusCode::BAD_GATEWAY, why);
+        }
     };
     let scope = state.scope.clone();
     let copy_to = policy.copy_to.clone();
@@ -1940,6 +2019,7 @@ async fn persistence_backup(State(state): State<Arc<AppState>>, operator: Operat
 
     match result {
         Ok(Ok(path)) => {
+            guard.succeed(format!("wrote {}", path.display()));
             record_action(
                 &state,
                 &operator,
@@ -1949,8 +2029,14 @@ async fn persistence_backup(State(state): State<Arc<AppState>>, operator: Operat
             .await;
             Json(serde_json::json!({ "path": path })).into_response()
         }
-        Ok(Err(why)) => error(StatusCode::BAD_GATEWAY, why),
-        Err(why) => error(StatusCode::INTERNAL_SERVER_ERROR, why.to_string()),
+        Ok(Err(why)) => {
+            guard.fail(why.clone());
+            error(StatusCode::BAD_GATEWAY, why)
+        }
+        Err(why) => {
+            guard.fail(why.to_string());
+            error(StatusCode::INTERNAL_SERVER_ERROR, why.to_string())
+        }
     }
 }
 
@@ -1984,66 +2070,72 @@ async fn persistence_restore(
             "persistence.directory is unset",
         );
     };
-    let Some(entry) = crate::persistence::list(&directory)
-        .into_iter()
-        .find(|entry| entry.name == request.name)
-    else {
+    let guard = match begin_exclusive_maintenance(&state, "persistence restore") {
+        Ok(guard) => guard,
+        Err(response) => return *response,
+    };
+    let scope = state.scope.clone();
+    let requested_name = request.name.clone();
+    let loaded = tokio::task::spawn_blocking(move || {
+        let entry = crate::persistence::list(&directory)
+            .into_iter()
+            .find(|entry| entry.name == requested_name)?;
+        Some((
+            crate::persistence::verify_snapshot(&entry.path, &scope),
+            entry,
+        ))
+    })
+    .await;
+    let Some((verified, entry)) = (match loaded {
+        Ok(value) => value,
+        Err(why) => {
+            guard.fail(why.to_string());
+            return error(StatusCode::INTERNAL_SERVER_ERROR, why.to_string());
+        }
+    }) else {
+        guard.fail(format!("snapshot '{}' was not found", request.name));
         return error(
             StatusCode::NOT_FOUND,
             format!("no persistence snapshot named '{}'", request.name),
         );
     };
-    let snapshot = match crate::persistence::verify_snapshot(&entry.path, &state.scope) {
+    let snapshot = match verified {
         Ok(snapshot) => snapshot,
-        Err(why) => return error(StatusCode::BAD_REQUEST, why),
+        Err(why) => {
+            guard.fail(why.clone());
+            return error(StatusCode::BAD_REQUEST, why);
+        }
     };
 
-    let current = match state.documents.snapshot(&state.scope).await {
-        Ok(documents) => documents,
-        Err(why) => return error(StatusCode::BAD_GATEWAY, why),
+    let stopped = match stop_instances(&state).await {
+        Ok(stopped) => stopped,
+        Err(why) => {
+            guard.fail(why.clone());
+            return error(StatusCode::BAD_GATEWAY, why);
+        }
     };
-    if let Some(supervisor) = &state.supervisor
-        && let Err(why) = supervisor.stop().await
-    {
-        return error(
-            StatusCode::BAD_GATEWAY,
-            format!("could not stop the server before restoring persistence: {why}"),
-        );
-    }
 
-    let wanted = snapshot
+    if let Err(why) = state
         .documents
-        .iter()
-        .map(|document| document.key.as_str())
-        .collect::<std::collections::HashSet<_>>();
-    for document in current {
-        if !wanted.contains(document.key.as_str())
-            && let Err(why) = state.documents.delete(&state.scope, &document.key).await
-        {
-            return error(StatusCode::BAD_GATEWAY, why);
-        }
-    }
-    for document in &snapshot.documents {
-        if let Err(why) = state
-            .documents
-            .put(
-                &state.scope,
-                &document.key,
-                &document.body,
-                Some(&operator.name),
-            )
-            .await
-        {
-            return error(StatusCode::BAD_GATEWAY, why);
-        }
+        .replace_scope(&state.scope, &snapshot.documents, Some(&operator.name))
+        .await
+    {
+        guard.fail(why.clone());
+        return error(StatusCode::BAD_GATEWAY, why);
     }
 
+    guard.succeed(format!(
+        "restored {} document(s) from {}",
+        snapshot.documents.len(),
+        entry.name
+    ));
     record_action(&state, &operator, "persistence restore", &entry.name).await;
     Json(serde_json::json!({
         "restored": entry.name,
         "documents": snapshot.documents.len(),
-        "server_stopped": state.supervisor.is_some(),
-        "detail": "The server was stopped before restore and has not been started again.",
+        "server_stopped": !stopped.is_empty(),
+        "instances_stopped": stopped,
+        "detail": "Every supervised instance was stopped before restore and remains stopped.",
     }))
     .into_response()
 }
@@ -2069,21 +2161,13 @@ struct ActivityQuery {
     days: Option<u32>,
     #[serde(default)]
     limit: Option<u32>,
-    /// Absent lists every instance's activity, which is the useful default on
-    /// a screen whose question is usually "what happened", not "what happened
-    /// to this one".
+    /// Absent lists every instance's activity, which is the useful default on a screen whose question is usually "what happened", not "what happened to this one".
     #[serde(default)]
     instance: Option<String>,
 }
 
-/// What has happened: the console audit and the server's own observations, in
-/// one timeline.
-///
-/// No new writes. `record_command` has audited every console command since the
-/// console existed and `record_event` has recorded every lifecycle event, and
-/// until now nothing read either of them back. The console runs at full engine
-/// privilege, so `srv_command` is the only record of who used it, and it was
-/// write-only.
+/// What has happened: the console audit and the server's own observations, in one timeline.
+/// No new writes. `record_command` has audited every console command since the console existed and `record_event` has recorded every lifecycle event, and until now nothing read either of them back. The console runs at full engine privilege, so `srv_command` is the only record of who used it, and it was write-only.
 async fn activity(
     State(state): State<Arc<AppState>>,
     _: Operator,
@@ -2096,10 +2180,7 @@ async fn activity(
         );
     };
 
-    // Resolved from the registry rather than taken as a scope directly: a
-    // caller may not name an arbitrary scope, only an instance this process
-    // declares, so the filter cannot be used to read another deployment's rows
-    // out of a shared database.
+    // Resolved from the registry rather than taken as a scope directly: a caller may not name an arbitrary scope, only an instance this process declares, so the filter cannot be used to read another deployment's rows out of a shared database.
     let scope = match &query.instance {
         Some(id) => match state.instances.get(id) {
             Some(entry) => Some(entry.scope.clone()),
@@ -2133,35 +2214,30 @@ async fn activity(
     }
 }
 
-/// Every preflight check `cellar doctor` runs, plus the ones only a live
-/// process can answer.
-///
-/// The checks are not reimplemented here. They live in `cellar-diagnostics`,
-/// which the CLI calls too, because a second copy of a check is a second copy
-/// that drifts. What this route adds is the half doctor cannot see: what the
-/// supervisors are actually doing, and how many lines the grammar has refused.
+/// Every preflight check `cellar doctor` runs, plus the ones only a live process can answer.
+/// The checks are not reimplemented here. They live in `cellar-diagnostics`, which the CLI calls too, because a second copy of a check is a second copy that drifts. What this route adds is the half doctor cannot see: what the supervisors are actually doing, and how many lines the grammar has refused.
 async fn diagnostics(State(state): State<Arc<AppState>>, _: Operator) -> Response {
-    let path = state.config_path.lock().ok().and_then(|held| held.clone());
+    let (path, active_config) = state
+        .primary()
+        .map(|entry| {
+            let (path, config, _) = state.active_snapshot(entry);
+            (path, config)
+        })
+        .unwrap_or_default();
 
-    // The binds this very process holds. Without them the screen would report
-    // its own listener as a conflict, every time, forever.
+    // The binds this very process holds. Without them the screen would report its own listener as a conflict, every time, forever.
     let mut owned = vec![state.web_bind.clone()];
     owned.extend(
         state
             .instances
             .iter()
-            .filter(|entry| entry.descriptor.bridge_enabled)
-            .map(|entry| entry.descriptor.bridge_bind.clone()),
+            .map(|entry| state.active_descriptor(entry))
+            .filter(|descriptor| descriptor.bridge_enabled)
+            .map(|descriptor| descriptor.bridge_bind),
     );
 
-    let preflight = match &path {
-        Some(path) => match cellar_core::config::Config::load(path) {
-            Ok(config) => cellar_diagnostics::run(&config, &owned).await,
-            Err(why) => one_note(
-                "config",
-                format!("{} could not be re-read: {why}", path.display()),
-            ),
-        },
+    let preflight = match &active_config {
+        Some(config) => cellar_diagnostics::run(config, &owned).await,
         None => one_note(
             "config",
             "this process was not started from a config file, so the preflight checks cannot be \
@@ -2174,6 +2250,7 @@ async fn diagnostics(State(state): State<Arc<AppState>>, _: Operator) -> Respons
     let mut unparsed = Vec::new();
     for entry in state.instances.iter() {
         let id = entry.id.to_string();
+        let descriptor = state.active_descriptor(entry);
         match &entry.handle {
             None => runtime.push(serde_json::json!({
                 "label": "supervisor",
@@ -2218,14 +2295,12 @@ async fn diagnostics(State(state): State<Arc<AppState>>, _: Operator) -> Respons
                     },
                 }));
 
-                // The readiness line is the single most consequential string in
-                // an instance's config and the only way a wrong one shows up is
-                // a server that starts and never becomes ready.
+                // The readiness line is the single most consequential string in an instance's config and the only way a wrong one shows up is a server that starts and never becomes ready.
                 runtime.push(serde_json::json!({
                     "label": "ready_pattern",
                     "outcome": "note",
                     "instance": id,
-                    "detail": entry.descriptor.ready_pattern.clone(),
+                    "detail": descriptor.ready_pattern,
                 }));
 
                 unparsed.push(serde_json::json!({
@@ -2265,24 +2340,22 @@ fn one_note(label: &str, detail: String) -> cellar_diagnostics::Report {
 }
 
 /// What runs on a timer, when it last ran, and whether it worked.
-///
-/// These were three `tokio::spawn`ed loops in `runner.rs` with no way to see
-/// any of them, and a fourth, event retention, that was configured and had no
-/// loop at all.
+/// These were three `tokio::spawn`ed loops in `runner.rs` with no way to see any of them, and a fourth, event retention, that was configured and had no loop at all.
 async fn jobs(State(state): State<Arc<AppState>>, _: Operator) -> Response {
     let jobs = state
         .scheduler
         .get()
         .map(|scheduler| scheduler.statuses())
         .unwrap_or_default();
-    Json(serde_json::json!({ "jobs": jobs })).into_response()
+    Json(serde_json::json!({
+        "jobs": jobs,
+        "maintenance": state.maintenance.status(),
+    }))
+    .into_response()
 }
 
 /// Run a job now, and push its next automatic run out by a full interval.
-///
-/// 202, not 200: this nudges the job's own loop rather than running the work
-/// inside the request, so a job cannot be running twice at once however many
-/// operators press the button, and the answer is "asked", not "done".
+/// 202, not 200: this nudges the job's own loop rather than running the work inside the request, so a job cannot be running twice at once however many operators press the button, and the answer is "asked", not "done".
 async fn run_job(
     State(state): State<Arc<AppState>>,
     operator: Operator,
@@ -2320,19 +2393,20 @@ async fn run_job(
 
 async fn instances(State(state): State<Arc<AppState>>, _: Operator) -> Response {
     let primary = state.instances.primary().map(|entry| entry.id.to_string());
-    let mut instances = Vec::new();
-    for entry in state.instances.iter() {
-        let profile = discovered_profile(entry).await;
-        instances.push(serde_json::json!({
+    let instances = join_all(state.instances.iter().map(|entry| async {
+        let descriptor = state.active_descriptor(entry);
+        let profile = discovered_profile(entry, &descriptor).await;
+        serde_json::json!({
             "id": entry.id.to_string(),
             "scope": entry.scope,
             "required": entry.required,
             "running": entry.handle.is_some(),
             "unavailable": entry.unavailable,
-            "server": entry.descriptor,
+            "server": descriptor,
             "profile": profile,
-        }));
-    }
+        })
+    }))
+    .await;
     Json(serde_json::json!({
         "primary": primary,
         "instances": instances,
@@ -2341,25 +2415,24 @@ async fn instances(State(state): State<Arc<AppState>>, _: Operator) -> Response 
 }
 
 /// What instances exist, for a machine caller choosing which to address.
-///
-/// Trimmed the way `/api/v1/configs` is: an id, whether it is running and what
-/// it is, without the host's log paths, data directories or bridge addresses.
-/// The id is the only field a caller needs, and it is the one field that is
-/// already public by design, since it appears in every `?instance=` it sends.
+/// Trimmed the way `/api/v1/configs` is: an id, whether it is running and what it is, without the host's log paths, data directories or bridge addresses. The id is the only field a caller needs, and it is the one field that is already public by design, since it appears in every `?instance=` it sends.
 async fn external_instances(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response {
     Json(serde_json::json!({
         "primary": state.instances.primary().map(|entry| entry.id.to_string()),
-        "instances": state.instances.iter().map(|entry| serde_json::json!({
-            "id": entry.id.to_string(),
-            "scope": entry.scope,
-            "required": entry.required,
-            "running": entry.handle.is_some(),
-            "unavailable": entry.unavailable,
-            "game": entry.descriptor.game,
-            "map": entry.descriptor.map,
-            "gamemode": entry.descriptor.profile.name,
-            "ready_pattern": entry.descriptor.ready_pattern,
-        })).collect::<Vec<_>>(),
+        "instances": state.instances.iter().map(|entry| {
+            let descriptor = state.active_descriptor(entry);
+            serde_json::json!({
+                "id": entry.id.to_string(),
+                "scope": entry.scope,
+                "required": entry.required,
+                "running": entry.handle.is_some(),
+                "unavailable": entry.unavailable,
+                "game": descriptor.game,
+                "map": descriptor.map,
+                "gamemode": descriptor.profile.name,
+                "ready_pattern": descriptor.ready_pattern,
+            })
+        }).collect::<Vec<_>>(),
     }))
     .into_response()
 }
@@ -2407,9 +2480,7 @@ struct QueryRequest {
 }
 
 /// Run a read-only query.
-///
-/// The refusal comes back as 400 with the reason, because "why did my query not
-/// run" is the question an operator will actually have.
+/// The refusal comes back as 400 with the reason, because "why did my query not run" is the question an operator will actually have.
 async fn db_query(
     State(state): State<Arc<AppState>>,
     operator: Operator,
@@ -2461,6 +2532,10 @@ async fn db_execute(
     if let Err(why) = cellar_store::admin::is_write_allowed(&request.sql) {
         return error(StatusCode::BAD_REQUEST, why);
     }
+    let _write_guard = match state.maintenance.try_bridge_write() {
+        Ok(guard) => guard,
+        Err(busy) => return error(StatusCode::CONFLICT, busy.to_string()),
+    };
 
     match cellar_store::admin::execute(pool, &request.sql).await {
         Ok((affected_rows, last_insert_id)) => {
@@ -2491,10 +2566,241 @@ mod tests {
 
     use super::*;
 
-    /// `/api/control/kill` shares a prefix with `/api/control/{action}`, and
-    /// which one wins decides whether the button kills anything: the parameter
-    /// route would hand `control` an action it refuses. Stand-in handlers, so
-    /// nothing here can kill the test runner.
+    fn switchable_profile(game: &str, map: &str, log_file: &std::path::Path) -> String {
+        format!(
+            r#"
+            [server]
+            executable = "/srv/sbox/sbox-server"
+            project = "/srv/game/game.sbproj"
+            game = "{game}"
+            map = "{map}"
+            log_file = "{}"
+            data_dir = "/srv/{game}/data"
+            "#,
+            log_file.display()
+        )
+    }
+
+    fn controlled_entry(
+        id: &str,
+        outcome: Result<(), &'static str>,
+        seen: tokio::sync::mpsc::Sender<String>,
+    ) -> crate::registry::Entry {
+        let instance = cellar_core::config::Instance {
+            id: cellar_core::config::InstanceId::new(id).unwrap(),
+            scope: id.to_owned(),
+            enabled: true,
+            required: true,
+            server: Default::default(),
+            supervisor: Default::default(),
+            bridge: Default::default(),
+            profile: Default::default(),
+            player_ceiling: None,
+        };
+        let (_, handle, mut control) = cellar_runtime::Supervisor::new(instance.clone());
+        let mut entry = crate::registry::Entry::from_instance(&instance);
+        entry.handle = Some(handle);
+        tokio::spawn(async move {
+            if let Some(cellar_runtime::Control::Stop { reply }) = control.recv().await {
+                let _ = seen.send(instance.id.to_string()).await;
+                let _ = reply.send(outcome.map_err(str::to_owned));
+            }
+        });
+        entry
+    }
+
+    #[tokio::test]
+    async fn activating_a_switchable_profile_commits_the_live_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let log_file = directory.path().join("sbox-server.log");
+        let active_path = directory.path().join("active.toml");
+        let candidate_path = directory.path().join("candidate.toml");
+        std::fs::write(
+            &active_path,
+            switchable_profile("fobiat.active", "fobiat.activemap", &log_file),
+        )
+        .unwrap();
+        std::fs::write(
+            &candidate_path,
+            switchable_profile("fobiat.candidate", "fobiat.candidatemap", &log_file),
+        )
+        .unwrap();
+
+        let active = cellar_core::config::Config::load(&active_path).unwrap();
+        let active_instance = active.primary().unwrap();
+        let (_, handle, mut control) = cellar_runtime::Supervisor::new(active_instance.clone());
+        let mut entry = crate::registry::Entry::from_instance(&active_instance);
+        entry.handle = Some(handle.clone());
+        let mut state = AppState::new(
+            crate::state::Documents::memory(),
+            crate::auth::Policy::Trusted,
+            "test",
+        );
+        state.supervisor = Some(handle);
+        state.instances = crate::registry::Registry::new(vec![entry]);
+        state
+            .commit_active_runtime(active_path, &active, &active_instance)
+            .unwrap();
+        let state = Arc::new(state);
+
+        let responder = tokio::spawn(async move {
+            let cellar_runtime::Control::SwitchConfig { instance, reply } = control
+                .recv()
+                .await
+                .expect("the switch reached the supervisor")
+            else {
+                panic!("the route sent an unexpected supervisor control");
+            };
+            assert_eq!(instance.server.game.as_deref(), Some("fobiat.candidate"));
+            let _ = reply.send(Ok(()));
+        });
+
+        let response = activate_config(
+            State(state.clone()),
+            Operator {
+                name: "operator".to_owned(),
+            },
+            Json(ActivateConfigRequest {
+                name: "candidate".to_owned(),
+            }),
+        )
+        .await;
+        responder.await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let entry = state.instances.primary().unwrap();
+        let (path, config, descriptor) = state.active_snapshot(entry);
+        assert_eq!(path.as_deref(), Some(candidate_path.as_path()));
+        assert_eq!(descriptor.game.as_deref(), Some("fobiat.candidate"));
+        assert_eq!(descriptor.map.as_deref(), Some("fobiat.candidatemap"));
+        assert_eq!(
+            config
+                .and_then(|config| config.primary())
+                .and_then(|instance| instance.server.game),
+            Some("fobiat.candidate".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_profile_switch_keeps_the_previous_live_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let log_file = directory.path().join("sbox-server.log");
+        let active_path = directory.path().join("active.toml");
+        let candidate_path = directory.path().join("candidate.toml");
+        std::fs::write(
+            &active_path,
+            switchable_profile("fobiat.active", "fobiat.activemap", &log_file),
+        )
+        .unwrap();
+        std::fs::write(
+            &candidate_path,
+            switchable_profile("fobiat.candidate", "fobiat.candidatemap", &log_file),
+        )
+        .unwrap();
+
+        let active = cellar_core::config::Config::load(&active_path).unwrap();
+        let active_instance = active.primary().unwrap();
+        let (_, handle, mut control) = cellar_runtime::Supervisor::new(active_instance.clone());
+        let mut entry = crate::registry::Entry::from_instance(&active_instance);
+        entry.handle = Some(handle.clone());
+        let mut state = AppState::new(
+            crate::state::Documents::memory(),
+            crate::auth::Policy::Trusted,
+            "test",
+        );
+        state.supervisor = Some(handle);
+        state.instances = crate::registry::Registry::new(vec![entry]);
+        state
+            .commit_active_runtime(active_path.clone(), &active, &active_instance)
+            .unwrap();
+        let state = Arc::new(state);
+
+        let responder = tokio::spawn(async move {
+            let cellar_runtime::Control::SwitchConfig { reply, .. } = control
+                .recv()
+                .await
+                .expect("the switch reached the supervisor")
+            else {
+                panic!("the route sent an unexpected supervisor control");
+            };
+            let _ = reply.send(Err("the old process could not stop".to_owned()));
+        });
+
+        let response = activate_config(
+            State(state.clone()),
+            Operator {
+                name: "operator".to_owned(),
+            },
+            Json(ActivateConfigRequest {
+                name: "candidate".to_owned(),
+            }),
+        )
+        .await;
+        responder.await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let entry = state.instances.primary().unwrap();
+        let (path, config, descriptor) = state.active_snapshot(entry);
+        assert_eq!(path.as_deref(), Some(active_path.as_path()));
+        assert_eq!(descriptor.game.as_deref(), Some("fobiat.active"));
+        assert_eq!(
+            config
+                .and_then(|config| config.primary())
+                .and_then(|instance| instance.server.game),
+            Some("fobiat.active".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn stopping_instances_waits_for_every_supervisor_and_reports_failures() {
+        let (seen_tx, mut seen_rx) = tokio::sync::mpsc::channel(2);
+        let mut state = AppState::new(
+            crate::state::Documents::memory(),
+            crate::auth::Policy::Trusted,
+            "test",
+        );
+        state.instances = crate::registry::Registry::new(vec![
+            controlled_entry("alpha", Ok(()), seen_tx.clone()),
+            controlled_entry("beta", Err("still running"), seen_tx),
+        ]);
+
+        let failure = stop_instances(&state).await.unwrap_err();
+        let mut seen = vec![seen_rx.recv().await.unwrap(), seen_rx.recv().await.unwrap()];
+        seen.sort();
+
+        assert_eq!(seen, ["alpha", "beta"]);
+        assert!(failure.contains("beta: still running"));
+    }
+
+    #[tokio::test]
+    async fn repeated_exit_requests_only_signal_the_process_coordinator() {
+        let state = Arc::new(AppState::new(
+            crate::state::Documents::memory(),
+            crate::auth::Policy::Trusted,
+            "test",
+        ));
+
+        let first = exit(
+            State(state.clone()),
+            Operator {
+                name: "first".to_owned(),
+            },
+        )
+        .await;
+        let second = exit(
+            State(state.clone()),
+            Operator {
+                name: "second".to_owned(),
+            },
+        )
+        .await;
+
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+        assert_eq!(second.status(), StatusCode::ACCEPTED);
+        assert!(state.shutdown_requested.is_requested());
+    }
+
+    /// `/api/control/kill` shares a prefix with `/api/control/{action}`, and which one wins decides whether the button kills anything: the parameter route would hand `control` an action it refuses. Stand-in handlers, so nothing here can kill the test runner.
     #[tokio::test]
     async fn the_static_control_route_beats_the_parameter_one() {
         let router: Router = Router::new()

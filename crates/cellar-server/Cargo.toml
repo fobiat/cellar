@@ -27,10 +27,12 @@ thiserror = { workspace = true }
 sqlx = { workspace = true }
 argon2 = { workspace = true }
 rand = { workspace = true }
+futures-util = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true }
 http-body-util = "0.1"
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

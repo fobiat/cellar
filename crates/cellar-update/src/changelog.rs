@@ -1,12 +1,6 @@
 //! Reading `CHANGELOG.md`.
-//!
-//! Cellar keeps a Keep a Changelog document and uses its top heading as the
-//! release identity, so an operator can see what a pending update contains
-//! before taking it.
-//!
-//! Strict about structure, forgiving about prose. A heading it does not
-//! recognise ends the current release rather than being folded into it, because
-//! attributing one release's entries to another is worse than showing fewer.
+//! Cellar keeps a Keep a Changelog document and uses its top heading as the release identity, so an operator can see what a pending update contains before taking it.
+//! Strict about structure, forgiving about prose. A heading it does not recognise ends the current release rather than being folded into it, because attributing one release's entries to another is worse than showing fewer.
 
 use serde::{Deserialize, Serialize};
 
@@ -85,8 +79,7 @@ pub fn parse(markdown: &str) -> Vec<Release> {
             continue;
         }
 
-        // A single-level heading ends everything: it is the document title, or a
-        // structure this parser does not know.
+        // A single-level heading ends everything: it is the document title, or a structure this parser does not know.
         if trimmed.starts_with("# ") {
             finish_item(&mut item, &mut section);
             finish_section(&mut section, &mut releases);
@@ -106,9 +99,7 @@ pub fn parse(markdown: &str) -> Vec<Release> {
             continue;
         }
 
-        // An indented, non-empty line continues the bullet above it. Release
-        // entries often wrap, and treating each line as an item would split one
-        // change into several notifications.
+        // An indented, non-empty line continues the bullet above it. Release entries often wrap, and treating each line as an item would split one change into several notifications.
         if let Some(current) = item.as_mut()
             && line.starts_with(char::is_whitespace)
             && !trimmed.trim().is_empty()
@@ -300,8 +291,7 @@ All notable changes are documented here.
         assert_eq!(releases[0].headlines(99).len(), 3);
     }
 
-    /// The checked-in generic release fixture protects parsing without relying
-    /// on a sibling checkout.
+    /// The checked-in generic release fixture protects parsing without relying on a sibling checkout.
     #[test]
     fn a_checked_in_project_changelog_parses() {
         let releases = parse(include_str!("../test-fixtures/changelog.md"));
@@ -310,8 +300,7 @@ All notable changes are documented here.
         assert!(releases[0].item_count() > 0);
     }
 
-    /// Run manually with `CELLAR_COMPAT_CHANGELOG=/path/to/CHANGELOG.md cargo
-    /// test -p cellar-update -- --ignored` when checking a real project.
+    /// Run manually with `CELLAR_COMPAT_CHANGELOG=/path/to/CHANGELOG.md cargo test -p cellar-update -- --ignored` when checking a real project.
     #[test]
     #[ignore = "requires an explicitly supplied compatibility changelog"]
     fn an_explicit_compatibility_changelog_parses() {

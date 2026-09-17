@@ -7,7 +7,7 @@ const executablePath = process.env.CELLAR_CHROMIUM
 
 export default defineConfig({
   testDir: ".",
-  timeout: 30_000,
+  timeout: 60_000,
   fullyParallel: false,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {

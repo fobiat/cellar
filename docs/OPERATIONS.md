@@ -142,6 +142,13 @@ Only `game-update-check` and `program-update-check` run at startup. The two that
 write do not: a Cellar being restarted in a loop would otherwise take a dump per
 restart and prune the good ones out of the retention window.
 
+Database dumps, persistence snapshots and restores, event pruning, and an
+update that may take a pre-update dump share one process-wide maintenance
+coordinator. Conflicting work returns an explicit busy response instead of
+overlapping. `GET /api/jobs` reports the active operation and the last result.
+Dump clients and snapshot filesystem work run on blocking workers, so a long
+backup does not occupy an async request worker.
+
 ---
 
 ## Diagnostics: the same checks, from the dashboard
@@ -227,7 +234,22 @@ Cellar's stop sequence:
 
 1. Write `quit` into the console.
 2. Wait up to `supervisor.graceful_timeout_seconds` (default 30).
-3. Kill if it has not exited.
+3. Kill the tracked process tree if it has not exited.
+4. Confirm the launcher and its known descendants are gone before reporting the
+   stop or starting a replacement.
+
+Process exit from the API, a service signal, or the local TUI reaches one runner
+coordinator. All instances start shutdown concurrently inside one 60-second
+budget. If any process tree cannot be confirmed gone within that budget, Cellar
+logs the per-instance failures and escalates to the process-wide emergency kill
+instead of leaving an orphan while reporting a successful exit.
+
+The process-tree check remembers descendants while the launcher is alive and
+matches each one by PID and start time, so reparenting and PID reuse do not turn
+an old child into a false success or an unrelated kill target. It cannot prove
+ownership of a process that detached before it ever appeared in the operating
+system snapshot. Wine therefore keeps its separate one-prefix-per-instance
+rule. A pre-existing prefix daemon is not treated as a child of a later server.
 
 So `terminationGracePeriodSeconds` must be **at least** the graceful timeout, or
 the kubelet kills the pod partway through the shutdown Cellar just started and
@@ -419,7 +441,9 @@ install tree, or anything the gamemode keeps outside that database.
 
 Restoring stops every supervised server first and does not start them again.
 The gamemode writes through the bridge continuously, so a write landing
-mid-restore lands in a table that is about to be dropped.
+mid-restore lands in a table that is about to be dropped. Cellar holds an
+exclusive bridge-write barrier from restore admission through completion. If
+any instance cannot be confirmed stopped, no dump statement runs.
 
 ### Gamemode persistence snapshots
 
@@ -435,9 +459,11 @@ curl http://127.0.0.1:8081/api/persistence/backups
 Snapshots are verified JSON files containing the active scope, document keys,
 and JSON bodies. `persistence.copy_to` writes a second copy to another mounted
 directory. Restore accepts only a filename returned by the listing, requires
-the operator to type `restore`, stops the supervised server, replaces the
-scope's current documents, and leaves the server stopped. The gamemode remains
-the authority for interpreting those documents.
+the operator to type `restore`, stops every supervised instance, and replaces
+the scope's current documents while appending their restore revisions in one
+transaction. A failed replacement rolls back its deletes and writes. Every
+instance remains stopped so the operator can inspect the result. The gamemode
+remains the authority for interpreting those documents.
 
 What actually matters inside it is `aj_document`. Everything with an `srv_`
 prefix is operational and regenerable, so a narrower dump is also reasonable:

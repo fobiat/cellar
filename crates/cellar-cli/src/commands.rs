@@ -1,8 +1,5 @@
 //! The one-shot subcommands.
-//!
-//! None of these starts a server. They read a config, ask a question, print an
-//! answer and exit, which is what makes them safe to run against a live
-//! deployment and useful in a script.
+//! None of these starts a server. They read a config, ask a question, print an answer and exit, which is what makes them safe to run against a live deployment and useful in a script.
 
 use std::path::{Path, PathBuf};
 
@@ -96,15 +93,12 @@ pub fn show_config(path: &Path) -> Result<()> {
 }
 
 /// Check everything that would otherwise fail at startup, and say what is wrong.
-///
-/// The checks themselves live in `cellar-diagnostics` so the dashboard runs the
-/// same ones. This function is only their presentation.
+/// The checks themselves live in `cellar-diagnostics` so the dashboard runs the same ones. This function is only their presentation.
 pub async fn doctor(path: &Path) -> Result<()> {
     let config = Config::load(path).with_context(|| format!("reading {}", path.display()))?;
     let report = cellar_diagnostics::run(&config, &[]).await;
 
-    // One label prefix per instance when there is more than one, and none when
-    // there is one, so a single-server config reads exactly as it always did.
+    // One label prefix per instance when there is more than one, and none when there is one, so a single-server config reads exactly as it always did.
     let several = config.instances().len() > 1;
     for check in &report.checks {
         let label = match (&check.instance, several) {
@@ -129,11 +123,7 @@ pub async fn doctor(path: &Path) -> Result<()> {
 }
 
 /// Download or update the s&box dedicated server itself.
-///
-/// The last missing piece of getting from nothing to a running server. Every
-/// other command in this file assumes an install already exists; `doctor` says
-/// the executable is missing and stops there, without saying that the thing
-/// that would fix it is one anonymous steamcmd call away.
+/// The last missing piece of getting from nothing to a running server. Every other command in this file assumes an install already exists; `doctor` says the executable is missing and stops there, without saying that the thing that would fix it is one anonymous steamcmd call away.
 pub async fn install(path: &Path, into: Option<&Path>, validate: bool) -> Result<()> {
     let config = Config::load(path).with_context(|| format!("reading {}", path.display()))?;
 
@@ -162,9 +152,7 @@ pub async fn install(path: &Path, into: Option<&Path>, validate: bool) -> Result
         target.display(),
         steamcmd.display()
     );
-    // Said before the download rather than after, because the download is
-    // several gigabytes and this is the sentence that stops somebody hunting
-    // for a Steam password while it runs.
+    // Said before the download rather than after, because the download is several gigabytes and this is the sentence that stops somebody hunting for a Steam password while it runs.
     println!("the dedicated server is free and anonymous login works, so this needs no account\n");
 
     let step = cellar_update::updater::install_engine(&steamcmd, &target, validate, true).await;
@@ -177,9 +165,7 @@ pub async fn install(path: &Path, into: Option<&Path>, validate: bool) -> Result
     if executable.exists() {
         println!("server.executable = \"{}\"", executable.display());
     } else {
-        // Not a failure of this command, and worth saying plainly: an install
-        // with no executable in it is what a platform-neutral depot download
-        // looks like, and it looks complete.
+        // Not a failure of this command, and worth saying plainly: an install with no executable in it is what a platform-neutral depot download looks like, and it looks complete.
         println!(
             "note: {} is not there. Check the install before pointing a config at it.",
             executable.display()
@@ -285,10 +271,7 @@ pub fn changelog(path: &Path, limit: usize, json: bool) -> Result<()> {
 }
 
 /// Check for updates, and optionally take them.
-///
-/// Deliberately does not restart anything. `cellar run` owns the process and is
-/// the only thing that may stop it; a second `cellar` invocation killing the
-/// first one's child would be a surprising way to lose a server.
+/// Deliberately does not restart anything. `cellar run` owns the process and is the only thing that may stop it; a second `cellar` invocation killing the first one's child would be a surprising way to lose a server.
 pub async fn update(path: &Path, check: bool, now: bool, force: bool) -> Result<()> {
     let config = Config::load(path)?;
     let probe = probe_for(&config);
@@ -306,8 +289,7 @@ pub async fn update(path: &Path, check: bool, now: bool, force: bool) -> Result<
         }
     }
 
-    // Nobody is connected as far as a one-shot invocation can tell, so it says
-    // so rather than assuming zero and applying over a full server.
+    // Nobody is connected as far as a one-shot invocation can tell, so it says so rather than assuming zero and applying over a full server.
     let players = 0;
     let hour = chrono::Local::now()
         .format("%H")
@@ -487,8 +469,7 @@ fn backup_directory(config: &Config) -> Option<PathBuf> {
     })
 }
 
-/// Refuse a restore while a Cellar is up, because it is supervising a server
-/// that is writing to the database this is about to replace.
+/// Refuse a restore while a Cellar is up, because it is supervising a server that is writing to the database this is about to replace.
 async fn refuse_if_a_cellar_is_running(config: &Config) -> Result<()> {
     if !config.web.enabled {
         return Ok(());
@@ -509,10 +490,7 @@ async fn refuse_if_a_cellar_is_running(config: &Config) -> Result<()> {
 }
 
 /// Provision or report on the locally-hosted MariaDB.
-///
-/// Distinct from `db` above, which operates on whatever `database.url`
-/// already points at, local or remote, and needs no `[mariadb]` section to
-/// do it. This only makes sense when Cellar is hosting the instance itself.
+/// Distinct from `db` above, which operates on whatever `database.url` already points at, local or remote, and needs no `[mariadb]` section to do it. This only makes sense when Cellar is hosting the instance itself.
 pub async fn mariadb(path: &Path, action: MariadbAction) -> Result<()> {
     let config = Config::load(path)?;
     let mariadb = &config.mariadb;
@@ -586,9 +564,7 @@ pub async fn doc(path: &Path, instance: Option<&str>, action: DocAction) -> Resu
         .context("CELLAR_DATABASE_URL is not set")?;
 
     let pool = cellar_store::connect(url.expose(), 2).await?;
-    // The named instance's scope. Documents are keyed on it, so reading the
-    // primary's while `--instance` says otherwise lists the wrong server's
-    // data under the right server's name.
+    // The named instance's scope. Documents are keyed on it, so reading the primary's while `--instance` says otherwise lists the wrong server's data under the right server's name.
     let scope = match instance {
         Some(_) => {
             resolve_instance(&config, instance)
@@ -661,11 +637,7 @@ pub async fn doc(path: &Path, instance: Option<&str>, action: DocAction) -> Resu
 }
 
 /// Read and write the running server's configuration.
-///
-/// These drive the running instance through its web API rather than through a
-/// socket of their own. `cellar run` owns the console; a second process opening
-/// its own channel to the same terminal is two writers on one file descriptor,
-/// and the interleaving is exactly as bad as it sounds.
+/// These drive the running instance through its web API rather than through a socket of their own. `cellar run` owns the console; a second process opening its own channel to the same terminal is two writers on one file descriptor, and the interleaving is exactly as bad as it sounds.
 pub async fn settings(
     path: &Path,
     instance: Option<&str>,
@@ -743,9 +715,7 @@ pub async fn settings(
                 }
 
                 let reply = client.exec(&change.command).await?;
-                // The gamemode refuses an unknown id or an out-of-bounds value
-                // by name and without writing anything, so its own words are
-                // the most useful thing to show.
+                // The gamemode refuses an unknown id or an out-of-bounds value by name and without writing anything, so its own words are the most useful thing to show.
                 let refused = reply.iter().any(|line| {
                     let lower = line.to_ascii_lowercase();
                     lower.contains("refus")
@@ -771,8 +741,7 @@ pub async fn settings(
         crate::SettingsAction::Set { id, value } => {
             let snapshot = client.capture("").await?;
 
-            // Which command depends on which catalogue the id is in, and asking
-            // the server beats guessing from the id's shape.
+            // Which command depends on which catalogue the id is in, and asking the server beats guessing from the id's shape.
             let command = if snapshot.feature(&id).is_some() {
                 let enabled = matches!(
                     value.to_ascii_lowercase().as_str(),
@@ -835,8 +804,7 @@ pub async fn exec(
                         serde_json::json!({ "command": command, "reply": reply, "ok": true })
                     );
                 } else {
-                    // A file of commands needs to say which reply belongs to
-                    // which; a single command's reply speaks for itself.
+                    // A file of commands needs to say which reply belongs to which; a single command's reply speaks for itself.
                     if file.is_some() {
                         println!("> {command}");
                     }
@@ -874,8 +842,7 @@ pub async fn exec(
     Ok(())
 }
 
-/// What has to be typed before a kill goes ahead, in the CLI and in the
-/// dashboard both. One phrase, so a runbook can quote it once.
+/// What has to be typed before a kill goes ahead, in the CLI and in the dashboard both. One phrase, so a runbook can quote it once.
 const KILL_CONFIRMATION: &str = "KILL ALL";
 
 /// Kill a running Cellar and every process under it.
@@ -895,8 +862,7 @@ pub async fn kill(path: &Path, yes: bool) -> Result<()> {
     }
 
     let config = Config::load(path)?;
-    // No instance. The route is process-wide, and an `?instance=` on it would
-    // read as killing one supervised server, which it has never meant.
+    // No instance. The route is process-wide, and an `?instance=` on it would read as killing one supervised server, which it has never meant.
     LiveServer::connect(&config, None).await?.kill().await?;
     println!("Cellar and everything it was running have been killed.");
     Ok(())
@@ -919,10 +885,7 @@ fn print_changes(changes: &[cellar_core::convar::Change]) {
 }
 
 /// The instance `--instance` names, or the primary when it names nothing.
-///
-/// Returns `None` for an id this config does not declare, so a caller can say
-/// so rather than fall back to the primary. A silent fallback here is the same
-/// mistake the HTTP `Target` extractor refuses to make.
+/// Returns `None` for an id this config does not declare, so a caller can say so rather than fall back to the primary. A silent fallback here is the same mistake the HTTP `Target` extractor refuses to make.
 fn resolve_instance(
     config: &Config,
     instance: Option<&str>,
@@ -942,15 +905,13 @@ struct LiveServer {
     base: String,
     /// Which supervised server these calls are about. `None` is the primary.
     instance: Option<String>,
-    /// The gamemode's convar prefix, from `[profile]`. Absent means this
-    /// gamemode has no settings catalogue Cellar knows how to ask for.
+    /// The gamemode's convar prefix, from `[profile]`. Absent means this gamemode has no settings catalogue Cellar knows how to ask for.
     convar_prefix: Option<String>,
 }
 
 impl LiveServer {
     async fn connect(config: &Config, instance: Option<&str>) -> Result<Self> {
-        // Refused here rather than by the server, so a typo costs one message
-        // instead of a connection, a login and a 404.
+        // Refused here rather than by the server, so a typo costs one message instead of a connection, a login and a 404.
         if let Some(wanted) = instance.filter(|value| !value.trim().is_empty())
             && resolve_instance(config, Some(wanted)).is_none()
         {
@@ -980,8 +941,7 @@ impl LiveServer {
             .cookie_store(true)
             .build()?;
 
-        // A password is only needed when the web UI has one, which the config
-        // layer only permits off loopback.
+        // A password is only needed when the web UI has one, which the config layer only permits off loopback.
         if config.web.password_hash.is_some() {
             let password = std::env::var("CELLAR_WEB_PASSWORD").context(
                 "this server's web UI has a password; set CELLAR_WEB_PASSWORD to use these commands",
@@ -1005,9 +965,7 @@ impl LiveServer {
             instance: instance
                 .filter(|value| !value.trim().is_empty())
                 .map(|value| value.trim().to_owned()),
-            // The named instance's profile, not the primary's. Two instances
-            // may run different gamemodes, and reading the wrong prefix sends
-            // one gamemode's catalogue command to the other's console.
+            // The named instance's profile, not the primary's. Two instances may run different gamemodes, and reading the wrong prefix sends one gamemode's catalogue command to the other's console.
             convar_prefix: resolve_instance(config, instance)
                 .and_then(|instance| instance.profile.convar_prefix.clone()),
         };
@@ -1030,10 +988,7 @@ impl LiveServer {
     }
 
     /// Build a route URL, adding `?instance=` when one was named.
-    ///
-    /// A query pair rather than string concatenation, so an id carrying a `&`
-    /// becomes a 404 from Cellar rather than a request that means something
-    /// else than it reads.
+    /// A query pair rather than string concatenation, so an id carrying a `&` becomes a 404 from Cellar rather than a request that means something else than it reads.
     fn url(&self, path: &str) -> Result<reqwest::Url> {
         let mut url = reqwest::Url::parse(&format!("{}{path}", self.base))
             .with_context(|| format!("building a URL for {path}"))?;
@@ -1044,9 +999,7 @@ impl LiveServer {
     }
 
     async fn kill(&self) -> Result<()> {
-        // A transport error is not a failure here. `connect` already proved this
-        // Cellar answers, so a connection dropping now is the process going away
-        // as asked; only an answer that is not a success means it refused.
+        // A transport error is not a failure here. `connect` already proved this Cellar answers, so a connection dropping now is the process going away as asked; only an answer that is not a success means it refused.
         if let Ok(response) = self
             .client
             .post(self.url("/api/control/kill")?)
@@ -1136,17 +1089,12 @@ impl LiveServer {
 }
 
 /// Update Cellar itself.
-///
-/// Distinct from `cellar update`, which updates the *game*. This one replaces
-/// the running binary, and refuses to install anything whose SHA-256 does not
-/// match the checksum published beside it.
+/// Distinct from `cellar update`, which updates the *game*. This one replaces the running binary, and refuses to install anything whose SHA-256 does not match the checksum published beside it.
 pub async fn self_update(check_only: bool) -> Result<()> {
     use cellar_update::selfupdate;
 
     let running = std::env::current_exe().context("finding this binary")?;
-    // Sweep a `.old` left by a previous update. On Windows it is only
-    // deletable once the process that was running it has exited, which is why
-    // this happens here rather than at the end of the update.
+    // Sweep a `.old` left by a previous update. On Windows it is only deletable once the process that was running it has exited, which is why this happens here rather than at the end of the update.
     selfupdate::sweep(&running);
 
     let current = env!("CARGO_PKG_VERSION");
@@ -1158,9 +1106,7 @@ pub async fn self_update(check_only: bool) -> Result<()> {
         .await
         .context("reaching the release API")?;
 
-    // 404 means either "no releases" or "this repository is not visible to
-    // you", and those need different actions. Saying which one is the whole
-    // difference between a useful message and a confusing one.
+    // 404 means either "no releases" or "this repository is not visible to you", and those need different actions. Saying which one is the whole difference between a useful message and a confusing one.
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         anyhow::bail!(
             "no release visible at {}.\n\
@@ -1244,9 +1190,7 @@ pub async fn self_update(check_only: bool) -> Result<()> {
 }
 
 /// Add the headers GitHub wants, including a token when one is configured.
-///
-/// A private repository answers 404 to an anonymous caller, so a token is the
-/// difference between self-update working and appearing to have no releases.
+/// A private repository answers 404 to an anonymous caller, so a token is the difference between self-update working and appearing to have no releases.
 fn github(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
     let request = request
         .header("User-Agent", "cellar")

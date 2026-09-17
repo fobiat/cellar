@@ -1,9 +1,5 @@
 //! The bridge's document table.
-//!
-//! Whole-document reads and writes, keyed by `(scope, doc_key)`, with every
-//! write also appended to a revision history. No query language: the gamemode's
-//! own interface has five operations and deliberately no sixth, and matching it
-//! keeps the seam honest.
+//! Whole-document reads and writes, keyed by `(scope, doc_key)`, with every write also appended to a revision history. No query language: the gamemode's own interface has five operations and deliberately no sixth, and matching it keeps the seam honest.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -27,20 +23,18 @@ pub struct WriteOutcome {
     pub revision: u64,
     pub created: bool,
     /// True when the caller named a revision that was not the current one.
-    ///
-    /// Recorded, never enforced. The shipped `HostedDocumentStore` documents
-    /// that it never returns `Rejected` because the concurrency question is
-    /// still open upstream, so answering 409 would turn a recoverable write into
-    /// a lost one at a client with no code to retry it.
+    /// Recorded, never enforced. The shipped `HostedDocumentStore` documents that it never returns `Rejected` because the concurrency question is still open upstream, so answering 409 would turn a recoverable write into a lost one at a client with no code to retry it.
     pub would_conflict: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplaceOutcome {
+    pub documents: usize,
+    pub removed: usize,
+}
+
 /// Read a JSON column back into a value.
-///
-/// MySQL 8 hands a `JSON` column over the wire as text; MariaDB implements
-/// `JSON` as `LONGTEXT` with a binary collation and hands it over as a BLOB, so
-/// asking for a `String` fails there with a type mismatch. Reading bytes works
-/// on both, and this is the one place that has to know it.
+/// MySQL 8 hands a `JSON` column over the wire as text; MariaDB implements `JSON` as `LONGTEXT` with a binary collation and hands it over as a BLOB, so asking for a `String` fails there with a type mismatch. Reading bytes works on both, and this is the one place that has to know it.
 fn decode_json(row: &sqlx::mysql::MySqlRow, column: &str) -> Result<serde_json::Value, StoreError> {
     let bytes: Vec<u8> = row.try_get(column)?;
     serde_json::from_slice(&bytes).map_err(StoreError::Corrupt)
@@ -109,7 +103,6 @@ pub async fn exists(pool: &MySqlPool, scope: &str, key: &str) -> Result<bool, St
 }
 
 /// Write a document whole, bumping its revision and appending to the history.
-///
 /// `expected_revision` is compared and reported, not enforced. See
 /// [`WriteOutcome::would_conflict`].
 pub async fn put(
@@ -122,8 +115,7 @@ pub async fn put(
 ) -> Result<WriteOutcome, StoreError> {
     let text = serde_json::to_string(body).map_err(StoreError::Corrupt)?;
 
-    // One transaction: a body written without its history row would leave the
-    // audit trail with a hole exactly where somebody is looking for it.
+    // One transaction: a body written without its history row would leave the audit trail with a hole exactly where somebody is looking for it.
     let mut tx = pool.begin().await?;
 
     let current: Option<u64> =
@@ -189,6 +181,99 @@ pub async fn delete(pool: &MySqlPool, scope: &str, key: &str) -> Result<bool, St
     Ok(result.rows_affected() > 0)
 }
 
+pub async fn replace_scope(
+    pool: &MySqlPool,
+    scope: &str,
+    documents: &[(String, serde_json::Value)],
+    written_by: Option<&str>,
+) -> Result<ReplaceOutcome, StoreError> {
+    let mut keys = std::collections::HashSet::with_capacity(documents.len());
+    let mut encoded = Vec::with_capacity(documents.len());
+    for (key, body) in documents {
+        cellar_core::doc_key::check(key).map_err(|why| {
+            StoreError::InvalidReplacement(format!("document key '{key}' is invalid: {why}"))
+        })?;
+        if !keys.insert(key.clone()) {
+            return Err(StoreError::InvalidReplacement(format!(
+                "document key '{key}' appears more than once"
+            )));
+        }
+        encoded.push((
+            key,
+            serde_json::to_string(body).map_err(StoreError::Corrupt)?,
+        ));
+    }
+
+    let mut tx = pool.begin().await?;
+    let rows = sqlx::query("SELECT doc_key, revision FROM aj_document WHERE scope = ? FOR UPDATE")
+        .bind(scope)
+        .fetch_all(&mut *tx)
+        .await?;
+    let current = rows
+        .into_iter()
+        .map(|row| {
+            Ok((
+                row.try_get::<String, _>("doc_key")?,
+                row.try_get::<u64, _>("revision")?,
+            ))
+        })
+        .collect::<Result<std::collections::HashMap<_, _>, sqlx::Error>>()?;
+    let removed = current.keys().filter(|key| !keys.contains(*key)).count();
+    let history = sqlx::query(
+        "SELECT doc_key, revision FROM aj_document_revision WHERE scope = ? FOR UPDATE",
+    )
+    .bind(scope)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut latest_revision = std::collections::HashMap::<String, u64>::new();
+    for row in history {
+        let key: String = row.try_get("doc_key")?;
+        let revision: u64 = row.try_get("revision")?;
+        latest_revision
+            .entry(key)
+            .and_modify(|latest| *latest = (*latest).max(revision))
+            .or_insert(revision);
+    }
+
+    sqlx::query("DELETE FROM aj_document WHERE scope = ?")
+        .bind(scope)
+        .execute(&mut *tx)
+        .await?;
+
+    for (key, body) in encoded {
+        let revision = latest_revision.get(key).copied().unwrap_or(0) + 1;
+        sqlx::query(
+            "INSERT INTO aj_document (scope, doc_key, body, revision, updated_by)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(scope)
+        .bind(key)
+        .bind(&body)
+        .bind(revision)
+        .bind(written_by)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO aj_document_revision (scope, doc_key, revision, body, written_by)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(scope)
+        .bind(key)
+        .bind(revision)
+        .bind(&body)
+        .bind(written_by)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(ReplaceOutcome {
+        documents: documents.len(),
+        removed,
+    })
+}
+
 /// A row in the document browser.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocumentSummary {
@@ -233,7 +318,7 @@ pub async fn list(
 }
 
 /// One historical revision.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Revision {
     pub revision: u64,
     pub body: serde_json::Value,

@@ -122,8 +122,12 @@ OnInputText( strtext );      // -> ConVarSystem.Run
 and `RedrawInputLine()` repaints the status block **after** the ConCmd returns.
 
 So a reply is exactly the lines between `> {command}` and the next status line.
-No timing guess is involved. A 3s timeout survives as a backstop for a console
-that never echoes, but it is not the mechanism.
+No timing guess is involved. Each supervisor owns a bounded FIFO and writes at
+most one command while a reply is open. The next command is dispatched only
+after the status redraw, a truthful timeout failure, or process teardown. A 3s
+timeout survives as a backstop for a console that never echoes, but it is not
+the mechanism. Reply events retain the actor as well as the command, including
+when two callers submit the same text.
 
 Measured against the fake server: **0.15s bracketed, 3.23s when the echo is
 suppressed**, and the test fails in the second case rather than passing slowly.
@@ -235,16 +239,18 @@ wrong) was chosen over the weaker one (validate against a bad value).
 
 End-to-end testing would otherwise need Steam, Wine, a GSLT and a real s&box
 build. So `cellar-fake-server` opens a PTY, emits real engine log lines, writes a
-real status bar (rendered by the same `cellar-core` code Cellar parses with, so
-the two cannot drift), accepts console input including the `> ` echo, implements
-`quit`, and can be told to crash, hang or flood.
+status bar, accepts console input including the `> ` echo, implements `quit`,
+and can be told to crash, hang or flood. Its normal status output uses Cellar's
+renderer for deterministic scenario tests. A separate mode replays checked-in
+bytes captured from a real s&box PTY, so parser coverage does not share its
+oracle with the renderer.
 
 Every supervisor, TUI, web and webhook test runs against it, on any machine, in
 seconds.
 
-**348 tests**, including the adversarial player name, rotation mid-line, split
-UTF-8, and the ported C# protocol expectations so both halves of the bridge are
-provably talking about the same thing.
+The workspace suite includes adversarial player names, rotation mid-line,
+split UTF-8, and the ported C# protocol expectations so both halves of the
+bridge are provably talking about the same thing.
 
 The gate, before every commit:
 

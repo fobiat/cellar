@@ -1,11 +1,5 @@
 //! What a document key may be.
-//!
-//! A direct port of AppleJack Framework's `Code/Storage/DocumentKeys.cs`, which is the
-//! authority. Both halves of the bridge have to agree on this exactly: the
-//! gamemode refuses an illegal key before it ever reaches the wire, so a key
-//! this module accepts but the C# would not is a key that can never arrive, and
-//! one this module rejects but the C# would send is an outage.
-//!
+//! A direct port of AppleJack Framework's `Code/Storage/DocumentKeys.cs`, which is the authority. Both halves of the bridge have to agree on this exactly: the gamemode refuses an illegal key before it ever reaches the wire, so a key this module accepts but the C# would not is a key that can never arrive, and one this module rejects but the C# would send is an outage.
 //! Nothing here sanitises. A key is accepted as given or refused by name.
 
 /// Path separator between key segments.
@@ -64,9 +58,7 @@ pub fn check(key: &str) -> Result<(), KeyRefusal> {
         return Err(KeyRefusal::Empty);
     }
 
-    // Counting chars, not bytes, to match the C# `key.Length` over UTF-16. Only
-    // ASCII survives `is_legal_character` anyway, so the two agree in practice;
-    // this keeps them agreeing on the refusal message for a rejected key too.
+    // Counting chars, not bytes, to match the C# `key.Length` over UTF-16. Only ASCII survives `is_legal_character` anyway, so the two agree in practice; this keeps them agreeing on the refusal message for a rejected key too.
     let length = key.chars().count();
     if length > MAXIMUM_LENGTH {
         return Err(KeyRefusal::TooLong { length });
@@ -115,8 +107,7 @@ fn check_segment(segment: &str) -> Result<(), KeyRefusal> {
     Ok(())
 }
 
-// Uppercase is refused rather than folded: two filesystems could disagree about
-// two keys differing only in case.
+// Uppercase is refused rather than folded: two filesystems could disagree about two keys differing only in case.
 fn is_legal_character(c: char) -> bool {
     c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-' || c == '_'
 }
@@ -128,8 +119,7 @@ fn stem_of(segment: &str) -> &str {
     }
 }
 
-// Lowercase only, because `is_legal_character` already refused every uppercase
-// key. Opening "nul.json" on Windows stores nothing, silently.
+// Lowercase only, because `is_legal_character` already refused every uppercase key. Opening "nul.json" on Windows stores nothing, silently.
 fn is_reserved_device_name(stem: &str) -> bool {
     if matches!(stem, "con" | "prn" | "aux" | "nul") {
         return true;

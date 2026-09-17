@@ -1,26 +1,12 @@
-//! The `/v1/doc/{key}` service AppleJack Framework's `HostedDocumentStore` already has a
-//! client for.
-//!
-//! Every status code here is load-bearing, because the client maps them onto
-//! three different behaviours and one of the mappings is a data-loss hazard.
-//! From `HostedDocumentProtocol.cs`:
-//!
+//! The `/v1/doc/{key}` service AppleJack Framework's `HostedDocumentStore` already has a client for.
+//! Every status code here is load-bearing, because the client maps them onto three different behaviours and one of the mappings is a data-loss hazard. From `HostedDocumentProtocol.cs`:
 //! ```text
 //! GET   404 -> Absent      2xx -> Found       anything else -> Unavailable
 //! PUT   2xx -> Written     409 -> Rejected    anything else -> Failed
 //! HEAD  404 -> Absent      2xx -> Present     anything else -> Unknown
 //! ```
-//!
-//! **404 is the only code that may mean "absent".** A 500, a 502, a timeout and
-//! a parse failure are all "I could not tell you". Mapping any of them to absent
-//! is 20_PERSISTENCE.md §4.1's catastrophe arriving over the wire: a player
-//! joins, their roster reads as empty, and the empty roster is written back over
-//! their character.
-//!
-//! Two further constraints from the same section. The client gives a read 3
-//! seconds and a write 5, and opens a circuit breaker after three failures, so
-//! slowness here is indistinguishable from being down. And the engine strips
-//! `Authorization` on every redirect hop, so this service must never redirect.
+//! **404 is the only code that may mean "absent".** A 500, a 502, a timeout and a parse failure are all "I could not tell you". Mapping any of them to absent is 20_PERSISTENCE.md §4.1's catastrophe arriving over the wire: a player joins, their roster reads as empty, and the empty roster is written back over their character.
+//! Two further constraints from the same section. The client gives a read 3 seconds and a write 5, and opens a circuit breaker after three failures, so slowness here is indistinguishable from being down. And the engine strips `Authorization` on every redirect hop, so this service must never redirect.
 
 use std::sync::Arc;
 
@@ -35,9 +21,7 @@ use crate::auth;
 use crate::state::BridgeState;
 
 /// Mount the bridge routes.
-///
-/// One handler chain for all three methods, because the client uses the same
-/// route with `GET`, `PUT` and `HEAD` and they must agree about keys and auth.
+/// One handler chain for all three methods, because the client uses the same route with `GET`, `PUT` and `HEAD` and they must agree about keys and auth.
 pub fn routes() -> Router<Arc<BridgeState>> {
     Router::new().route(
         "/v1/doc/{*key}",
@@ -108,15 +92,20 @@ async fn write_document(
     }
 
     if body.len() > state.max_body_bytes {
-        // The caller is a game host, and a compromised host is the thing being
-        // limited (§7.2). 413 maps to Failed at the client, which journals the
-        // write rather than losing it.
+        // The caller is a game host, and a compromised host is the thing being limited (§7.2). 413 maps to Failed at the client, which journals the write rather than losing it.
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
 
     let document: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(value) => value,
         Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let _write_guard = match state.try_document_write() {
+        Ok(guard) => guard,
+        Err(why) => {
+            state.bridge_failed(&why.to_string());
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
     };
 
     match state
@@ -126,12 +115,7 @@ async fn write_document(
     {
         Ok(outcome) => {
             state.bridge_write(outcome.would_conflict);
-            // Deliberately 204 and never 409, even when the revision moved
-            // underneath this write. `HostedDocumentStore` documents that it
-            // never surfaces `Rejected` because the concurrency question is
-            // still open upstream, so a 409 would reach a client with no code
-            // to retry it: a recoverable write would become a lost one. The
-            // conflict is counted and shown instead.
+            // Deliberately 204 and never 409, even when the revision moved underneath this write. `HostedDocumentStore` documents that it never surfaces `Rejected` because the concurrency question is still open upstream, so a 409 would reach a client with no code to retry it: a recoverable write would become a lost one. The conflict is counted and shown instead.
             StatusCode::NO_CONTENT.into_response()
         }
         Err(why) => {
@@ -142,8 +126,7 @@ async fn write_document(
 }
 
 /// Auth, rate limit and key validation, in that order.
-// The error is boxed: a `Response` is large, and every caller returns it
-// immediately, so the common path should not carry its width on the stack.
+// The error is boxed: a `Response` is large, and every caller returns it immediately, so the common path should not carry its width on the stack.
 fn admit(state: &BridgeState, headers: &HeaderMap, key: &str) -> Result<(), Box<Response>> {
     if let Err(status) = auth::check(&state.auth, headers) {
         return Err(Box::new(status.into_response()));
@@ -153,10 +136,7 @@ fn admit(state: &BridgeState, headers: &HeaderMap, key: &str) -> Result<(), Box<
         return Err(Box::new(StatusCode::TOO_MANY_REQUESTS.into_response()));
     }
 
-    // The same rules the gamemode applies before it sends, so a key that gets
-    // here is one the client should never have produced. Refused rather than
-    // sanitised, matching the C# posture: a sanitised key is a different key,
-    // and writing to a different key is worse than refusing.
+    // The same rules the gamemode applies before it sends, so a key that gets here is one the client should never have produced. Refused rather than sanitised, matching the C# posture: a sanitised key is a different key, and writing to a different key is worse than refusing.
     if let Err(refusal) = cellar_core::doc_key::check(key) {
         return Err(Box::new(
             (StatusCode::BAD_REQUEST, refusal.to_string()).into_response(),

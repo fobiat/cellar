@@ -1,8 +1,5 @@
 //! Persistent engine-log scanning for the operator console.
-//!
-//! The engine owns the log files. Cellar reads the current file and rotated
-//! siblings on demand, so a restart does not erase the searchable history and
-//! no dashboard data is written into the gamemode checkout.
+//! The engine owns the log files. Cellar reads the current file and rotated siblings on demand, so a restart does not erase the searchable history and no dashboard data is written into the gamemode checkout.
 
 use std::path::{Path, PathBuf};
 
@@ -19,16 +16,11 @@ pub struct Query {
     pub tag: Option<String>,
     /// Exactly this severity.
     pub level: Option<Level>,
-    /// This severity or worse. The console's severity control is a threshold,
-    /// so searching the rotated files has to be one too or the live view and
-    /// the search disagree about the same control.
+    /// This severity or worse. The console's severity control is a threshold, so searching the rotated files has to be one too or the live view and the search disagree about the same control.
     pub level_min: Option<Level>,
     pub category: Option<String>,
     /// Only lines strictly after this instant.
-    ///
-    /// What the browser uses to fill the hole a dropped websocket leaves. The
-    /// log file is the persistent record, so a reconnect can recover exactly
-    /// what the stream missed instead of resuming mid-gap and looking complete.
+    /// What the browser uses to fill the hole a dropped websocket leaves. The log file is the persistent record, so a reconnect can recover exactly what the stream missed instead of resuming mid-gap and looking complete.
     pub since: Option<DateTime<Utc>>,
     pub limit: usize,
 }
@@ -56,10 +48,7 @@ pub struct SearchResult {
 }
 
 /// Scan the engine's log files.
-///
-/// Takes the profile rather than reading a global one: the categories a line
-/// falls into depend on the gamemode, and with two instances in a process there
-/// is no single right answer to fetch from somewhere else.
+/// Takes the profile rather than reading a global one: the categories a line falls into depend on the gamemode, and with two instances in a process there is no single right answer to fetch from somewhere else.
 pub async fn search(path: &Path, profile: &GamemodeProfile, query: &Query) -> SearchResult {
     let files = files_for(path).await;
     let mut lines = Vec::new();
@@ -124,9 +113,7 @@ async fn files_for(current: &Path) -> Vec<PathBuf> {
 
 fn record(file: &Path, profile: &GamemodeProfile, raw: &str) -> Option<Record> {
     let parsed = cellar_core::grammar::parse_line(Line::log_file(raw))?;
-    // An empty ready pattern on purpose: a historical readiness line in a
-    // rotated file is not this process becoming ready, and classifying it as
-    // one would drop the line from the search rather than list it.
+    // An empty ready pattern on purpose: a historical readiness line in a rotated file is not this process becoming ready, and classifying it as one would drop the line from the search rather than list it.
     let event = cellar_core::grammar::classify(&parsed, Origin::LogFile, "", profile);
     let Event::Log(line) = event else {
         return None;
@@ -195,8 +182,7 @@ mod tests {
         }
     }
 
-    /// The reconnect backfill's whole correctness condition: strictly after,
-    /// so the line the browser already has is not shown twice.
+    /// The reconnect backfill's whole correctness condition: strictly after, so the line the browser already has is not shown twice.
     #[test]
     fn since_is_exclusive_of_the_instant_it_names() {
         let record = record_at(Level::Info);

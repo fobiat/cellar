@@ -1,19 +1,10 @@
 //! Locating and verifying a MariaDB release.
-//!
-//! MariaDB does not publish to GitHub, so there is no release API to parse the
-//! way `cellar-update`'s `selfupdate` module does. Instead this builds the URL
-//! into the MariaDB Foundation's own permanent per-version archive
-//! (`archive.mariadb.org`), whose layout is documented and stable across
-//! versions, and verifies the download against a checksum pinned in
-//! `mariadb.sha256` rather than one fetched over the same connection as the
-//! archive. See `[mariadb]` in `cellar-core::config` for why that pin exists.
+//! MariaDB does not publish to GitHub, so there is no release API to parse the way `cellar-update`'s `selfupdate` module does. Instead this builds the URL into the MariaDB Foundation's own permanent per-version archive (`archive.mariadb.org`), whose layout is documented and stable across versions, and verifies the download against a checksum pinned in `mariadb.sha256` rather than one fetched over the same connection as the archive. See `[mariadb]` in `cellar-core::config` for why that pin exists.
 
 use std::path::Path;
 
 /// Where the official win64 archive for a version lives.
-///
-/// `archive.mariadb.org` keeps every released version indefinitely, unlike
-/// the front page at mariadb.org/download, which only lists current ones.
+/// `archive.mariadb.org` keeps every released version indefinitely, unlike the front page at mariadb.org/download, which only lists current ones.
 pub fn archive_url(version: &str) -> String {
     format!(
         "https://archive.mariadb.org/mariadb-{version}/winx64-packages/mariadb-{version}-winx64.zip"
@@ -21,10 +12,7 @@ pub fn archive_url(version: &str) -> String {
 }
 
 /// The archive's top-level directory once unpacked, e.g. `mariadb-11.4.5-winx64`.
-///
-/// The official zip does not extract flat; everything sits under one directory
-/// matching this name, which `install.rs` needs to know to find `bin/`
-/// afterwards.
+/// The official zip does not extract flat; everything sits under one directory matching this name, which `install.rs` needs to know to find `bin/` afterwards.
 pub fn archive_root(version: &str) -> String {
     format!("mariadb-{version}-winx64")
 }
@@ -39,12 +27,7 @@ pub enum ReleaseError {
 }
 
 /// Verify a downloaded archive against the checksum pinned in config.
-///
-/// Unlike `cellar-update::selfupdate::verify`, `expected` is never fetched
-/// over the network here: it is the value a human copied from MariaDB's
-/// published hashes when they set `mariadb.version`. A mirror serving a bad
-/// archive alongside a bad checksum does not help an attacker against this
-/// check, because the expected value never came from that mirror.
+/// Unlike `cellar-update::selfupdate::verify`, `expected` is never fetched over the network here: it is the value a human copied from MariaDB's published hashes when they set `mariadb.version`. A mirror serving a bad archive alongside a bad checksum does not help an attacker against this check, because the expected value never came from that mirror.
 pub fn verify(bytes: &[u8], expected: &str) -> Result<(), ReleaseError> {
     let expected = expected.trim().to_ascii_lowercase();
     if expected.len() != 64 || !expected.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -60,20 +43,13 @@ pub fn verify(bytes: &[u8], expected: &str) -> Result<(), ReleaseError> {
 }
 
 /// Whether this version's binaries are already unpacked at `install_dir`.
-///
-/// Idempotency check for `provision`: skip the download entirely when a
-/// previous provision (or a re-run after an interruption) already put the
-/// binaries in place.
+/// Idempotency check for `provision`: skip the download entirely when a previous provision (or a re-run after an interruption) already put the binaries in place.
 pub fn already_installed(install_dir: &Path) -> bool {
     install_dir.join("bin").join("mariadbd.exe").is_file()
 }
 
 /// SHA-256, without a dependency for it.
-///
-/// Duplicated from `cellar-update::selfupdate::sha256_hex` rather than taking
-/// a dependency on that crate just for a hash function; `cellar-update` is
-/// about updating the game, and that is the wrong coupling for a few dozen
-/// lines of hashing. See that module for the same reasoning stated in full.
+/// Duplicated from `cellar-update::selfupdate::sha256_hex` rather than taking a dependency on that crate just for a hash function; `cellar-update` is about updating the game, and that is the wrong coupling for a few dozen lines of hashing. See that module for the same reasoning stated in full.
 pub fn sha256_hex(data: &[u8]) -> String {
     let digest = sha256(data);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()

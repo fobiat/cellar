@@ -1,26 +1,12 @@
 //! Reading, writing and capturing the server's configuration.
-//!
-//! Three different things share one screen, because to an operator they are one
-//! question ("what is this server set to?") even though the engine keeps them
-//! apart:
-//!
-//! - **Features**, 41 switches over whole gamemode systems, listed by
-//!   `applejack_features` and written by `applejack_feature_set`.
-//! - **Settings**, 7 catalogued gameplay values with bounds and a documented
-//!   source, listed by `applejack_settings` and written by
-//!   `applejack_setting_set`.
+//! Three different things share one screen, because to an operator they are one question ("what is this server set to?") even though the engine keeps them apart:
+//! - **Features**, 41 switches over whole gamemode systems, listed by `applejack_features` and written by `applejack_feature_set`.
+//! - **Settings**, 7 catalogued gameplay values with bounds and a documented source, listed by `applejack_settings` and written by `applejack_setting_set`.
 //! - **Convars**, the engine's own, discovered with `find`.
 //!
-//! A [`Snapshot`] is all three captured together, and it serialises to TOML or
-//! YAML so a server's configuration can be committed, diffed and re-applied
-//! somewhere else. That is the point: today the only record of how a server is
-//! configured is the server.
+//! A [`Snapshot`] is all three captured together, and it serialises to TOML or YAML so a server's configuration can be committed, diffed and re-applied somewhere else. That is the point: today the only record of how a server is configured is the server.
 //!
-//! The two gamemode listings are parsed from formats read out of
-//! `FeatureDirector.cs` and `SettingDirector.cs`, so they are exact. The engine's
-//! `find` output is not documented anywhere this could be read from, so that
-//! parser is deliberately tolerant and marks what it could not understand
-//! rather than guessing.
+//! The two gamemode listings are parsed from formats read out of `FeatureDirector.cs` and `SettingDirector.cs`, so they are exact. The engine's `find` output is not documented anywhere this could be read from, so that parser is deliberately tolerant and marks what it could not understand rather than guessing.
 
 use serde::{Deserialize, Serialize};
 
@@ -118,10 +104,7 @@ impl Snapshot {
     }
 
     /// Only what an operator changed away from the catalogue's default.
-    ///
-    /// The useful thing to commit: a full dump is mostly defaults, and a diff
-    /// against one is noise. This is the shape that answers "what is different
-    /// about this server".
+    /// The useful thing to commit: a full dump is mostly defaults, and a diff against one is noise. This is the shape that answers "what is different about this server".
     pub fn overrides_only(&self) -> Self {
         Self {
             captured_at: self.captured_at.clone(),
@@ -150,8 +133,7 @@ impl Snapshot {
         serde_yaml_ng::to_string(self).map_err(|e| e.to_string())
     }
 
-    /// Read a snapshot from TOML or YAML, deciding by shape rather than by
-    /// extension: a file renamed by hand should still load.
+    /// Read a snapshot from TOML or YAML, deciding by shape rather than by extension: a file renamed by hand should still load.
     pub fn parse(text: &str) -> Result<Self, String> {
         let toml_error = match toml::from_str::<Self>(text) {
             Ok(snapshot) => return Ok(snapshot),
@@ -179,11 +161,7 @@ pub struct Change {
 }
 
 /// What it would take to move `current` to `desired`.
-///
-/// Only what `desired` actually mentions. A snapshot with three features in it
-/// is a request to set those three, not a request to reset everything else to
-/// its default, because the second reading turns a partial file into a way to
-/// wipe a server's configuration.
+/// Only what `desired` actually mentions. A snapshot with three features in it is a request to set those three, not a request to reset everything else to its default, because the second reading turns a partial file into a way to wipe a server's configuration.
 pub fn plan(catalogue: &Catalogue<'_>, current: &Snapshot, desired: &Snapshot) -> Vec<Change> {
     let mut changes = Vec::new();
 
@@ -209,9 +187,7 @@ pub fn plan(catalogue: &Catalogue<'_>, current: &Snapshot, desired: &Snapshot) -
             from: state_word(existing.enabled).to_owned(),
             to: state_word(wanted.enabled).to_owned(),
             command: catalogue.feature_command(&wanted.id, wanted.enabled),
-            // The live server's own catalogue decides, not the file's: a file
-            // could claim a core feature is toggleable and it would still be
-            // refused by the gamemode.
+            // The live server's own catalogue decides, not the file's: a file could claim a core feature is toggleable and it would still be refused by the gamemode.
             refused: (!existing.toggle.is_writable())
                 .then(|| "this feature is core and cannot be toggled".to_owned()),
             needs_restart: existing.toggle == Toggle::Boot,
@@ -252,16 +228,8 @@ fn state_word(enabled: bool) -> &'static str {
     if enabled { "on" } else { "off" }
 }
 
-/// The four commands a gamemode has to expose for the settings catalogue to
-/// work, derived from its `profile.convar_prefix`.
-///
-/// `<prefix>_features`, `<prefix>_settings`, `<prefix>_feature_set` and
-/// `<prefix>_setting_set`. This is AppleJack Framework's naming convention, not an
-/// engine one, and it is stated here rather than assumed: a gamemode that
-/// declares a prefix and names its commands differently gets a console error
-/// naming the command it does not have, which is a better failure than the
-/// hardcoded `applejack_*` this replaced, where every other gamemode saw an
-/// empty settings tab and no explanation.
+/// The four commands a gamemode has to expose for the settings catalogue to work, derived from its `profile.convar_prefix`.
+/// `<prefix>_features`, `<prefix>_settings`, `<prefix>_feature_set` and `<prefix>_setting_set`. This is AppleJack Framework's naming convention, not an engine one, and it is stated here rather than assumed: a gamemode that declares a prefix and names its commands differently gets a console error naming the command it does not have, which is a better failure than the hardcoded `applejack_*` this replaced, where every other gamemode saw an empty settings tab and no explanation.
 pub struct Catalogue<'a>(&'a str);
 
 impl<'a> Catalogue<'a> {
@@ -289,16 +257,11 @@ impl<'a> Catalogue<'a> {
 }
 
 /// Parse the output of `applejack_features`.
-///
 /// The format is fixed-width, from `FeatureDirector.cs`:
-///
 /// ```text
 /// {id,-28} {state,-36} {toggle,-5} {title}
 /// ```
-///
-/// where state reads `on (default off)`. Parsed by splitting on whitespace
-/// rather than by column offset: a long id pushes the columns right, and a
-/// fixed-offset reader would then silently read the wrong field.
+/// where state reads `on (default off)`. Parsed by splitting on whitespace rather than by column offset: a long id pushes the columns right, and a fixed-offset reader would then silently read the wrong field.
 pub fn parse_features(lines: &[String]) -> Vec<Feature> {
     let mut features = Vec::new();
 
@@ -362,9 +325,7 @@ pub fn parse_features(lines: &[String]) -> Vec<Feature> {
 }
 
 /// Parse the output of `applejack_settings`.
-///
 /// From `SettingDirector.cs`:
-///
 /// ```text
 /// {id,-34} {value,-10} default {default,-10} {bounds,-18} {source}
 /// ```
@@ -417,11 +378,7 @@ pub fn parse_settings(lines: &[String]) -> Vec<Setting> {
 }
 
 /// Parse the output of the engine's `find`.
-///
-/// Deliberately tolerant. Unlike the two above, this format could not be read
-/// from source, so it accepts `name value`, `name : help` and `name = value`
-/// and records what it could not classify as a bare name rather than dropping
-/// the row or inventing a value.
+/// Deliberately tolerant. Unlike the two above, this format could not be read from source, so it accepts `name value`, `name : help` and `name = value` and records what it could not classify as a bare name rather than dropping the row or inventing a value.
 pub fn parse_convars(lines: &[String]) -> Vec<Convar> {
     let mut convars = Vec::new();
 
@@ -478,8 +435,7 @@ pub fn parse_convars(lines: &[String]) -> Vec<Convar> {
 mod tests {
     use super::*;
 
-    /// The catalogue these tests were written against, named once so the
-    /// assertions still read as being about the plan rather than the prefix.
+    /// The catalogue these tests were written against, named once so the assertions still read as being about the plan rather than the prefix.
     fn applejack() -> Catalogue<'static> {
         Catalogue::new("applejack")
     }
@@ -524,8 +480,7 @@ mod tests {
         assert!(features.is_empty());
     }
 
-    /// A long id pushes every later column right. A fixed-offset reader would
-    /// read the wrong field and report a wrong state, silently.
+    /// A long id pushes every later column right. A fixed-offset reader would read the wrong field and report a wrong state, silently.
     #[test]
     fn a_long_id_does_not_shift_the_reader_onto_the_wrong_column() {
         let features = parse_features(&lines(
@@ -690,8 +645,7 @@ mod tests {
         );
     }
 
-    /// A partial file must be a request to set what it names, never a request
-    /// to reset everything it does not.
+    /// A partial file must be a request to set what it names, never a request to reset everything it does not.
     #[test]
     fn a_partial_snapshot_does_not_reset_what_it_omits() {
         let current = snapshot();

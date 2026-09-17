@@ -1,15 +1,9 @@
 //! The dedicated server console's status bar, rendered and parsed.
-//!
-//! Every rule here is taken from `engine/Launcher/SboxServer/DedicatedServerConsole.cs`
-//! (`UpdateStatus`) and `ConsoleInput.cs` (`RedrawInputLine`), so [`render`] is a
-//! transcription of the engine rather than an impression of it, and the parser is
-//! tested against that transcription.
+//! Every rule here is taken from `engine/Launcher/SboxServer/DedicatedServerConsole.cs` (`UpdateStatus`) and `ConsoleInput.cs` (`RedrawInputLine`), so [`render`] is a transcription of the engine rather than an impression of it, and the parser is tested against that transcription.
 
 use crate::event::StatusBar;
 
-/// Half of the bar. The engine draws the two halves as two separate console
-/// lines (`SetStatus(1, lineA)` and `SetStatus(2, lineB)`), so a reader sees one
-/// at a time and has to merge them.
+/// Half of the bar. The engine draws the two halves as two separate console lines (`SetStatus(1, lineA)` and `SetStatus(2, lineB)`), so a reader sees one at a time and has to merge them.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Fragment {
     /// `{name} ({players}/{max}) [{h:mm:ss}]` … `Network {n}ms`
@@ -67,9 +61,7 @@ pub fn parse(text: &str) -> Option<Fragment> {
 
     if let Some((players, max_players, counter_start)) = find_player_counter(text) {
         let tail = &text[counter_start..];
-        // The clock is required, not optional. `UpdateStatus` always renders it,
-        // and without it an ordinary log line like `Loading map (1/3) stage`
-        // matches on the counter alone and overwrites the real bar.
+        // The clock is required, not optional. `UpdateStatus` always renders it, and without it an ordinary log line like `Loading map (1/3) stage` matches on the counter alone and overwrites the real bar.
         if let Some(uptime_seconds) = find_bracketed_clock(tail) {
             return Some(Fragment::Head {
                 hostname: text[..counter_start].trim_end().to_owned(),
@@ -81,9 +73,7 @@ pub fn parse(text: &str) -> Option<Fragment> {
         }
     }
 
-    // Line B carries no counter and no brackets. Require the label that always
-    // leads it, so an ordinary log line mentioning physics is not mistaken for
-    // the bar.
+    // Line B carries no counter and no brackets. Require the label that always leads it, so an ordinary log line mentioning physics is not mistaken for the bar.
     let physics = find_timing(text, "Physics")?;
     Some(Fragment::Timings {
         physics_ms: Some(physics),
@@ -94,32 +84,20 @@ pub fn parse(text: &str) -> Option<Fragment> {
 }
 
 /// True for the padded blank lines `RedrawInputLine` writes around the bar.
-///
-/// It emits one blank input line plus `statusText[0]`, which
-/// `DedicatedServerConsole` never sets, both right-padded to the console width.
-/// They carry nothing and there are two of them every half second.
+/// It emits one blank input line plus `statusText[0]`, which `DedicatedServerConsole` never sets, both right-padded to the console width. They carry nothing and there are two of them every half second.
 pub fn is_blank_chrome(text: &str) -> bool {
     text.trim().is_empty()
 }
 
 /// The line `ConsoleInput.OnEnter` writes immediately before it dispatches.
-///
-/// `Console.WriteLine( "> " + inputString )` runs before `OnInputText`, so this
-/// marks the exact start of a command's output with no timing guess involved.
+/// `Console.WriteLine( "> " + inputString )` runs before `OnInputText`, so this marks the exact start of a command's output with no timing guess involved.
 pub fn parse_command_echo(text: &str) -> Option<&str> {
     text.trim_end().strip_prefix("> ")
 }
 
 /// Seconds of uptime from the bar's clock, correcting the engine's rounding.
-///
-/// `UpdateStatus` renders the hour as `{TotalHours:n0}`, which **rounds** rather
-/// than truncates, while the minutes and seconds come from `ToString("mm\:ss")`
-/// and are exact. So a server up for 40 minutes renders `[1:40:00]`, an hour
-/// ahead of the truth, and stays wrong for half of every hour.
-///
-/// The error is exactly invertible: rendered = floor_hours + (minutes >= 30).
-/// Subtracting that back recovers the real hour, so Cellar reports true uptime
-/// from a bar the engine renders incorrectly.
+/// `UpdateStatus` renders the hour as `{TotalHours:n0}`, which **rounds** rather than truncates, while the minutes and seconds come from `ToString("mm\:ss")` and are exact. So a server up for 40 minutes renders `[1:40:00]`, an hour ahead of the truth, and stays wrong for half of every hour.
+/// The error is exactly invertible: rendered = floor_hours + (minutes >= 30). Subtracting that back recovers the real hour, so Cellar reports true uptime from a bar the engine renders incorrectly.
 fn clock_to_seconds(hours: u64, minutes: u64, seconds: u64) -> u64 {
     let corrected = hours.saturating_sub(u64::from(minutes >= 30));
     corrected * 3600 + minutes * 60 + seconds
@@ -161,16 +139,14 @@ fn find_bracketed_clock(text: &str) -> Option<u64> {
     Some(clock_to_seconds(hours, minutes, seconds))
 }
 
-/// `{Label} {n}.{nn}ms`, with the label matched case-insensitively and the
-/// number read by scanning forward rather than by column offset.
+/// `{Label} {n}.{nn}ms`, with the label matched case-insensitively and the number read by scanning forward rather than by column offset.
 fn find_timing(text: &str, label: &str) -> Option<f32> {
     let lowered = text.to_ascii_lowercase();
     let label_lower = label.to_ascii_lowercase();
     let at = lowered.find(&label_lower)?;
 
     let rest = &text[at + label.len()..];
-    // Tolerate a colon the engine does not currently write, so a future
-    // `Network: 1.00ms` still reads.
+    // Tolerate a colon the engine does not currently write, so a future `Network: 1.00ms` still reads.
     let rest = rest.trim_start().trim_start_matches(':').trim_start();
 
     let end = rest
@@ -183,18 +159,13 @@ fn find_timing(text: &str, label: &str) -> Option<f32> {
 }
 
 /// Render the two status lines exactly as the engine does.
-///
-/// Mirrors `UpdateStatus` including the `PadLeft`/`Substring` right-alignment
-/// and `RedrawInputLine`'s `PadRight`, so a fixture built from this is a
-/// fixture of the engine's output. `width` is the engine's `lineWidth`, which is
-/// `Console.BufferWidth - 1`.
+/// Mirrors `UpdateStatus` including the `PadLeft`/`Substring` right-alignment and `RedrawInputLine`'s `PadRight`, so a fixture built from this is a fixture of the engine's output. `width` is the engine's `lineWidth`, which is `Console.BufferWidth - 1`.
 pub fn render(bar: &StatusBar, width: usize) -> [String; 2] {
     let hours = bar.uptime_seconds / 3600;
     let minutes = (bar.uptime_seconds % 3600) / 60;
     let seconds = bar.uptime_seconds % 60;
 
-    // The engine rounds the hour and Cellar corrects it on the way back in, so
-    // to render what the engine renders the rounding has to be reintroduced.
+    // The engine rounds the hour and Cellar corrects it on the way back in, so to render what the engine renders the rounding has to be reintroduced.
     let rendered_hours = hours + u64::from(minutes >= 30);
 
     let uptime = format!(
@@ -267,6 +238,34 @@ fn group_separated(value: u64) -> String {
 mod tests {
     use super::*;
 
+    const REAL_LINES: &str =
+        include_str!("../tests/fixtures/statusbar/real-status-lines-2026-08-24.txt");
+    const CURRENT_REAL_LINES: &str =
+        include_str!("../tests/fixtures/statusbar/real-status-lines-2026-09-17-build-24826151.txt");
+    const REAL_PTY_HEX: &str =
+        include_str!("../tests/fixtures/statusbar/real-pty-2026-09-17-build-24826151.hex");
+
+    fn decode_hex(text: &str) -> Vec<u8> {
+        let digits: Vec<_> = text
+            .bytes()
+            .filter(|byte| !byte.is_ascii_whitespace())
+            .collect();
+        let (pairs, remainder) = digits.as_chunks::<2>();
+        assert!(remainder.is_empty());
+        pairs
+            .iter()
+            .map(|pair| {
+                let nibble = |byte: u8| match byte {
+                    b'0'..=b'9' => byte - b'0',
+                    b'a'..=b'f' => byte - b'a' + 10,
+                    b'A'..=b'F' => byte - b'A' + 10,
+                    _ => panic!("invalid fixture hex"),
+                };
+                nibble(pair[0]) << 4 | nibble(pair[1])
+            })
+            .collect()
+    }
+
     fn bar() -> StatusBar {
         StatusBar {
             hostname: "AppleJack Framework".into(),
@@ -285,8 +284,7 @@ mod tests {
     fn renders_the_engines_two_lines() {
         let [a, b] = render(&bar(), 100);
 
-        // The right half sits flush against `width`, which is what the
-        // engine's `PadLeft(width)` then overwrite-from-the-left produces.
+        // The right half sits flush against `width`, which is what the engine's `PadLeft(width)` then overwrite-from-the-left produces.
         assert!(a.starts_with("AppleJack Framework (3/64) [1:01:01] "));
         assert!(a.ends_with("Network 0.42ms"));
         assert!(b.starts_with("Physics 1.10ms, NavMesh 0.05ms, Animation 0.31ms "));
@@ -309,10 +307,60 @@ mod tests {
     }
 
     #[test]
+    fn real_pty_bytes_survive_line_assembly_and_parse_independently() {
+        let bytes = decode_hex(REAL_PTY_HEX);
+        let mut assembler = crate::ansi::LineAssembler::new();
+        let lines: Vec<_> = bytes
+            .chunks(7)
+            .flat_map(|chunk| assembler.push(chunk))
+            .collect();
+
+        let mut parsed = StatusBar::default();
+        for line in &lines {
+            if let Some(fragment) = parse(line) {
+                fragment.apply(&mut parsed);
+            }
+        }
+        assert_eq!(parsed.hostname, "CellarIndependentFixtureLongName");
+        assert_eq!((parsed.players, parsed.max_players), (1, 32));
+        assert_eq!(parsed.uptime_seconds, 0);
+        assert_eq!(parsed.network_ms, Some(0.0));
+        assert_eq!(parsed.physics_ms, Some(0.0));
+        assert_eq!(parsed.update_ms, Some(0.0));
+    }
+
+    #[test]
+    fn real_lines_cover_the_rounded_hour_without_the_renderer() {
+        let lines: Vec<_> = REAL_LINES.lines().collect();
+        let mut parsed = StatusBar::default();
+        parse(lines[2]).unwrap().apply(&mut parsed);
+        parse(lines[3]).unwrap().apply(&mut parsed);
+
+        assert_eq!(parsed.hostname, "AppleJackRP Dev");
+        assert_eq!((parsed.players, parsed.max_players), (1, 64));
+        assert_eq!(parsed.uptime_seconds, 37 * 60 + 48);
+    }
+
+    #[test]
+    fn meaningful_mutations_of_real_lines_are_refused_or_explicitly_tolerated() {
+        let lines: Vec<_> = CURRENT_REAL_LINES.lines().collect();
+        assert!(parse(&lines[0].replace("[0:00:00]", "{0:00:00}")).is_none());
+        assert!(parse(&lines[0].replace("(1/32)", "(1-32)")).is_none());
+        assert!(parse(&lines[1].replace("Physics", "Simulation")).is_none());
+
+        let without_network = parse(&lines[0].replace("Network", "Transport")).unwrap();
+        assert!(matches!(
+            without_network,
+            Fragment::Head {
+                network_ms: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn line_b_parses_without_a_player_counter() {
-        // The regression this module exists for: line B has no `(n/m)` and no
-        // clock, so a parser anchored on the counter rejected it and every
-        // half-second redraw landed in the unparsed counter.
+        // The regression this module exists for: line B has no `(n/m)` and no clock, so a parser anchored on the counter rejected it and every half-second redraw landed in the unparsed counter.
         let [_, b] = render(&bar(), 100);
         let fragment = parse(&b).unwrap();
 
@@ -329,8 +377,7 @@ mod tests {
 
     #[test]
     fn corrects_the_engines_rounded_hour() {
-        // 40 minutes of uptime renders as `[1:40:00]` because `TotalHours:n0`
-        // rounds 0.67 up to 1. Reading it literally is an hour out.
+        // 40 minutes of uptime renders as `[1:40:00]` because `TotalHours:n0` rounds 0.67 up to 1. Reading it literally is an hour out.
         let mut forty_minutes = bar();
         forty_minutes.uptime_seconds = 40 * 60;
         let [a, _] = render(&forty_minutes, 100);
@@ -382,8 +429,7 @@ mod tests {
 
     #[test]
     fn a_narrow_console_truncates_the_right_half() {
-        // `topLeft.Length < lineA.Length` is false once the left half fills the
-        // width, and the engine then drops the right half entirely.
+        // `topLeft.Length < lineA.Length` is false once the left half fills the width, and the engine then drops the right half entirely.
         let [a, _] = render(&bar(), 10);
         assert_eq!(a, "AppleJack Framework (3/64) [1:01:01]");
         assert!(!a.contains("Network"));

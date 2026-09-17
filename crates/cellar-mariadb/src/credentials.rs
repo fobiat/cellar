@@ -1,19 +1,11 @@
 //! Generating the password for the database user `provision` creates.
-//!
-//! Never persisted by this crate: `provision::provision` prints
-//! `CELLAR_DATABASE_URL` for the operator to set, the same way
-//! `cellar hash-password` prints `CELLAR_WEB_PASSWORD_HASH`. See `[mariadb]`
-//! in `cellar-core::config` for why this stays out of any file Cellar writes.
+//! Never persisted by this crate: `provision::provision` prints `CELLAR_DATABASE_URL` for the operator to set, the same way `cellar hash-password` prints `CELLAR_WEB_PASSWORD_HASH`. See `[mariadb]` in `cellar-core::config` for why this stays out of any file Cellar writes.
 
 use rand::Rng;
 use rand::distributions::Alphanumeric;
 
 /// A password safe to embed in a `mysql://` URL without escaping.
-///
-/// Alphanumeric only, so it never needs percent-encoding in a connection
-/// string and never collides with the `:`/`@`/`/` delimiters that string is
-/// parsed by. 32 characters of a 62-symbol alphabet is over 190 bits of
-/// entropy, more than enough for a credential that never leaves this machine.
+/// Alphanumeric only, so it never needs percent-encoding in a connection string and never collides with the `:`/`@`/`/` delimiters that string is parsed by. 32 characters of a 62-symbol alphabet is over 190 bits of entropy, more than enough for a credential that never leaves this machine.
 pub fn generate_password() -> String {
     rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -23,13 +15,7 @@ pub fn generate_password() -> String {
 }
 
 /// Pull the password back out of a `mysql://user:password@host/db` URL.
-///
-/// `provision::provision` never persists the generated password anywhere;
-/// `CELLAR_DATABASE_URL` is the one place it lives once printed. This is how
-/// `cellar run` recovers it at startup, to authenticate `supervisor.rs`'s
-/// graceful shutdown later. Only ever called on a URL this crate generated,
-/// so the password is always the plain alphanumeric output of
-/// `generate_password`, needing no percent-decoding.
+/// `provision::provision` never persists the generated password anywhere; `CELLAR_DATABASE_URL` is the one place it lives once printed. This is how `cellar run` recovers it at startup, to authenticate `supervisor.rs`'s graceful shutdown later. Only ever called on a URL this crate generated, so the password is always the plain alphanumeric output of `generate_password`, needing no percent-decoding.
 pub fn password_from_database_url(url: &str) -> Option<String> {
     let after_scheme = url.split_once("://")?.1;
     let before_at = after_scheme.split('@').next()?;
@@ -64,8 +50,7 @@ mod tests {
 
     #[test]
     fn two_generated_passwords_are_not_the_same() {
-        // Not a security proof, just a smoke test that the RNG is actually
-        // being consulted rather than something constant slipping through.
+        // Not a security proof, just a smoke test that the RNG is actually being consulted rather than something constant slipping through.
         assert_ne!(generate_password(), generate_password());
     }
 }

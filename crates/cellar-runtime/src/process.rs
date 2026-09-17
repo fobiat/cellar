@@ -1,35 +1,22 @@
 //! Spawning the server on a pseudo-terminal.
-//!
-//! Not on pipes. `Launcher.cs` only constructs the dedicated console when
-//! `Console.IsOutputRedirected` is false, and `ConsoleInput.cs` reads stdin with
-//! `Console.ReadKey()` guarded by `Console.BufferWidth > 0`. Both of those fail
-//! on a redirected stream, so a supervisor that owns the child's stdio through
-//! pipes gets no console at all: nothing reads its stdin, and `quit`, `kick` and
-//! `status` become unreachable.
-//!
-//! A pty satisfies both checks, because a pty *is* a terminal. It is also the
-//! reason the Kubernetes deployment needs `stdin: true, tty: true`.
-//!
-//! The cost is that the stream carries the console's colouring and its in-place
-//! status bar redraws. `cellar_core::ansi` handles that.
+//! Not on pipes. `Launcher.cs` only constructs the dedicated console when `Console.IsOutputRedirected` is false, and `ConsoleInput.cs` reads stdin with `Console.ReadKey()` guarded by `Console.BufferWidth > 0`. Both of those fail on a redirected stream, so a supervisor that owns the child's stdio through pipes gets no console at all: nothing reads its stdin, and `quit`, `kick` and `status` become unreachable.
+//! A pty satisfies both checks, because a pty *is* a terminal. It is also the reason the Kubernetes deployment needs `stdin: true, tty: true`.
+//! The cost is that the stream carries the console's colouring and its in-place status bar redraws. `cellar_core::ansi` handles that.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySize, PtySystem, native_pty_system};
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
 use tokio::sync::mpsc;
 
 use crate::launch::Command;
 
 /// Terminal size given to the child.
-///
-/// Width matters: the engine asks for `Console.BufferWidth` before it will read
-/// input at all, and it positions the status bar relative to the width. A
-/// generous, fixed size keeps the layout stable regardless of whether Cellar
-/// itself is attached to a terminal.
+/// Width matters: the engine asks for `Console.BufferWidth` before it will read input at all, and it positions the status bar relative to the width. A generous, fixed size keeps the layout stable regardless of whether Cellar itself is attached to a terminal.
 pub const PTY_COLS: u16 = 200;
 pub const PTY_ROWS: u16 = 50;
 
@@ -49,8 +36,7 @@ pub enum SpawnError {
     Attach(String),
 }
 
-/// `portable-pty` returns `anyhow::Error`; this keeps that out of the public API
-/// without taking a dependency on anyhow across the whole crate.
+/// `portable-pty` returns `anyhow::Error`; this keeps that out of the public API without taking a dependency on anyhow across the whole crate.
 pub mod anyhow_shim {
     /// An error from the pty layer, flattened to its message.
     #[derive(Debug, thiserror::Error)]
@@ -67,6 +53,144 @@ pub enum Output {
     Eof,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ProcessIdentity {
+    pid: Pid,
+    started_at: u64,
+}
+
+impl ProcessIdentity {
+    fn from_system(system: &System, pid: Pid) -> Option<Self> {
+        let process = system.process(pid)?;
+        process.thread_kind().is_none().then_some(Self {
+            pid,
+            started_at: process.start_time(),
+        })
+    }
+
+    fn is_running(self, system: &System) -> bool {
+        system.process(self.pid).is_some_and(|process| {
+            process.thread_kind().is_none()
+                && process.start_time() == self.started_at
+                && process.status() != ProcessStatus::Zombie
+        })
+    }
+}
+
+#[derive(Debug)]
+struct ProcessTree {
+    root_pid: Option<Pid>,
+    root: Option<ProcessIdentity>,
+    descendants: HashSet<ProcessIdentity>,
+    parents: HashMap<ProcessIdentity, ProcessIdentity>,
+}
+
+impl ProcessTree {
+    fn capture(pid: Option<u32>) -> Self {
+        let root_pid = pid.map(Pid::from_u32);
+        let mut tree = Self {
+            root_pid,
+            root: None,
+            descendants: HashSet::new(),
+            parents: HashMap::new(),
+        };
+        tree.observe(&process_table());
+        tree
+    }
+
+    fn observe(&mut self, system: &System) {
+        if self.root.is_none()
+            && let Some(root_pid) = self.root_pid
+        {
+            self.root = ProcessIdentity::from_system(system, root_pid);
+        }
+
+        let mut seeds = Vec::new();
+        if let Some(root) = self.root
+            && root.is_running(system)
+        {
+            seeds.push(root.pid);
+        }
+        seeds.extend(
+            self.descendants
+                .iter()
+                .filter(|identity| identity.is_running(system))
+                .map(|identity| identity.pid),
+        );
+
+        let children = children_by_parent(system);
+        for seed in seeds {
+            for pid in descendants_in_postorder(seed, &children) {
+                if Some(pid) == self.root_pid {
+                    continue;
+                }
+                if let Some(identity) = ProcessIdentity::from_system(system, pid) {
+                    self.descendants.insert(identity);
+                    if let Some(parent) = system
+                        .process(pid)
+                        .and_then(|process| process.parent())
+                        .and_then(|parent| ProcessIdentity::from_system(system, parent))
+                    {
+                        self.parents.entry(identity).or_insert(parent);
+                    }
+                }
+            }
+        }
+    }
+
+    fn has_running_descendants(&self, system: &System) -> bool {
+        self.descendants
+            .iter()
+            .any(|identity| identity.is_running(system))
+    }
+
+    fn kill_order(&self, system: &System) -> Vec<ProcessIdentity> {
+        let mut ordered = self
+            .descendants
+            .iter()
+            .copied()
+            .filter(|identity| identity.is_running(system))
+            .collect::<Vec<_>>();
+        ordered.sort_by_key(|identity| {
+            std::cmp::Reverse((self.recorded_depth(*identity), identity.started_at))
+        });
+        ordered
+    }
+
+    fn recorded_depth(&self, identity: ProcessIdentity) -> usize {
+        let mut depth = 0;
+        let mut current = identity;
+        let mut seen = HashSet::new();
+        while seen.insert(current) {
+            let Some(parent) = self.parents.get(&current).copied() else {
+                break;
+            };
+            depth += 1;
+            if Some(parent) == self.root {
+                break;
+            }
+            current = parent;
+        }
+        depth
+    }
+}
+
+struct CachedProcessTable {
+    system: System,
+    refreshed: Instant,
+}
+
+impl std::ops::Deref for CachedProcessTable {
+    type Target = System;
+
+    fn deref(&self) -> &Self::Target {
+        &self.system
+    }
+}
+
+static PROCESS_TABLE: OnceLock<Mutex<CachedProcessTable>> = OnceLock::new();
+const PROCESS_TABLE_MAX_AGE: Duration = Duration::from_millis(100);
+
 /// A running server, its terminal, and the thread reading it.
 pub struct Child {
     child: Box<dyn portable_pty::Child + Send + Sync>,
@@ -75,40 +199,59 @@ pub struct Child {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     pid: Option<u32>,
     command_line: String,
+    process_tree: ProcessTree,
+    root_exit: Option<ExitStatus>,
+    exit_reported: bool,
 }
 
-/// How long Cellar stays alive after the sweep, so the HTTP reply reaches the
-/// browser that asked for this before its connection dies with the process.
+/// How long Cellar stays alive after the sweep, so the HTTP reply reaches the browser that asked for this before its connection dies with the process.
 const ROOT_KILL_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// Kill every process Cellar owns, then Cellar itself, with no graceful stop.
-///
-/// This is deliberately not the supervisor's stop. It is for an operator who
-/// needs the whole local stack gone now, including a server that has stopped
-/// answering its console.
+/// This is deliberately not the supervisor's stop. It is for an operator who needs the whole local stack gone now, including a server that has stopped answering its console.
 pub fn emergency_kill_current_process_tree() {
     let root = Pid::from_u32(std::process::id());
-    kill_descendants(root, &process_table());
+    kill_descendants(root, &fresh_process_table());
 
-    // After the sweep, never before: the helper is itself a child of Cellar, so
-    // a sweep run later would kill the thing doing the killing.
+    // After the sweep, never before: the helper is itself a child of Cellar, so a sweep run later would kill the thing doing the killing.
     schedule_root_kill(root.as_u32());
 }
 
 /// Every process on the machine, carrying only the fields the walk reads.
-///
-/// `System::new_all` also collects command lines, environments, memory and disk
-/// usage for all of them, which is a great deal of work to then throw away.
-fn process_table() -> System {
-    let mut system = System::new();
-    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::new());
-    system
+/// `System::new_all` also collects command lines, environments, memory and disk usage for all of them, which is a great deal of work to then throw away.
+fn process_table() -> MutexGuard<'static, CachedProcessTable> {
+    process_table_with_max_age(PROCESS_TABLE_MAX_AGE)
+}
+
+fn fresh_process_table() -> MutexGuard<'static, CachedProcessTable> {
+    process_table_with_max_age(Duration::ZERO)
+}
+
+fn process_table_with_max_age(max_age: Duration) -> MutexGuard<'static, CachedProcessTable> {
+    let cache = PROCESS_TABLE.get_or_init(|| {
+        Mutex::new(CachedProcessTable {
+            system: System::new(),
+            refreshed: Instant::now()
+                .checked_sub(PROCESS_TABLE_MAX_AGE)
+                .unwrap_or_else(Instant::now),
+        })
+    });
+    let mut table = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if table.refreshed.elapsed() >= max_age {
+        table.system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::new(),
+        );
+        table.refreshed = Instant::now();
+    }
+    table
 }
 
 /// SIGKILL, or `TerminateProcess` on Windows, to everything under `root`.
-///
-/// Deepest first, so a parent cannot notice a dead child and restart it while
-/// the walk is still going.
+/// Deepest first, so a parent cannot notice a dead child and restart it while the walk is still going.
 fn kill_descendants(root: Pid, system: &System) {
     for pid in descendants_in_postorder(root, &children_by_parent(system)) {
         if let Some(process) = system.process(pid)
@@ -122,12 +265,13 @@ fn kill_descendants(root: Pid, system: &System) {
 fn children_by_parent(system: &System) -> HashMap<Pid, Vec<Pid>> {
     let mut children = HashMap::<Pid, Vec<Pid>>::new();
     for (pid, process) in system.processes() {
+        if process.thread_kind().is_some() {
+            continue;
+        }
         let Some(parent) = process.parent() else {
             continue;
         };
-        // Windows leaves a dead parent's id on its orphans and reuses pids, so
-        // an unrelated process can claim Cellar as its parent. A real child
-        // cannot have started before the parent did.
+        // Windows leaves a dead parent's id on its orphans and reuses pids, so an unrelated process can claim Cellar as its parent. A real child cannot have started before the parent did.
         if system
             .process(parent)
             .is_some_and(|owner| owner.start_time() > process.start_time())
@@ -165,13 +309,9 @@ fn descendants_in_postorder(root: Pid, children: &HashMap<Pid, Vec<Pid>>) -> Vec
 }
 
 /// Arrange for Cellar itself to be gone shortly, two ways.
-///
-/// The thread is what normally does it. The detached helper is the fallback for
-/// the cases the thread cannot cover: a wedged process that never reaches the
-/// exit, and any atexit handler that decides to block on the way out.
+/// The thread is what normally does it. The detached helper is the fallback for the cases the thread cannot cover: a wedged process that never reaches the exit, and any atexit handler that decides to block on the way out.
 fn schedule_root_kill(pid: u32) {
-    // A plain OS thread, not a task. The async runtime is one of the things
-    // being torn down here.
+    // A plain OS thread, not a task. The async runtime is one of the things being torn down here.
     std::thread::spawn(|| {
         std::thread::sleep(ROOT_KILL_DELAY);
         std::process::exit(EMERGENCY_KILL_EXIT_CODE);
@@ -182,8 +322,7 @@ fn schedule_root_kill(pid: u32) {
     }
 }
 
-/// What Cellar exits with when an operator kills it from the dashboard, so a
-/// service manager's log says which of the two shutdowns this was.
+/// What Cellar exits with when an operator kills it from the dashboard, so a service manager's log says which of the two shutdowns this was.
 pub const EMERGENCY_KILL_EXIT_CODE: i32 = 137;
 
 fn spawn_root_killer(pid: u32) -> std::io::Result<()> {
@@ -192,9 +331,7 @@ fn spawn_root_killer(pid: u32) -> std::io::Result<()> {
         use std::os::windows::process::CommandExt;
 
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        // No `/T`. The tree it would walk contains this helper and the
-        // taskkill running inside it, so which of the three dies first would be
-        // down to enumeration order. The sweep already took the descendants.
+        // No `/T`. The tree it would walk contains this helper and the taskkill running inside it, so which of the three dies first would be down to enumeration order. The sweep already took the descendants.
         let script = format!("Start-Sleep -Milliseconds 800; taskkill.exe /PID {pid} /F");
         std::process::Command::new("powershell.exe")
             .args([
@@ -214,8 +351,7 @@ fn spawn_root_killer(pid: u32) -> std::io::Result<()> {
 
     #[cfg(unix)]
     {
-        // Whole seconds: fractional `sleep` is a GNU and BSD extension, not
-        // something POSIX `sh` owes anyone.
+        // Whole seconds: fractional `sleep` is a GNU and BSD extension, not something POSIX `sh` owes anyone.
         let script = format!("sleep 1; kill -KILL {pid}");
         std::process::Command::new("sh")
             .args(["-c", script.as_str()])
@@ -240,12 +376,7 @@ impl Child {
     }
 
     /// Type a line into the server's console.
-    ///
-    /// The engine reads character by character and dispatches on Enter, so the
-    /// trailing newline is what makes this a command rather than a prefix.
-    /// `ConVarSystem.Run` is called with `allowProtected: true` here, which is
-    /// why this reaches native commands (`quit`, `kick`, `status`) that gamemode
-    /// C# is refused.
+    /// The engine reads character by character and dispatches on Enter, so the trailing newline is what makes this a command rather than a prefix. `ConVarSystem.Run` is called with `allowProtected: true` here, which is why this reaches native commands (`quit`, `kick`, `status`) that gamemode C# is refused.
     pub fn send_command(&self, command: &str) -> std::io::Result<()> {
         let line = format!("{}\r", command.trim_end_matches(['\r', '\n']));
         let mut writer = self
@@ -258,25 +389,85 @@ impl Child {
 
     /// Has the child exited? Does not block.
     pub fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
-        self.child.try_wait()
+        if self.exit_reported {
+            return Ok(None);
+        }
+
+        let system = process_table();
+        self.process_tree.observe(&system);
+        if self.root_exit.is_none() {
+            self.root_exit = self.child.try_wait()?;
+        }
+        if self.root_exit.is_none() {
+            return Ok(None);
+        }
+
+        if self.process_tree.has_running_descendants(&system) {
+            return Ok(None);
+        }
+
+        self.exit_reported = true;
+        Ok(self.root_exit.clone())
     }
 
     /// Terminate the child immediately.
-    ///
-    /// This is the escalation, never the first move. The engine installs no
-    /// SIGTERM handler and its shutdown does nine things including saving
-    /// convars and logging the server off Steam's master list, all of which a
-    /// kill skips.
+    /// This is the escalation, never the first move. The engine installs no SIGTERM handler and its shutdown does nine things including saving convars and logging the server off Steam's master list, all of which a kill skips.
     pub fn kill(&mut self) -> std::io::Result<()> {
-        self.child.kill()
+        let mut failed = {
+            let system = fresh_process_table();
+            self.process_tree.observe(&system);
+            let mut failed = Vec::new();
+            for identity in self.process_tree.kill_order(&system) {
+                if system
+                    .process(identity.pid)
+                    .is_some_and(|process| !process.kill())
+                {
+                    failed.push(identity);
+                }
+            }
+            failed
+        };
+
+        if self.root_exit.is_none() {
+            self.root_exit = self.child.try_wait()?;
+        }
+        let root_error = if self.root_exit.is_none() {
+            self.child.kill().err()
+        } else {
+            None
+        };
+
+        if failed.is_empty() && root_error.is_none() {
+            return Ok(());
+        }
+
+        let system = fresh_process_table();
+        self.process_tree.observe(&system);
+        failed.retain(|identity| identity.is_running(&system));
+        if failed.is_empty() {
+            if let Some(error) = root_error {
+                self.root_exit = self.child.try_wait()?;
+                if self.root_exit.is_some() {
+                    return Ok(());
+                }
+                return Err(error);
+            }
+            return Ok(());
+        }
+
+        let pids = failed
+            .iter()
+            .map(|identity| identity.pid.as_u32().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(std::io::Error::other(format!(
+            "could not terminate descendant process(es) {pids}"
+        )))
     }
 }
 
 /// Spawn a command on a fresh pty and start reading it.
-///
-/// Returns the child and a channel of its output. The reader is a blocking
-/// thread rather than async: the pty master has no portable async read, and one
-/// thread per server is not a cost worth engineering around.
+/// Returns the child and a channel of its output. The reader is a blocking thread rather than async: the pty master has no portable async read, and one thread per server is not a cost worth engineering around.
 pub fn spawn(
     command: &Command,
     working_dir: Option<&PathBuf>,
@@ -322,9 +513,7 @@ pub fn spawn(
         .take_writer()
         .map_err(|e| SpawnError::Attach(e.to_string()))?;
 
-    // The slave handle must be dropped here. Holding it open keeps the terminal
-    // alive after the child exits, so the reader never sees EOF and the
-    // supervisor waits forever for output that is not coming.
+    // The slave handle must be dropped here. Holding it open keeps the terminal alive after the child exits, so the reader never sees EOF and the supervisor waits forever for output that is not coming.
     drop(pair.slave);
 
     let (tx, rx) = mpsc::channel(256);
@@ -353,6 +542,7 @@ pub fn spawn(
         .map_err(|e| SpawnError::Attach(e.to_string()))?;
 
     let pid = child.process_id();
+    let process_tree = ProcessTree::capture(pid);
 
     Ok((
         Child {
@@ -361,6 +551,9 @@ pub fn spawn(
             writer: Arc::new(Mutex::new(writer)),
             pid,
             command_line: redacted_command_line,
+            process_tree,
+            root_exit: None,
+            exit_reported: false,
         },
         rx,
     ))
@@ -386,14 +579,11 @@ mod tests {
         );
     }
 
-    /// The sweep against a real process table, on a throwaway tree this test
-    /// built. It starts at a shell spawned here and not at Cellar, so nothing
-    /// else on the machine is ever in scope.
+    /// The sweep against a real process table, on a throwaway tree this test built. It starts at a shell spawned here and not at Cellar, so nothing else on the machine is ever in scope.
     #[test]
     fn the_sweep_reaches_a_grandchild_it_did_not_spawn_itself() {
         let (mut parent, grandchild_name) = if cfg!(windows) {
-            // `ping` counts seconds and needs no console input, which `pause`
-            // and `timeout` both do.
+            // `ping` counts seconds and needs no console input, which `pause` and `timeout` both do.
             let child = std::process::Command::new("cmd.exe")
                 .args(["/C", "ping", "-n", "120", "127.0.0.1"])
                 .stdout(std::process::Stdio::null())
@@ -401,8 +591,7 @@ mod tests {
                 .unwrap();
             (child, "ping")
         } else {
-            // `sh -c` execs a lone command instead of forking one, so it needs
-            // something to wait on before there is a grandchild at all.
+            // `sh -c` execs a lone command instead of forking one, so it needs something to wait on before there is a grandchild at all.
             let child = std::process::Command::new("/bin/sh")
                 .args(["-c", "sleep 120 & wait"])
                 .spawn()
@@ -426,15 +615,15 @@ mod tests {
                     })
                 })
                 .copied()?;
-            Some((system, grandchild))
+            Some(grandchild)
         });
-        let Some((system, grandchild)) = found else {
+        let Some(grandchild) = found else {
             let _ = parent.kill();
             let _ = parent.wait();
             panic!("the throwaway shell started a child of its own");
         };
 
-        kill_descendants(parent_pid, &system);
+        kill_descendants(parent_pid, &fresh_process_table());
         let gone = wait_for(|| process_table().process(grandchild).is_none().then_some(()));
 
         let _ = parent.kill();
@@ -448,8 +637,116 @@ mod tests {
         assert!(gone.is_some(), "the grandchild outlived the sweep");
     }
 
-    /// Poll until `check` answers, for up to twenty seconds. Both platforms take
-    /// their own time to show a new process and to retire a dead one.
+    #[cfg(unix)]
+    #[test]
+    fn launcher_exit_is_not_completion_while_its_descendant_is_alive() {
+        let (mut child, _output) = spawn(
+            &shell_command("nohup sleep 30 >/dev/null 2>&1 & exec sleep 1"),
+            None,
+            &[],
+            "test".into(),
+        )
+        .unwrap();
+        let root = Pid::from_u32(child.pid().unwrap());
+        let descendant = wait_for(|| {
+            let system = process_table();
+            children_by_parent(&system).get(&root)?.first().copied()
+        })
+        .expect("the launcher started its background child");
+        assert!(child.try_wait().unwrap().is_none());
+
+        std::thread::sleep(std::time::Duration::from_millis(1_250));
+        let reported = child.try_wait().unwrap();
+        let descendant_alive = process_table().process(descendant).is_some();
+        if reported.is_some()
+            && let Some(process) = process_table().process(descendant)
+        {
+            process.kill();
+        }
+
+        assert!(descendant_alive, "the fixture descendant exited too early");
+        assert!(
+            reported.is_none(),
+            "the launcher exit was reported while its descendant still lived"
+        );
+
+        child.kill().unwrap();
+        assert!(
+            wait_for(|| child.try_wait().ok().flatten()).is_some(),
+            "the complete process tree never reached a confirmed exit"
+        );
+    }
+
+    #[test]
+    fn killing_a_child_terminates_and_confirms_its_descendants() {
+        let (script, descendant_name) = if cfg!(windows) {
+            ("ping -n 120 127.0.0.1", "ping")
+        } else {
+            ("sleep 30 & wait", "sleep")
+        };
+        let (mut child, _output) = spawn(&shell_command(script), None, &[], "test".into()).unwrap();
+        let root = Pid::from_u32(child.pid().unwrap());
+        let descendant = wait_for(|| {
+            let system = process_table();
+            children_by_parent(&system)
+                .get(&root)?
+                .iter()
+                .find(|pid| {
+                    system.process(**pid).is_some_and(|process| {
+                        process
+                            .name()
+                            .to_string_lossy()
+                            .to_lowercase()
+                            .contains(descendant_name)
+                    })
+                })
+                .copied()
+        })
+        .expect("the launcher started its background child");
+
+        child.kill().unwrap();
+        let exited = wait_for(|| child.try_wait().ok().flatten());
+        let descendant_gone =
+            wait_for(|| process_table().process(descendant).is_none().then_some(()));
+        if descendant_gone.is_none()
+            && let Some(process) = process_table().process(descendant)
+        {
+            process.kill();
+        }
+
+        assert!(exited.is_some(), "the killed process tree was not reaped");
+        assert!(
+            descendant_gone.is_some(),
+            "the launcher descendant survived the confirmed exit"
+        );
+    }
+
+    #[test]
+    fn recorded_parent_edges_keep_reparented_descendants_deepest_first() {
+        let root = ProcessIdentity {
+            pid: Pid::from_u32(10),
+            started_at: 1,
+        };
+        let child = ProcessIdentity {
+            pid: Pid::from_u32(11),
+            started_at: 2,
+        };
+        let grandchild = ProcessIdentity {
+            pid: Pid::from_u32(12),
+            started_at: 3,
+        };
+        let tree = ProcessTree {
+            root_pid: Some(root.pid),
+            root: Some(root),
+            descendants: HashSet::from([child, grandchild]),
+            parents: HashMap::from([(child, root), (grandchild, child)]),
+        };
+
+        assert_eq!(tree.recorded_depth(child), 1);
+        assert_eq!(tree.recorded_depth(grandchild), 2);
+    }
+
+    /// Poll until `check` answers, for up to twenty seconds. Both platforms take their own time to show a new process and to retire a dead one.
     fn wait_for<T>(mut check: impl FnMut() -> Option<T>) -> Option<T> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
@@ -477,9 +774,7 @@ mod tests {
         }
     }
 
-    /// Every wait here is bounded. A pty that never speaks is a plausible
-    /// failure, and an unbounded `recv` turns it into a suite that hangs
-    /// forever rather than a test that fails.
+    /// Every wait here is bounded. A pty that never speaks is a plausible failure, and an unbounded `recv` turns it into a suite that hangs forever rather than a test that fails.
     const PTY_TEST_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
 
     #[tokio::test]
@@ -511,11 +806,7 @@ mod tests {
 
         assert_eq!(found, Ok(true), "saw: {seen:?}");
 
-        // Unix only, measured rather than assumed: ConPTY holds the master
-        // readable after the child exits, so the read that reports EOF on a
-        // unix pty simply never returns on Windows. Waiting for one there hung
-        // the whole suite. The supervisor does not depend on it either way; it
-        // decides a run is over from `try_wait`.
+        // Unix only, measured rather than assumed: ConPTY holds the master readable after the child exits, so the read that reports EOF on a unix pty simply never returns on Windows. Waiting for one there hung the whole suite. The supervisor does not depend on it either way; it decides a run is over from `try_wait`.
         #[cfg(unix)]
         {
             let eof = tokio::time::timeout(PTY_TEST_LIMIT, async {
@@ -534,9 +825,7 @@ mod tests {
         let _ = child.try_wait();
     }
 
-    /// The property the whole design rests on: the child sees a terminal, not a
-    /// pipe. If this ever fails, the console channel is gone and `quit`, `kick`
-    /// and every `applejack_*` command with it.
+    /// The property the whole design rests on: the child sees a terminal, not a pipe. If this ever fails, the console channel is gone and `quit`, `kick` and every `applejack_*` command with it.
     #[cfg(unix)]
     #[tokio::test]
     async fn the_child_believes_its_output_is_a_terminal() {
@@ -564,8 +853,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_command_typed_into_the_console_is_read_by_the_child() {
-        // `read` from stdin is the same shape as the engine's console loop:
-        // nothing arrives until a line is terminated.
+        // `read` from stdin is the same shape as the engine's console loop: nothing arrives until a line is terminated.
         let (child, mut rx) = spawn(
             &shell_command("read line; echo GOT:$line"),
             None,

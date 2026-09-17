@@ -15,8 +15,127 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  validate:
+    name: validate release ref
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: cellartest
+          MARIADB_DATABASE: cellar
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mariadb-admin --protocol=tcp -h 127.0.0.1 -P 3306 -uroot -pcellartest --silent ping"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: verify release tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          case "$RELEASE_TAG" in v*) ;; *) echo "::error::release ref must be a v* tag"; exit 1 ;; esac
+          git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
+      - name: fmt
+        run: cargo fmt --all --check
+      - name: docs
+        run: ./scripts/check-docs.sh
+      - name: examples
+        run: ./scripts/check-examples.sh
+      - name: generated-file drift
+        run: ./scripts/check-generated.sh
+      - name: build
+        run: cargo build --workspace --all-targets
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: install MariaDB client tools
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y mariadb-client
+      - name: test
+        env:
+          CELLAR_TEST_DATABASE_URL: mysql://root:cellartest@127.0.0.1:3306/cellar
+        run: cargo test --workspace
+      - name: prove database tests ran
+        env:
+          CELLAR_TEST_DATABASE_URL: mysql://root:cellartest@127.0.0.1:3306/cellar
+        run: |
+          output=$(cargo test -p cellar-store --test mysql -- --nocapture 2>&1)
+          echo "$output"
+          if echo "$output" | grep -q "skipping: CELLAR_TEST_DATABASE_URL is not set"; then
+            echo "::error::the database tests skipped despite a configured server"
+            exit 1
+          fi
+
+  validate-windows:
+    name: validate release ref on Windows
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: fmt
+        run: cargo fmt --all --check
+      - name: docs
+        run: ./scripts/check-docs.sh
+        shell: bash
+      - name: examples
+        run: ./scripts/check-examples.sh
+        shell: bash
+      - name: generated-file drift
+        run: ./scripts/check-generated.sh
+        shell: bash
+      - name: build
+        run: cargo build --workspace --all-targets
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test
+        run: cargo test --workspace -- --test-threads=1
+
+  validate-browser:
+    name: validate browser and accessibility
+    runs-on: ubuntu-latest
+    needs: validate
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: build browser fixtures
+        run: cargo build -p cellar-cli -p cellar-fake-server
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/browser/package-lock.json
+      - name: install browser test dependencies
+        run: npm ci --prefix tests/browser
+      - name: install Chromium
+        run: npm exec --prefix tests/browser -- playwright install --with-deps chromium
+      - name: run browser and accessibility tests
+        run: npm test --prefix tests/browser
+
   release:
     name: build and publish
+    needs: [validate, validate-windows, validate-browser]
     # Public releases use GitHub-hosted capacity so a missing private runner
     # cannot leave a pushed tag queued forever.
     runs-on: ubuntu-latest
@@ -31,6 +150,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 

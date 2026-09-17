@@ -1,12 +1,6 @@
 //! Webhooks: Discord embeds and a generic JSON sink.
-//!
-//! Batched, because a thirty-player join wave is one thing that happened and not
-//! thirty, and because Discord answers a burst with 429 rather than with
-//! messages. The batching window is also what turns "the server restarted" and
-//! "everybody left" into a single legible message instead of a scroll.
-//!
-//! Colours come from the Applejack palette rather than from Discord's defaults:
-//! azure for ordinary state, orchard for good news, russet for a fault.
+//! Batched, because a thirty-player join wave is one thing that happened and not thirty, and because Discord answers a burst with 429 rather than with messages. The batching window is also what turns "the server restarted" and "everybody left" into a single legible message instead of a scroll.
+//! Colours come from the Applejack palette rather than from Discord's defaults: azure for ordinary state, orchard for good news, russet for a fault.
 
 pub mod discord;
 
@@ -25,8 +19,7 @@ pub struct Notifier {
     kinds: Vec<String>,
     batch: Duration,
     hostname: String,
-    /// Whether this process supervises more than one server, which decides
-    /// whether a message names which one it is about.
+    /// Whether this process supervises more than one server, which decides whether a message names which one it is about.
     several: bool,
 }
 
@@ -42,8 +35,7 @@ impl Notifier {
         }
 
         let client = reqwest::Client::builder()
-            // A webhook that hangs must never hold up the event loop; the
-            // supervisor's job is the server, not the notification.
+            // A webhook that hangs must never hold up the event loop; the supervisor's job is the server, not the notification.
             .timeout(Duration::from_secs(10))
             .build()
             .ok()?;
@@ -65,22 +57,13 @@ impl Notifier {
             return false;
         }
 
-        // An empty list means every notable kind, which is the useful default:
-        // an operator who has not chosen wants to be told things.
+        // An empty list means every notable kind, which is the useful default: an operator who has not chosen wants to be told things.
         self.kinds.is_empty() || self.kinds.iter().any(|k| k == event.kind())
     }
 
     /// Consume the merged event stream until it closes, sending batches.
-    ///
-    /// **The merged stream, not the primary's.** This used to subscribe to one
-    /// handle, so on a two-instance deployment a crash on the second server
-    /// notified nobody, which is precisely the server an unattended deployment
-    /// hears about last.
-    ///
-    /// Batches are kept per instance rather than merged into one message. Two
-    /// servers restarting for unrelated reasons in the same five second window
-    /// is two things that happened, and a single embed listing both without
-    /// saying which line belongs to which is worse than two messages.
+    /// **The merged stream, not the primary's.** This used to subscribe to one handle, so on a two-instance deployment a crash on the second server notified nobody, which is precisely the server an unattended deployment hears about last.
+    /// Batches are kept per instance rather than merged into one message. Two servers restarting for unrelated reasons in the same five second window is two things that happened, and a single embed listing both without saying which line belongs to which is worse than two messages.
     pub async fn run(self, mut events: broadcast::Receiver<InstanceEvent>) {
         let mut pending: Vec<(String, Vec<Event>)> = Vec::new();
         let mut ticker = tokio::time::interval(self.batch);
@@ -116,10 +99,7 @@ impl Notifier {
     }
 
     /// How this deployment is named in a message.
-    ///
-    /// The instance id is appended only when it is worth appending. A
-    /// single-server deployment's messages must not start saying
-    /// "myserver / default" because instances exist as a concept.
+    /// The instance id is appended only when it is worth appending. A single-server deployment's messages must not start saying "myserver / default" because instances exist as a concept.
     fn label(&self, instance: &str) -> String {
         if self.several {
             format!("{} / {instance}", self.hostname)
@@ -154,8 +134,7 @@ impl Notifier {
         match self.client.post(url.expose()).json(payload).send().await {
             Ok(response) if response.status().is_success() => {}
             Ok(response) => {
-                // The URL is never in the message. A webhook URL is a
-                // credential: anyone holding it can post as this integration.
+                // The URL is never in the message. A webhook URL is a credential: anyone holding it can post as this integration.
                 tracing::warn!("webhook returned {}", response.status());
             }
             Err(error) => {
@@ -245,8 +224,7 @@ mod tests {
         let one = Notifier::new(&config(), "applejack-01", false).unwrap();
         assert_eq!(one.label("default"), "applejack-01");
 
-        // A single-server deployment's messages must not start saying
-        // "applejack-01 / default" because instances exist as a concept.
+        // A single-server deployment's messages must not start saying "applejack-01 / default" because instances exist as a concept.
         let several = Notifier::new(&config(), "applejack-01", true).unwrap();
         assert_eq!(several.label("published"), "applejack-01 / published");
     }

@@ -1,15 +1,8 @@
 //! The hands-off updater.
-//!
-//! The whole risk here is one sentence: an updater that restarts a server with
-//! people on it is worse than no updater. Everything below is arranged around
-//! that, and the default policy is [`Policy::Notify`] rather than
+//! The whole risk here is one sentence: an updater that restarts a server with people on it is worse than no updater. Everything below is arranged around that, and the default policy is [`Policy::Notify`] rather than
 //! [`Policy::Apply`], because taking an update is a decision an operator should
 //! opt into rather than discover.
-//!
-//! When it does apply, the order matters. The engine's files are in use while it
-//! runs and Steam cannot replace them underneath it, so the sequence is: decide
-//! it is safe, stop gracefully with `quit` so the Steam logoff and the convar
-//! save happen, update, and start again. Never update first and hope.
+//! When it does apply, the order matters. The engine's files are in use while it runs and Steam cannot replace them underneath it, so the sequence is: decide it is safe, stop gracefully with `quit` so the Steam logoff and the convar save happen, update, and start again. Never update first and hope.
 
 use std::process::Stdio;
 use std::time::Duration;
@@ -37,17 +30,13 @@ pub fn server_executable_path(into: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// Timing and window arithmetic over the shared config.
-///
-/// A free function rather than an inherent `impl`, because the type belongs to
-/// another crate; the behaviour still belongs here, with its tests.
+/// A free function rather than an inherent `impl`, because the type belongs to another crate; the behaviour still belongs here, with its tests.
 pub fn interval(config: &UpdateConfig) -> Duration {
     Duration::from_secs(config.check_interval_minutes.max(5) * 60)
 }
 
 /// Whether `hour` is inside the maintenance window.
-///
-/// Equal bounds mean "any time". A window that wraps midnight (22 to 4) is
-/// supported, because that is when a roleplay server is actually empty.
+/// Equal bounds mean "any time". A window that wraps midnight (22 to 4) is supported, because that is when a roleplay server is actually empty.
 pub fn in_window(config: &UpdateConfig, hour: u8) -> bool {
     let (start, end) = (config.window_start_hour % 24, config.window_end_hour % 24);
     if start == end {
@@ -75,7 +64,6 @@ pub enum Decision {
 }
 
 /// Decide what to do, given what is available and what the server is doing.
-///
 /// Pure, so every gate is a test rather than something discovered in production.
 pub fn decide(
     config: &UpdateConfig,
@@ -120,8 +108,7 @@ pub fn decide(
         return Decision::Available { what };
     }
 
-    // A dirty working tree means somebody is mid-edit. Pulling over that is how
-    // an updater destroys work, so it refuses and says why.
+    // A dirty working tree means somebody is mid-edit. Pulling over that is how an updater destroys work, so it refuses and says why.
     if let Some(git) = &versions.git
         && git.dirty
         && config.update_gamemode
@@ -167,10 +154,7 @@ pub struct Step {
 }
 
 /// Perform the update. The caller stops the server first and starts it after.
-///
-/// This does not touch the supervisor: sequencing the stop and the start around
-/// it belongs to whoever owns the process, and an updater that could restart a
-/// server on its own is an updater that will.
+/// This does not touch the supervisor: sequencing the stop and the start around it belongs to whoever owns the process, and an updater that could restart a server on its own is an updater that will.
 pub async fn apply(config: &UpdateConfig, project_dir: &std::path::Path) -> Applied {
     let mut steps = Vec::new();
 
@@ -187,9 +171,7 @@ pub async fn apply(config: &UpdateConfig, project_dir: &std::path::Path) -> Appl
 }
 
 async fn pull(dir: &std::path::Path) -> Step {
-    // `--ff-only`: a merge commit created unattended by a game server at 4am is
-    // a merge nobody reviewed. If it will not fast-forward, that is a person's
-    // problem to look at, not something to resolve automatically.
+    // `--ff-only`: a merge commit created unattended by a game server at 4am is a merge nobody reviewed. If it will not fast-forward, that is a person's problem to look at, not something to resolve automatically.
     let output = tokio::process::Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -230,16 +212,8 @@ async fn steam_update(config: &UpdateConfig) -> Step {
 }
 
 /// Download or update the dedicated server with steamcmd.
-///
-/// Shared by the update job and by `cellar install`, which is the whole
-/// first-run path: **the dedicated server is app 1892930, it is free, and
-/// anonymous login works**, so getting from nothing to an installed server
-/// needs no Steam credential. App 590830 is the paid client and editor, and
-/// anonymous fails on it with "No subscription".
-///
-/// `stream` prints steamcmd's own progress rather than swallowing it, because
-/// this is a multi-gigabyte download and a command that prints nothing for
-/// twenty minutes reads as a hang.
+/// Shared by the update job and by `cellar install`, which is the whole first-run path: **the dedicated server is app 1892930, it is free, and anonymous login works**, so getting from nothing to an installed server needs no Steam credential. App 590830 is the paid client and editor, and anonymous fails on it with "No subscription".
+/// `stream` prints steamcmd's own progress rather than swallowing it, because this is a multi-gigabyte download and a command that prints nothing for twenty minutes reads as a hang.
 pub async fn install_engine(
     steamcmd: &std::path::Path,
     into: &std::path::Path,

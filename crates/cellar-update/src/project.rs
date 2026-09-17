@@ -1,20 +1,8 @@
 //! Reading a `.sbproj`, which is where the facts Cellar cannot pass live.
-//!
 //! Two of them matter operationally.
-//!
-//! **The player ceiling is here and nowhere else.** `+maxplayers` is not a
-//! convar and not a launch switch; the old `entrypoint.sh` passed it for years
-//! and it was inert. `Metadata.MaxPlayers` in this file is the real number, and
-//! until now nothing in Cellar read it, so the dashboard showed a ceiling of
-//! zero until the engine's status bar happened to mention one.
-//!
-//! **The package ident is derived from `Org` and `Ident`**, which is what the
-//! engine names the data directory after and what `+game` takes. Getting it
-//! wrong writes `hosting.json` where the game never reads it.
-//!
-//! Parsed defensively and reported as what was found. The schema is not
-//! documented field by field anywhere Cellar can cite, so a missing key is an
-//! absence rather than an error, and nothing here fails a server that starts.
+//! **The player ceiling is here and nowhere else.** `+maxplayers` is not a convar and not a launch switch; the old `entrypoint.sh` passed it for years and it was inert. `Metadata.MaxPlayers` in this file is the real number, and until now nothing in Cellar read it, so the dashboard showed a ceiling of zero until the engine's status bar happened to mention one.
+//! **The package ident is derived from `Org` and `Ident`**, which is what the engine names the data directory after and what `+game` takes. Getting it wrong writes `hosting.json` where the game never reads it.
+//! Parsed defensively and reported as what was found. The schema is not documented field by field anywhere Cellar can cite, so a missing key is an absence rather than an error, and nothing here fails a server that starts.
 
 use std::path::Path;
 
@@ -28,21 +16,15 @@ pub struct Project {
     pub ident: Option<String>,
     /// `Metadata.MaxPlayers`. The real ceiling, and the only place it exists.
     pub max_players: Option<u32>,
-    /// `Metadata.MapList`, when the project declares one. Best effort: the
-    /// field is not in any document Cellar can cite, so an absent list means
-    /// "this project did not say", never "this project has no maps".
+    /// `Metadata.MapList`, when the project declares one. Best effort: the field is not in any document Cellar can cite, so an absent list means "this project did not say", never "this project has no maps".
     pub maps: Vec<String>,
-    /// `Metadata.PackageReferences`, same caveat. Useful because the engine
-    /// resolves these from sbox.game at boot and a resolution failure is one of
-    /// the observed ways a server starts and never becomes ready.
+    /// `Metadata.PackageReferences`, same caveat. Useful because the engine resolves these from sbox.game at boot and a resolution failure is one of the observed ways a server starts and never becomes ready.
     pub packages: Vec<String>,
 }
 
 impl Project {
     /// `org.ident`, which is what `+game` takes for a published package.
-    ///
-    /// The engine appends `#local` to this for a local `.sbproj`, which is why
-    /// development and published modes read different data directories.
+    /// The engine appends `#local` to this for a local `.sbproj`, which is why development and published modes read different data directories.
     pub fn package_ident(&self) -> Option<String> {
         let (org, ident) = (self.org.as_ref()?, self.ident.as_ref()?);
         Some(format!("{org}.{ident}"))
@@ -50,10 +32,7 @@ impl Project {
 }
 
 /// Read and parse a `.sbproj`.
-///
-/// `Ok(None)` when the path is not a project file or does not exist, which is
-/// the normal case for an instance running a published package: there is no
-/// source tree on that box at all.
+/// `Ok(None)` when the path is not a project file or does not exist, which is the normal case for an instance running a published package: there is no source tree on that box at all.
 pub fn read(path: &Path) -> Result<Option<Project>, String> {
     if path.as_os_str().is_empty() || !path.is_file() {
         return Ok(None);
@@ -86,9 +65,7 @@ pub fn parse(text: &str) -> Result<Project, String> {
                 found
                     .iter()
                     .filter_map(|entry| match entry {
-                        // A package reference is sometimes a bare ident and
-                        // sometimes an object carrying one. Take either rather
-                        // than deciding which the schema "really" is.
+                        // A package reference is sometimes a bare ident and sometimes an object carrying one. Take either rather than deciding which the schema "really" is.
                         serde_json::Value::String(ident) => Some(ident.clone()),
                         serde_json::Value::Object(_) => entry
                             .get("Ident")
@@ -144,8 +121,7 @@ mod tests {
 
     #[test]
     fn a_project_that_says_nothing_is_an_absence_rather_than_an_error() {
-        // The schema is not documented key by key anywhere Cellar can cite, so
-        // a project missing every field it might have read has to parse.
+        // The schema is not documented key by key anywhere Cellar can cite, so a project missing every field it might have read has to parse.
         let project = parse(r#"{ "Schema": 1 }"#).unwrap();
 
         assert_eq!(project.max_players, None);
@@ -180,8 +156,7 @@ mod tests {
 
     #[test]
     fn a_zero_ceiling_is_not_a_ceiling() {
-        // `"MaxPlayers": 0` is what an unfilled template holds, and reporting
-        // a server as 0/0 is worse than reporting it as unknown.
+        // `"MaxPlayers": 0` is what an unfilled template holds, and reporting a server as 0/0 is worse than reporting it as unknown.
         let project = parse(r#"{ "Metadata": { "MaxPlayers": 0 } }"#).unwrap();
         assert_eq!(project.max_players, None);
     }

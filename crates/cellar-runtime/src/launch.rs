@@ -1,7 +1,5 @@
 //! Building the command line, and nothing else.
-//!
-//! Pure, and tested, because every argument here is a decision with a reason and
-//! several of them are corrections to what the project does today.
+//! Pure, and tested, because every argument here is a decision with a reason and several of them are corrections to what the project does today.
 
 use std::path::Path;
 
@@ -17,10 +15,7 @@ pub struct Command {
 
 impl Command {
     /// The command as one line, with the GSLT replaced by asterisks.
-    ///
-    /// Every path that prints a command goes through this. The token is the one
-    /// value on this line that must never reach a log, a webhook or a terminal
-    /// somebody screenshots.
+    /// Every path that prints a command goes through this. The token is the one value on this line that must never reach a log, a webhook or a terminal somebody screenshots.
     pub fn redacted(&self, gslt: Option<&Secret>) -> String {
         let mut parts = Vec::with_capacity(self.args.len() + 1);
         parts.push(self.program.clone());
@@ -50,14 +45,11 @@ pub fn command_for(config: &ServerConfig, bridge_needs_local_http: bool) -> Comm
 
     let (program, mut args) = match config.launcher {
         Launcher::Native => (executable, Vec::new()),
-        // Wine stays available for Windows-only server binaries. It is never
-        // selected implicitly because the native Linux depot is the default.
+        // Wine stays available for Windows-only server binaries. It is never selected implicitly because the native Linux depot is the default.
         Launcher::Wine => ("wine".to_owned(), vec![executable]),
     };
 
-    // `+game`, not `+project`. `+project` loads the project's metadata and then
-    // idles at the bare console without ever booting a map; `+game` with a local
-    // .sbproj compiles it and loads the project's own default scene.
+    // `+game`, not `+project`. `+project` loads the project's metadata and then idles at the bare console without ever booting a map; `+game` with a local .sbproj compiles it and loads the project's own default scene.
     args.push("+game".to_owned());
     args.push(
         config
@@ -77,11 +69,7 @@ pub fn command_for(config: &ServerConfig, bridge_needs_local_http: bool) -> Comm
     args.push("+hostname".to_owned());
     args.push(config.hostname.clone());
 
-    // Deliberately no `+maxplayers`. There is no such convar or launch switch in
-    // the engine: `LaunchArguments.MaxPlayers` exists but nothing on the command
-    // line sets it, and the real ceiling comes from the package's own metadata
-    // (`applejackrp.sbproj`, `Metadata.MaxPlayers`). Passing it looks like it
-    // works and does nothing, which is worse than not passing it.
+    // Deliberately no `+maxplayers`. There is no such convar or launch switch in the engine: `LaunchArguments.MaxPlayers` exists but nothing on the command line sets it, and the real ceiling comes from the package's own metadata (`applejackrp.sbproj`, `Metadata.MaxPlayers`). Passing it looks like it works and does nothing, which is worse than not passing it.
 
     if let Some(gslt) = &config.gslt
         && !gslt.is_empty()
@@ -91,8 +79,7 @@ pub fn command_for(config: &ServerConfig, bridge_needs_local_http: bool) -> Comm
     }
 
     if config.direct_connect {
-        // Off by default: the default routes players through Steam's relay with
-        // no inbound port, which is what the deployed server does today.
+        // Off by default: the default routes players through Steam's relay with no inbound port, which is what the deployed server does today.
         args.push("+net_hide_address".to_owned());
         args.push("0".to_owned());
         args.push("+port".to_owned());
@@ -102,11 +89,7 @@ pub fn command_for(config: &ServerConfig, bridge_needs_local_http: bool) -> Comm
     }
 
     if bridge_needs_local_http {
-        // Without this, `Http.IsAllowed` refuses direct IP literals, any host
-        // resolving to a private or loopback address, and loopback on any port
-        // other than 80/443/8080/8443. A bridge on a loopback or cluster-internal
-        // address is exactly that, so the gamemode would refuse to reach it and
-        // every write would sit owed in the journal with no obvious cause.
+        // Without this, `Http.IsAllowed` refuses direct IP literals, any host resolving to a private or loopback address, and loopback on any port other than 80/443/8080/8443. A bridge on a loopback or cluster-internal address is exactly that, so the gamemode would refuse to reach it and every write would sit owed in the journal with no obvious cause.
         args.push("-allowlocalhttp".to_owned());
     }
 
@@ -116,10 +99,7 @@ pub fn command_for(config: &ServerConfig, bridge_needs_local_http: bool) -> Comm
 }
 
 /// Where the engine writes its log file.
-///
-/// The derivation lives on [`ServerConfig`] because `validate()` needs it to
-/// refuse two instances that would write to one file, and a second copy of it
-/// here is a second copy that goes stale.
+/// The derivation lives on [`ServerConfig`] because `validate()` needs it to refuse two instances that would write to one file, and a second copy of it here is a second copy that goes stale.
 pub fn log_file_for(config: &ServerConfig) -> std::path::PathBuf {
     config.engine_log_file()
 }
@@ -198,8 +178,7 @@ mod tests {
         assert_eq!(command.args[game + 2], "thieves.rpdowntown3t");
     }
 
-    /// The correction: the deployed entrypoint passes `+maxplayers` today and
-    /// the engine has no such switch, so it silently does nothing.
+    /// The correction: the deployed entrypoint passes `+maxplayers` today and the engine has no such switch, so it silently does nothing.
     #[test]
     fn it_never_passes_maxplayers() {
         let command = command_for(&config(), false);

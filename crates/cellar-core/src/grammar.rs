@@ -1,22 +1,10 @@
 //! Turning s&box output into events.
-//!
-//! Two input formats, because the engine writes two. Both are parsed here, as
-//! functions over `&str`, so the whole vocabulary can be tested against a
-//! fixture corpus with no game server anywhere near it.
-//!
+//! Two input formats, because the engine writes two. Both are parsed here, as functions over `&str`, so the whole vocabulary can be tested against a fixture corpus with no game server anywhere near it.
 //! Formats are taken from engine source rather than guessed:
+//! - Log file, `Sandbox.System/Logging/Logging.cs`: `yyyy/MM/dd HH:mm:ss.ffff` TAB `[logger] message` TAB `exception`
+//! - Console, `Sandbox.System/Logging/GameLog.cs`: `hh:mm:ss ` then the logger name padded or truncated to exactly 8 characters, then a space, then the message. Continuation lines of a multi-line message are indented by 17 spaces, which is 9 + 8.
 //!
-//! - Log file, `Sandbox.System/Logging/Logging.cs`:
-//!   `yyyy/MM/dd HH:mm:ss.ffff` TAB `[logger] message` TAB `exception`
-//! - Console, `Sandbox.System/Logging/GameLog.cs`:
-//!   `hh:mm:ss ` then the logger name padded or truncated to exactly 8
-//!   characters, then a space, then the message. Continuation lines of a
-//!   multi-line message are indented by 17 spaces, which is 9 + 8.
-//!
-//! Neither format carries a level. The file layout has no `${level}` field, and
-//! on a pseudo-terminal the engine's stdout and stderr are the same stream, so
-//! the "errors go to stderr" split is gone too. Level is therefore inferred,
-//! and the rule is written down in [`infer_level`] rather than left implicit.
+//! Neither format carries a level. The file layout has no `${level}` field, and on a pseudo-terminal the engine's stdout and stderr are the same stream, so the "errors go to stderr" split is gone too. Level is therefore inferred, and the rule is written down in [`infer_level`] rather than left implicit.
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 
@@ -36,13 +24,10 @@ const JOINED_SUFFIX: &str = " is connected";
 const LEFT_SUFFIX: &str = " disconnected";
 
 /// The readiness line Cellar watches for by default.
-///
-/// An empty default means readiness is unknown until the profile or server
-/// config supplies a line the running gamemode actually logs.
+/// An empty default means readiness is unknown until the profile or server config supplies a line the running gamemode actually logs.
 pub const DEFAULT_READY_PATTERN: &str = "";
 
-/// One line, already stripped of terminal control sequences, with the channel
-/// it arrived on.
+/// One line, already stripped of terminal control sequences, with the channel it arrived on.
 #[derive(Debug, Clone, Copy)]
 pub struct Line<'a> {
     pub text: &'a str,
@@ -78,10 +63,7 @@ pub struct Parsed {
 }
 
 /// Split a raw line into timestamp, logger and message.
-///
-/// Returns `None` only for an empty line. A line that matches no known shape
-/// still comes back, as a bare message, so the caller can count it rather than
-/// drop it.
+/// Returns `None` only for an empty line. A line that matches no known shape still comes back, as a bare message, so the caller can count it rather than drop it.
 pub fn parse_line(line: Line<'_>) -> Option<Parsed> {
     let text = line.text.trim_end_matches(['\r', '\n']);
     if text.trim().is_empty() {
@@ -109,8 +91,7 @@ fn parse_log_file_line(text: &str) -> Parsed {
 
     let at = parse_file_timestamp(stamp);
 
-    // A line with no tab at all is not this format. Rather than guess, hand the
-    // whole thing back as the message and let the caller count it unparsed.
+    // A line with no tab at all is not this format. Rather than guess, hand the whole thing back as the message and let the caller count it unparsed.
     if at.is_none() && body.is_empty() {
         return Parsed {
             at: None,
@@ -217,9 +198,7 @@ fn parse_console_line(text: &str) -> Parsed {
 
 fn parse_file_timestamp(stamp: &str) -> Option<DateTime<Utc>> {
     let naive = NaiveDateTime::parse_from_str(stamp.trim(), "%Y/%m/%d %H:%M:%S%.f").ok()?;
-    // The engine writes local time with no offset. Treating it as UTC would
-    // shift every event by the host's offset, so this uses the local zone and
-    // falls back to UTC only when the local time is ambiguous across a DST fold.
+    // The engine writes local time with no offset. Treating it as UTC would shift every event by the host's offset, so this uses the local zone and falls back to UTC only when the local time is ambiguous across a DST fold.
     match chrono::Local.from_local_datetime(&naive).single() {
         Some(local) => Some(local.with_timezone(&Utc)),
         None => Some(Utc.from_utc_datetime(&naive)),
@@ -227,10 +206,7 @@ fn parse_file_timestamp(stamp: &str) -> Option<DateTime<Utc>> {
 }
 
 /// The level rule, stated once.
-///
-/// Neither channel carries a level, so this is inference and not fact: a line
-/// with an exception attached is an error, and everything else is info. Cellar
-/// never claims more than that, and the web UI labels the column accordingly.
+/// Neither channel carries a level, so this is inference and not fact: a line with an exception attached is an error, and everything else is info. Cellar never claims more than that, and the web UI labels the column accordingly.
 pub fn infer_level(parsed: &Parsed) -> Level {
     if parsed.exception.is_some() {
         Level::Error
@@ -240,11 +216,7 @@ pub fn infer_level(parsed: &Parsed) -> Level {
 }
 
 /// Classify a parsed line into an event.
-///
-/// Takes the gamemode profile because two of the decisions here are its: which
-/// line means "serving", and which category a log line falls into. Both used to
-/// be hardcoded to one gamemode, and the category rule additionally existed a
-/// second time in `app.js`.
+/// Takes the gamemode profile because two of the decisions here are its: which line means "serving", and which category a log line falls into. Both used to be hardcoded to one gamemode, and the category rule additionally existed a second time in `app.js`.
 pub fn classify(
     parsed: &Parsed,
     origin: Origin,
@@ -298,12 +270,7 @@ pub fn classify(
 }
 
 /// `{name} [{steamid}] is connected`, anchored at the end.
-///
-/// Anchored deliberately. A Steam display name is chosen by the account holder
-/// and may contain `[`, `]` and spaces, so a name reading
-/// `Bob [76561198000000000] is connected` is legal and will appear inside a real
-/// join line. Searching from the left finds the forged id; searching from the
-/// right finds the engine's own.
+/// Anchored deliberately. A Steam display name is chosen by the account holder and may contain `[`, `]` and spaces, so a name reading `Bob [76561198000000000] is connected` is legal and will appear inside a real join line. Searching from the left finds the forged id; searching from the right finds the engine's own.
 pub fn parse_join(message: &str) -> Option<(SteamId, String)> {
     let head = message.strip_suffix(JOINED_SUFFIX)?;
     split_trailing_steam_id(head)
@@ -321,8 +288,7 @@ pub fn parse_kick(message: &str) -> Option<(SteamId, String, String)> {
         .strip_prefix("Kicking ")
         .or_else(|| message.strip_prefix("Kicked "))?;
 
-    // The reason follows the closing bracket, so the id is not at the end here.
-    // Take the last `]` and require what precedes it to be a bracketed id.
+    // The reason follows the closing bracket, so the id is not at the end here. Take the last `]` and require what precedes it to be a bracketed id.
     let close = rest.rfind(']')?;
     let (head, tail) = rest.split_at(close + 1);
     let (steam_id, name) = split_trailing_steam_id(head)?;
@@ -347,10 +313,7 @@ fn split_trailing_steam_id(head: &str) -> Option<(SteamId, String)> {
 }
 
 /// Parse either half of the dedicated console's status bar.
-///
-/// The engine draws it as two lines, so this answers a [`statusbar::Fragment`]
-/// and the caller merges. See [`crate::statusbar`] for the rendering it is
-/// anchored to.
+/// The engine draws it as two lines, so this answers a [`statusbar::Fragment`] and the caller merges. See [`crate::statusbar`] for the rendering it is anchored to.
 pub fn parse_status_fragment(text: &str) -> Option<statusbar::Fragment> {
     statusbar::parse(text)
 }
@@ -505,9 +468,7 @@ mod tests {
 
     #[test]
     fn status_lines_are_recognised_from_either_half() {
-        // Both halves, as `DedicatedServerConsole` actually renders them. The
-        // format itself is tested in `crate::statusbar`; this only proves the
-        // grammar hands off to it.
+        // Both halves, as `DedicatedServerConsole` actually renders them. The format itself is tested in `crate::statusbar`; this only proves the grammar hands off to it.
         let head =
             parse_status_fragment("AppleJack Framework Dev (7/64) [4:12:33]     Network 0.42ms");
         assert!(matches!(

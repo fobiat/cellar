@@ -1,8 +1,5 @@
 /* No shell cache, deliberately. A live server view that serves a stale
- * dashboard from disk is worse than one that fails to load: the operator reads
- * a state that was true minutes ago and acts on it. The worker is here for
- * installability and for notification clicks, and nothing else.
- *
+ * dashboard from disk is worse than one that fails to load: the operator reads a state that was true minutes ago and acts on it. The worker is here for installability and for notification clicks, and nothing else.
  * There used to be an unused `CACHE` constant here that read as an intention. */
 
 self.addEventListener("install", (event) => {

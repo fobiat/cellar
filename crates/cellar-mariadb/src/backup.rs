@@ -1,14 +1,11 @@
 //! Logical dumps, and putting one back.
-//!
-//! A backup that has never been restored is a hypothesis, so the two halves
-//! live together and share the URL parsing and the executable lookup. Neither
-//! ever puts the password in an argument: `MYSQL_PWD` is read by every client
-//! in the MariaDB suite and does not appear in `ps`.
+//! A backup that has never been restored is a hypothesis, so the two halves live together and share the URL parsing and the executable lookup. Neither ever puts the password in an argument: `MYSQL_PWD` is read by every client in the MariaDB suite and does not appear in `ps`.
 
 use std::fs;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use cellar_core::config::{BackupConfig, MariaDbConfig};
@@ -50,11 +47,82 @@ pub struct Dump {
     pub modified: SystemTime,
 }
 
+static DUMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+struct ReservedDump {
+    output: PathBuf,
+    reservation: PathBuf,
+    file: Option<fs::File>,
+    committed: bool,
+}
+
+impl ReservedDump {
+    fn create(directory: &Path) -> Result<Self, std::io::Error> {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(std::io::Error::other)?
+            .as_nanos();
+        for _ in 0..100 {
+            let sequence = DUMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let name = format!("cellar-{stamp}-{}-{sequence}.sql", std::process::id());
+            let output = directory.join(name);
+            let reservation = output.with_extension("sql.lock");
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&reservation)
+            {
+                Ok(file) => {
+                    return Ok(Self {
+                        output,
+                        reservation,
+                        file: Some(file),
+                        committed: false,
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not reserve a unique backup output name",
+        ))
+    }
+
+    fn path(&self) -> &Path {
+        &self.output
+    }
+
+    fn commit(mut self) -> PathBuf {
+        self.committed = true;
+        self.file.take();
+        let _ = fs::remove_file(&self.reservation);
+        self.output.clone()
+    }
+}
+
+impl Drop for ReservedDump {
+    fn drop(&mut self) {
+        self.file.take();
+        let _ = fs::remove_file(&self.reservation);
+        if !self.committed {
+            let _ = fs::remove_file(&self.output);
+        }
+    }
+}
+
 /// Every dump in `directory`, newest first.
 pub fn list(directory: &Path) -> Result<Vec<Dump>, std::io::Error> {
     let mut dumps: Vec<Dump> = fs::read_dir(directory)?
         .filter_map(Result::ok)
         .filter(|entry| entry.file_name().to_string_lossy().starts_with("cellar-"))
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "sql")
+        })
         .filter_map(|entry| {
             let metadata = entry.metadata().ok()?;
             Some(Dump {
@@ -75,14 +143,7 @@ pub fn list(directory: &Path) -> Result<Vec<Dump>, std::io::Error> {
 }
 
 /// Apply a dump back over the database it came from.
-///
-/// Destructive by construction, and not partially reversible: `mariadb-dump`
-/// writes `DROP TABLE IF EXISTS` before each `CREATE TABLE`, so every table the
-/// dump carries is replaced. Tables it does not carry are left alone, which
-/// means restoring an older dump over a newer schema can leave a table nothing
-/// created and nothing dropped. Callers stop the supervised server first: the
-/// gamemode writes through the bridge continuously, and a write landing
-/// mid-restore lands in a table that is about to be dropped.
+/// Destructive by construction, and not partially reversible: `mariadb-dump` writes `DROP TABLE IF EXISTS` before each `CREATE TABLE`, so every table the dump carries is replaced. Tables it does not carry are left alone, which means restoring an older dump over a newer schema can leave a table nothing created and nothing dropped. Callers stop the supervised server first: the gamemode writes through the bridge continuously, and a write landing mid-restore lands in a table that is about to be dropped.
 pub fn restore(
     dump: &Path,
     database_url: &str,
@@ -146,9 +207,7 @@ pub struct Restored {
 }
 
 /// Whether the file starts like something `mariadb-dump` wrote.
-///
-/// Cheap, and it is the difference between refusing a wrong path and piping an
-/// arbitrary file into a database as SQL.
+/// Cheap, and it is the difference between refusing a wrong path and piping an arbitrary file into a database as SQL.
 fn looks_like_a_dump(path: &Path) -> Result<bool, std::io::Error> {
     let mut head = [0u8; 2048];
     let read = fs::File::open(path)?.read(&mut head)?;
@@ -189,11 +248,7 @@ pub fn create(
         )))?;
     fs::create_dir_all(&directory)?;
 
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| BackupError::InvalidUrl)?
-        .as_secs();
-    let output = directory.join(format!("cellar-{stamp}.sql"));
+    let reserved = ReservedDump::create(&directory)?;
 
     let result = Command::new(client(mariadb, "mariadb-dump"))
         .args([
@@ -208,7 +263,7 @@ pub fn create(
             "--user",
             user.as_str(),
             "--result-file",
-            output.to_string_lossy().as_ref(),
+            reserved.path().to_string_lossy().as_ref(),
             database.as_str(),
         ])
         .env("MYSQL_PWD", password)
@@ -216,36 +271,27 @@ pub fn create(
         .map_err(BackupError::Directory)?;
 
     if !result.status.success() {
-        let _ = fs::remove_file(&output);
         return Err(BackupError::Dump(
             String::from_utf8_lossy(&result.stderr).trim().to_owned(),
         ));
     }
 
-    // Verified before it is counted as a backup, and before `prune` is allowed
-    // to delete an older one to make room for it. A dump that has never been
-    // read back is a hypothesis, and the failure this catches is the one that
-    // matters: a disk that filled up halfway through writing it, which leaves
-    // a plausible file with a plausible size and no end marker.
+    // Verified before it is counted as a backup, and before `prune` is allowed to delete an older one to make room for it. A dump that has never been read back is a hypothesis, and the failure this catches is the one that matters: a disk that filled up halfway through writing it, which leaves a plausible file with a plausible size and no end marker.
     if backup.verify {
-        verify(&output)?;
+        verify(reserved.path())?;
     }
 
     if let Some(elsewhere) = &backup.copy_to {
-        copy_off_box(&output, elsewhere)?;
+        copy_off_box(reserved.path(), elsewhere)?;
     }
 
+    let output = reserved.commit();
     prune(&directory, backup.retain)?;
     Ok(output)
 }
 
 /// Read a dump back far enough to know it is one and that it finished.
-///
-/// Three questions, cheapest first: is there enough of it, does it start like a
-/// dump, and does it end like one. `mariadb-dump` writes
-/// `-- Dump completed on ...` as its last line and writes nothing at all if it
-/// fails early, so the end marker is the one honest signal that the process
-/// that wrote this file ran to completion.
+/// Three questions, cheapest first: is there enough of it, does it start like a dump, and does it end like one. `mariadb-dump` writes `-- Dump completed on ...` as its last line and writes nothing at all if it fails early, so the end marker is the one honest signal that the process that wrote this file ran to completion.
 pub fn verify(dump: &Path) -> Result<u64, BackupError> {
     if !dump.exists() {
         return Err(BackupError::NoSuchDump(dump.to_path_buf()));
@@ -273,11 +319,7 @@ pub fn verify(dump: &Path) -> Result<u64, BackupError> {
 }
 
 /// Put a second copy somewhere that is not this disk.
-///
-/// A copy, not a move: the local one is what `restore` and the retention
-/// window are about. The destination is whatever the operator mounted there, a
-/// network share or another volume, because Cellar has no business holding
-/// credentials for an object store it cannot verify.
+/// A copy, not a move: the local one is what `restore` and the retention window are about. The destination is whatever the operator mounted there, a network share or another volume, because Cellar has no business holding credentials for an object store it cannot verify.
 fn copy_off_box(dump: &Path, directory: &Path) -> Result<PathBuf, BackupError> {
     let Some(name) = dump.file_name() else {
         return Err(BackupError::NoSuchDump(dump.to_path_buf()));
@@ -305,12 +347,9 @@ fn parse_url(url: &str) -> Result<(String, String, String, String, String), Back
         .strip_prefix("mysql://")
         .or_else(|| url.strip_prefix("mariadb://"))
         .ok_or(BackupError::InvalidUrl)?;
-    // The last '@', not the first: a password may contain one, and `sqlx`
-    // splits the same way, so a URL the pool accepts is a URL this dumps.
+    // The last '@', not the first: a password may contain one, and `sqlx` splits the same way, so a URL the pool accepts is a URL this dumps.
     let (credentials, host_database) = rest.rsplit_once('@').ok_or(BackupError::InvalidUrl)?;
-    // No password is a URL sqlx connects with, so refusing it here meant
-    // Cellar would read a database happily and refuse to back it up, and say
-    // so only when somebody finally needed the dump.
+    // No password is a URL sqlx connects with, so refusing it here meant Cellar would read a database happily and refuse to back it up, and say so only when somebody finally needed the dump.
     let (user, password) = credentials.split_once(':').unwrap_or((credentials, ""));
     let (host_port, database) = host_database
         .split_once('/')
@@ -329,12 +368,7 @@ fn parse_url(url: &str) -> Result<(String, String, String, String, String), Back
 }
 
 /// Percent-decoding, for the credentials only.
-///
-/// A password containing `@`, `:` or `/` has to be percent-encoded to be a
-/// URL at all, and every driver decodes it before authenticating. Passing the
-/// encoded text to `mariadb-dump` authenticates with a different password than
-/// the pool used, which reads as "the backup credentials are wrong" and is
-/// really "the backup never decoded them".
+/// A password containing `@`, `:` or `/` has to be percent-encoded to be a URL at all, and every driver decodes it before authenticating. Passing the encoded text to `mariadb-dump` authenticates with a different password than the pool used, which reads as "the backup credentials are wrong" and is really "the backup never decoded them".
 fn percent_decode(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -409,11 +443,20 @@ mod tests {
         assert!(after.iter().all(|d| !d.path.ends_with("cellar-1.sql")));
     }
 
+    #[test]
+    fn dump_names_are_reserved_without_cross_process_collisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = ReservedDump::create(dir.path()).unwrap();
+        let second = ReservedDump::create(dir.path()).unwrap();
+
+        assert_ne!(first.path(), second.path());
+        assert!(first.reservation.exists());
+        assert!(second.reservation.exists());
+        assert!(list(dir.path()).unwrap().is_empty());
+    }
+
     /// The failure verification exists for: a disk that filled up.
-    ///
-    /// The file has the right name, a plausible size and a correct header. It
-    /// is missing only the last line, which is exactly what a truncated write
-    /// looks like and exactly what nothing else notices.
+    /// The file has the right name, a plausible size and a correct header. It is missing only the last line, which is exactly what a truncated write looks like and exactly what nothing else notices.
     #[test]
     fn a_dump_that_stops_partway_is_refused() {
         let dir = tempfile::tempdir().unwrap();
@@ -450,12 +493,7 @@ mod tests {
         assert!(matches!(verify(&other), Err(BackupError::NotADump(_))));
 
         // And the same file is refused by `restore`, before any client runs.
-        //
-        // It was not: `restore` checked the header and nothing else, so an
-        // unfinished dump was refused when it was written and accepted when
-        // it was put back. Driven against a real MariaDB, the restore ran,
-        // died on a sliced INSERT and reported the database as possibly
-        // half-applied, which it was.
+        // It was not: `restore` checked the header and nothing else, so an unfinished dump was refused when it was written and accepted when it was put back. Driven against a real MariaDB, the restore ran, died on a sliced INSERT and reported the database as possibly half-applied, which it was.
         let refusal = restore(
             &cut,
             "mysql://root@127.0.0.1:1/x",
@@ -477,8 +515,7 @@ mod tests {
 
         let copied = copy_off_box(&dump, away.path()).unwrap();
         assert!(copied.ends_with("cellar-7.sql"));
-        // A copy, not a move: the local one is what restore and the retention
-        // window are about.
+        // A copy, not a move: the local one is what restore and the retention window are about.
         assert!(dump.exists());
     }
 
@@ -495,13 +532,7 @@ mod tests {
     }
 
     /// Whatever the pool connects with, this has to dump.
-    ///
-    /// It refused a passwordless URL, which `sqlx` accepts, so a local
-    /// database Cellar was reading happily could not be backed up and said so
-    /// only when a backup ran. And it never decoded the credentials, so a
-    /// password containing `@` (which has to be written `%40` for the URL to
-    /// parse at all) reached `mariadb-dump` as the encoded text and failed to
-    /// authenticate with a password that was correct.
+    /// It refused a passwordless URL, which `sqlx` accepts, so a local database Cellar was reading happily could not be backed up and said so only when a backup ran. And it never decoded the credentials, so a password containing `@` (which has to be written `%40` for the URL to parse at all) reached `mariadb-dump` as the encoded text and failed to authenticate with a password that was correct.
     #[test]
     fn a_url_the_pool_accepts_is_a_url_this_can_dump() {
         let cases = [

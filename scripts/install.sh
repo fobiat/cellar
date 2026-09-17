@@ -49,7 +49,6 @@ blue '  * CELLAR'
 grey '    a dedicated server manager for s&box'
 printf '\n'
 
-# ------------------------------------------------------------------ where
 
 if [ "$SYSTEM" -eq 1 ]; then
     [ "$(id -u)" -eq 0 ] || die "--system needs root. Re-run with sudo, or drop it for a per-user install."
@@ -79,7 +78,6 @@ TEMP="$(mktemp -d)"
 # shellcheck disable=SC2064
 trap "rm -rf '$TEMP'" EXIT INT TERM
 
-# ------------------------------------------------------------------ fetch
 
 if [ -n "$FROM_FILE" ]; then
     grey "  Using $FROM_FILE"
@@ -174,7 +172,6 @@ if [ -n "$EXPECTED" ]; then
     green "  Checksum matches"
 fi
 
-# ------------------------------------------------------------------ install
 
 grey "  Installing to ${INSTALL_DIR}"
 tar -xzf "$TARBALL" -C "$TEMP"
@@ -191,7 +188,6 @@ elif [ "$TRAY" -eq 1 ]; then
     die "the release archive does not contain the Linux tray launcher"
 fi
 
-# ------------------------------------------------------------------- config
 
 CONFIG="${CONFIG_DIR}/cellar.toml"
 if [ ! -f "$CONFIG" ]; then
@@ -203,7 +199,6 @@ else
     grey "  Left your existing config at ${CONFIG}"
 fi
 
-# --------------------------------------------------------------- desktop tray
 
 if [ "$TRAY" -eq 1 ]; then
     AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
@@ -221,7 +216,6 @@ DESKTOP
     green "  Tray autostart enabled at ${AUTOSTART_DIR}/cellar-tray.desktop"
 fi
 
-# ------------------------------------------------------------------ service
 
 if [ "$SERVICE" -eq 1 ]; then
     grey "  Writing the systemd unit"
@@ -273,7 +267,6 @@ ENV
     grey  "  Put secrets in /etc/cellar/cellar.env first."
 fi
 
-# --------------------------------------------------------------------- done
 
 printf '\n'
 green "  Installed $("${INSTALL_DIR}/cellar" --version)"

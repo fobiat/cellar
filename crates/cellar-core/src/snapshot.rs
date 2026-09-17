@@ -1,9 +1,5 @@
 //! The one state snapshot the CLI, the TUI and the web UI all render.
-//!
-//! Three interfaces that each computed their own view of "is it up, who is on
-//! it" would drift, and the drift would show as two screens disagreeing in
-//! front of an operator trying to decide something. So the supervisor owns one
-//! of these and everything else formats it.
+//! Three interfaces that each computed their own view of "is it up, who is on it" would drift, and the drift would show as two screens disagreeing in front of an operator trying to decide something. So the supervisor owns one of these and everything else formats it.
 
 use std::collections::VecDeque;
 
@@ -20,9 +16,7 @@ pub const SAMPLE_HISTORY: usize = 240;
 pub const LOG_HISTORY: usize = 2000;
 
 /// How many unrecognised lines to keep verbatim.
-///
-/// The count alone says the grammar is behind; it does not say what moved. A
-/// handful of the actual lines is what turns "142 unparsed" into a fix.
+/// The count alone says the grammar is behind; it does not say what moved. A handful of the actual lines is what turns "142 unparsed" into a fix.
 pub const UNPARSED_SAMPLES: usize = 20;
 
 /// A player currently on the server.
@@ -51,18 +45,13 @@ pub struct BridgeStats {
     pub refused: u64,
     /// Writes that would have been a revision conflict, had the bridge answered
     /// 409. Counted rather than enforced: the shipped gamemode client cannot act
-    /// on a conflict yet, so answering one would turn a recoverable write into a
-    /// lost one.
+    /// on a conflict yet, so answering one would turn a recoverable write into a lost one.
     pub would_conflict: u64,
     pub last_error: Option<String>,
 }
 
 /// How the last run of the server ended.
-///
-/// Kept after the process is gone. "Stopped" on its own is an absence rather
-/// than an answer, and the difference between exit 0, exit 137 and a signal
-/// with no code at all is the difference between a clean stop, an out-of-memory
-/// kill and something else killing the process.
+/// Kept after the process is gone. "Stopped" on its own is an absence rather than an answer, and the difference between exit 0, exit 137 and a signal with no code at all is the difference between a clean stop, an out-of-memory kill and something else killing the process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Exit {
     /// `None` when the process died on a signal and reported no code.
@@ -88,8 +77,7 @@ pub struct Snapshot {
     pub resource_history: Vec<ResourceSample>,
     pub bridge: BridgeStats,
     pub consecutive_failures: u32,
-    /// Lines the grammar did not recognise. A rising number means an engine
-    /// update moved a log string and the parser needs revisiting.
+    /// Lines the grammar did not recognise. A rising number means an engine update moved a log string and the parser needs revisiting.
     pub unparsed_lines: u64,
     /// The most recent lines the grammar refused, verbatim.
     pub unparsed_samples: Vec<String>,
@@ -105,9 +93,7 @@ impl Snapshot {
 }
 
 /// The supervisor's live state, folded from the event stream.
-///
-/// Kept pure so "a player joined twice", "a player left who was never here" and
-/// "the server restarted with players still listed" are unit tests.
+/// Kept pure so "a player joined twice", "a player left who was never here" and "the server restarted with players still listed" are unit tests.
 #[derive(Debug, Clone)]
 pub struct Tracker {
     state: State,
@@ -184,8 +170,7 @@ impl Tracker {
                 self.started_at = Some(now);
                 self.state = State::Starting;
                 self.last_exit = None;
-                // A restart cannot carry players over. Anything still listed is
-                // a leak from the previous run, not somebody connected.
+                // A restart cannot carry players over. Anything still listed is a leak from the previous run, not somebody connected.
                 self.players.clear();
                 self.status_bar = None;
             }
@@ -207,8 +192,7 @@ impl Tracker {
                 self.restarts += 1;
             }
             Event::PlayerJoined { steam_id, name } => {
-                // The engine can repeat a connection line on a reconnect within
-                // the same session; the roster is keyed by account, not by line.
+                // The engine can repeat a connection line on a reconnect within the same session; the roster is keyed by account, not by line.
                 if let Some(existing) = self.players.iter_mut().find(|p| p.steam_id == *steam_id) {
                     existing.name = name.clone();
                     existing.joined_at = now;
@@ -362,8 +346,7 @@ mod tests {
         assert!(t.players().is_empty());
     }
 
-    /// The bug this exists to prevent: a restart leaving a stale roster on
-    /// screen, so an operator kicks somebody who is not connected.
+    /// The bug this exists to prevent: a restart leaving a stale roster on screen, so an operator kicks somebody who is not connected.
     #[test]
     fn a_restart_clears_the_roster() {
         let mut t = tracker();
@@ -473,8 +456,7 @@ mod tests {
         let snapshot = t.snapshot();
         assert_eq!(snapshot.unparsed_lines as usize, UNPARSED_SAMPLES + 5);
         assert_eq!(snapshot.unparsed_samples.len(), UNPARSED_SAMPLES);
-        // The point of the buffer is the lines that just broke, not the first
-        // ones ever seen, so the oldest must be gone.
+        // The point of the buffer is the lines that just broke, not the first ones ever seen, so the oldest must be gone.
         assert_eq!(snapshot.unparsed_samples[0], "line 5");
         assert_eq!(
             snapshot.unparsed_samples[UNPARSED_SAMPLES - 1],

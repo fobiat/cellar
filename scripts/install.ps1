@@ -105,7 +105,6 @@ Write-Host '  * CELLAR' -ForegroundColor Blue
 Write-Host '    a dedicated server manager for s&box' -ForegroundColor DarkGray
 Write-Host ''
 
-# ---------------------------------------------------------------- destination
 
 if ($System) {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -124,7 +123,6 @@ $dataDir = Join-Path $env:ProgramData 'Cellar'
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
 
-# ----------------------------------------------------------------- get the zip
 
 $temp = Join-Path ([IO.Path]::GetTempPath()) ("cellar-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $temp | Out-Null
