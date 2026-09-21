@@ -59,7 +59,7 @@ ratatui = { version = "0.30.2", default-features = false, features = [
 crossterm = "0.28"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 argon2 = "0.5"
-rand = "0.8"
+rand = "0.10"
 tempfile = "3"
 # Extracting the archive a downloaded MariaDB release ships as. Cellar's own
 # self-update deliberately avoids an in-process archive reader (see
