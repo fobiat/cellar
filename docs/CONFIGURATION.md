@@ -436,6 +436,7 @@ security claim is worse than an absent one.
 | `auth` | `password` | Requires the configured Argon2 password hash. On loopback, a fresh instance asks for the password in the browser and saves an owner-only hash. `none` is loopback-only, and `auto` is retained for explicit compatibility configurations. The request boundary always requires a password session on a non-loopback listener. |
 | `allow_insecure_http` | `false` | Required for a non-loopback bind behind a TLS-terminating reverse proxy. |
 | `secure_cookies` | `false` | Required for a non-loopback bind so browser sessions are marked Secure. |
+| `public_origin` | unset | Exact external HTTPS origin. Pins Host and browser Origin, emits HSTS, disables browser password setup and requires a provisioned password hash, Secure cookies and `web.tailscale.enabled = false`. See [HTTPS deployment](REMOTE-ACCESS.md). |
 | `tailscale.enabled` | `true` | When Tailscale is detected, `web.auth` is not `none`, and a web password is configured, add a listener on this host's Tailscale IPv4 address. The Settings tab can disable it for the current run. |
 | `password_hash` | from env | Argon2 hash from `cellar hash-password`. |
 

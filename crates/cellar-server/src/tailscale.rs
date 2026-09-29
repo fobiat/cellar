@@ -1,7 +1,24 @@
 use std::process::Stdio;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+type CachedIp = tokio::sync::Mutex<Option<(Instant, Option<String>)>>;
 
 /// Return the current host's Tailscale IPv4 address, if the daemon is online.
 pub async fn ip() -> Option<String> {
+    static CACHE: OnceLock<CachedIp> = OnceLock::new();
+    let mut cached = CACHE.get_or_init(|| tokio::sync::Mutex::new(None)).lock().await;
+    if let Some((at, value)) = &*cached
+        && at.elapsed() < Duration::from_secs(30)
+    {
+        return value.clone();
+    }
+    let value = discover().await;
+    *cached = Some((Instant::now(), value.clone()));
+    value
+}
+
+async fn discover() -> Option<String> {
     let mut commands = vec!["tailscale".to_owned()];
     if cfg!(windows) {
         commands.extend([
@@ -16,6 +33,7 @@ pub async fn ip() -> Option<String> {
             tokio::process::Command::new(command)
                 .args(["ip", "-4"])
                 .stdin(Stdio::null())
+                .kill_on_drop(true)
                 .output(),
         )
         .await
@@ -27,7 +45,7 @@ pub async fn ip() -> Option<String> {
                 value
                     .lines()
                     .map(str::trim)
-                    .find(|line| !line.is_empty())
+                    .find(|line| line.parse::<std::net::Ipv4Addr>().is_ok())
                     .map(str::to_owned)
             })
         {

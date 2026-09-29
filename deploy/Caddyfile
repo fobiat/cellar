@@ -1,0 +1,6 @@
+cellar.example.com {
+    tls {
+        protocols tls1.2 tls1.3
+    }
+    reverse_proxy 127.0.0.1:8081
+}

@@ -43,8 +43,14 @@ pub fn web_router(state: Arc<AppState>) -> Router {
         .merge(api::routes())
         .merge(ws::routes())
         .merge(health::routes())
-        .layer(middleware::from_fn(add_security_headers))
-        .layer(middleware::from_fn(enforce_browser_origin))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            enforce_browser_origin,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            add_security_headers,
+        ))
         .with_state(state)
 }
 
@@ -67,8 +73,11 @@ async fn tailscale_web_access(
     next.run(request).await
 }
 
-async fn add_security_headers(request: Request<Body>, next: Next) -> Response {
-    let is_api = request.uri().path().starts_with("/api/");
+async fn add_security_headers(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert(
@@ -87,17 +96,47 @@ async fn add_security_headers(request: Request<Body>, next: Next) -> Response {
         header::HeaderName::from_static("permissions-policy"),
         header::HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
-    if is_api {
+    headers.insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
+    if state.web_public_origin.is_some() {
         headers.insert(
-            header::CACHE_CONTROL,
-            header::HeaderValue::from_static("no-store"),
+            header::STRICT_TRANSPORT_SECURITY,
+            header::HeaderValue::from_static("max-age=31536000"),
         );
     }
     response
 }
 
 /// Browser state-changing requests must prove they came from this origin. Native clients do not send browser metadata, so the authenticated TUI and CLI remain usable without a second CSRF token protocol.
-async fn enforce_browser_origin(request: Request<Body>, next: Next) -> Response {
+async fn enforce_browser_origin(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if let Some(origin) = &state.web_public_origin {
+        let expected_host = origin.strip_prefix("https://").unwrap_or("");
+        if request
+            .headers()
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            != Some(expected_host)
+        {
+            return (
+                StatusCode::MISDIRECTED_REQUEST,
+                "use the configured HTTPS origin",
+            )
+                .into_response();
+        }
+        if request.uri().path() == "/api/setup-password" {
+            return (
+                StatusCode::FORBIDDEN,
+                "provision the operator password on the host",
+            )
+                .into_response();
+        }
+    }
     let websocket = request.uri().path() == "/api/events"
         && request
             .headers()
@@ -123,7 +162,14 @@ async fn enforce_browser_origin(request: Request<Body>, next: Next) -> Response 
         if websocket && origin.is_none() {
             return (StatusCode::FORBIDDEN, "websocket origin required").into_response();
         }
-        if origin.is_some_and(|origin| !origin_matches_host(origin, headers)) {
+        if origin.is_some_and(|origin| {
+            !origin_matches_host(origin, headers)
+                || (state.web_secure_cookies && !origin.starts_with("https://"))
+                || state
+                    .web_public_origin
+                    .as_deref()
+                    .is_some_and(|expected| origin != expected)
+        }) {
             return (StatusCode::FORBIDDEN, "cross-origin request refused").into_response();
         }
     }
@@ -310,6 +356,88 @@ mod contract_tests {
             request = request.header("Cookie", cookie);
         }
         request.body(Body::empty()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn https_policy_pins_host_and_origin_and_never_trusts_forwarded_headers() {
+        let mut state = AppState::new(Documents::memory(), Policy::Trusted, "https-test");
+        state.web_public_origin = Some("https://cellar.example".into());
+        state.web_secure_cookies = true;
+        let app = web_router(Arc::new(state));
+        for (host, origin, expected) in [
+            ("cellar.example", "https://cellar.example", StatusCode::OK),
+            (
+                "cellar.example",
+                "http://cellar.example",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "cellar.example",
+                "https://evil.example",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "127.0.0.1:8081",
+                "https://cellar.example",
+                StatusCode::MISDIRECTED_REQUEST,
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/logout")
+                        .header("Host", host)
+                        .header("Origin", origin)
+                        .header("X-Forwarded-Proto", "https")
+                        .header("X-Forwarded-Host", "cellar.example")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            assert_eq!(
+                response.headers()[header::STRICT_TRANSPORT_SECURITY],
+                "max-age=31536000"
+            );
+        }
+        let setup = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/setup-password")
+                    .header("Host", "cellar.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(setup.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn operator_pages_and_worker_are_never_cached() {
+        let state = Arc::new(AppState::new(
+            Documents::memory(),
+            Policy::Trusted,
+            "cache-test",
+        ));
+        for uri in ["/", "/service-worker.js", "/api/auth", "/missing"] {
+            let response = web_router(state.clone())
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            assert_eq!(response.headers()[header::X_FRAME_OPTIONS], "DENY");
+            assert!(
+                !response
+                    .headers()
+                    .contains_key(header::STRICT_TRANSPORT_SECURITY)
+            );
+        }
     }
 
     #[tokio::test]

@@ -106,6 +106,12 @@ pub fn switch_refusal(candidate: &Config, running: &Running) -> Option<String> {
     };
 
     if let Some(active) = &running.active_config {
+        if candidate.web.public_origin != active.web.public_origin
+            || candidate.web.secure_cookies != active.web.secure_cookies
+            || candidate.web.auth != active.web.auth
+        {
+            return Some("web authentication and HTTPS policy are bound at startup; restart Cellar to change them".to_owned());
+        }
         let Some(active_instance) = active.primary() else {
             return Some("the active profile no longer declares a server".to_owned());
         };

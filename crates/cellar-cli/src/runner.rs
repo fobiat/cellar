@@ -528,6 +528,7 @@ fn build_state(
     }
     state.web_auth = config.web.auth;
     state.web_secure_cookies = config.web.secure_cookies;
+    state.web_public_origin = config.web.public_origin.clone();
     state.web_tailscale_configured = config.web.tailscale.enabled;
     state.web_tailscale_enabled.store(
         config.web.tailscale.enabled,

@@ -732,6 +732,7 @@ pub struct AppState {
     /// Explicit web authentication policy.
     pub web_auth: cellar_core::config::WebAuthMode,
     pub web_secure_cookies: bool,
+    pub web_public_origin: Option<String>,
     pub web_tailscale_configured: bool,
     pub web_tailscale_enabled: std::sync::atomic::AtomicBool,
     pub web_tailscale_bind: Mutex<Option<String>>,
@@ -899,6 +900,7 @@ impl AppState {
             password_work: PasswordWork::new(PASSWORD_WORK_CAPACITY),
             web_auth: Default::default(),
             web_secure_cookies: false,
+            web_public_origin: None,
             web_tailscale_configured: false,
             web_tailscale_enabled: std::sync::atomic::AtomicBool::new(false),
             web_tailscale_bind: Mutex::new(None),

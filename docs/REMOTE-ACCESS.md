@@ -1,13 +1,13 @@
-# Remote web access
+# HTTPS and remote access
 
-Cellar's web panel is responsive and works in current desktop and mobile
-browsers. The browser, tray, and remote TUI use the same operator session. Keep
-the Cellar listener private and put TLS or a private network boundary in front
-of it before allowing remote access.
+Cellar's operator console runs at full engine privilege. The supported HTTPS
+deployment is a TLS-terminating reverse proxy in front of a private Cellar HTTP
+listener. Cellar does not load certificates or terminate TLS itself. Use modern
+TLS 1.2/1.3; obsolete SSL protocols are not supported.
 
-## Local machine
+## Local setup
 
-The safe default is loopback:
+For a browser on the same machine:
 
 ```toml
 [web]
@@ -16,75 +16,115 @@ bind = "127.0.0.1:8081"
 auth = "password"
 ```
 
-Open `http://127.0.0.1:8081` on the host. On first visit, Cellar asks you to
-choose the operator password and saves only its owner-only Argon2 hash. For
-automation, generate the hash with `cellar hash-password` and provide it as
-`CELLAR_WEB_PASSWORD_HASH`.
+Visit `http://127.0.0.1:8081` to complete first-run password setup. Cellar saves
+an owner-only Argon2 hash beside the active config. Alternatively, use
+`cellar hash-password` and supply `CELLAR_WEB_PASSWORD_HASH` through a protected
+service environment or secret store. Never put a plaintext password in TOML.
 
-## LAN access
+## Public or LAN HTTPS
 
-For a small trusted LAN, bind the web listener to the host's LAN interface or
-to `0.0.0.0:8081`, keep password authentication enabled, and allow TCP 8081
-only from the LAN in the host firewall. Direct HTTP is suitable only for a
-temporary private network; set `secure_cookies = false` for that case.
+Provision the password hash on the host before enabling remote access. Add:
 
-The preferred LAN setup is a reverse proxy with a certificate:
+```toml
+[web]
+enabled = true
+bind = "127.0.0.1:8081"
+auth = "password"
+secure_cookies = true
+public_origin = "https://cellar.example.com"
+
+[web.tailscale]
+enabled = false
+```
+
+`public_origin` is exactly a canonical HTTPS origin, including a non-default
+port when needed, with no trailing slash, path, credentials, query or fragment.
+It requires a provisioned `CELLAR_WEB_PASSWORD_HASH`, password authentication,
+Secure cookies and the direct Tailscale listener disabled. Restart Cellar after
+changing this policy. Live profile switching cannot change authentication or
+HTTPS policy.
+
+Install Caddy and adapt [`deploy/Caddyfile`](../deploy/Caddyfile):
 
 ```caddyfile
-cellar.lan {
-    tls internal
+cellar.example.com {
+    tls {
+        protocols tls1.2 tls1.3
+    }
     reverse_proxy 127.0.0.1:8081
 }
 ```
 
-Keep Cellar on `127.0.0.1:8081`, set `secure_cookies = true`, and install the
-proxy's internal CA certificate on each phone or tablet. Use the proxy URL in
-the browser instead of exposing Cellar directly.
+Point DNS at the host, allow ports 80/443 to Caddy, and keep 8081 private.
+Caddy obtains and renews a publicly trusted certificate and redirects HTTP to
+HTTPS. For a private LAN name, add `tls internal` instead and install Caddy's
+root CA on each client. Do not train operators to ignore certificate errors.
+Check certificate renewal and expiry as part of host monitoring.
 
-## Tailscale
+The proxy must preserve the external `Host` and support WebSocket upgrades.
+For nginx, set `proxy_set_header Host $http_host`, forward Upgrade and Connection
+for `/api/events`, and proxy to the private listener. Restrict backend access
+with loopback or a firewall; a plaintext backend reachable from the internet is
+not secured by HTTPS at the proxy.
 
-Cellar can add a second listener on the host's Tailscale IPv4 address when
-`tailscale.enabled = true`, `web.auth` is not `none`, and a web password is
-configured. It uses the same port as `web.bind`, requires the operator
-password, and appears in the
-Addresses panel. Disable it with `tailscale.enabled = false` when the host
-should not serve the UI directly over the tailnet.
+Cellar deliberately ignores `Forwarded`, `X-Forwarded-Host` and
+`X-Forwarded-Proto` for trust decisions. The configured origin is authoritative.
+Unexpected hosts receive 421. Browser mutations and WebSocket connections must
+match the host and exact HTTPS origin. HTTP origins are refused in Secure-cookie
+mode. There is no user-controlled redirect target.
 
-For the preferred HTTPS path, keep Cellar on loopback and publish it through
-Tailscale Serve:
+HTTPS mode emits a one-year HSTS policy for this host, without `includeSubDomains`
+or preload. Operator cookies are `__Host-cellar_session`, Secure, HttpOnly,
+SameSite=Strict, and Path=/. UI, API and service-worker responses use `no-store`.
+The worker does not cache pages or data. Frame embedding is denied, referrers are
+suppressed, and camera/microphone/geolocation permissions are disabled.
+
+## Tailscale Serve
+
+Use the same private-listener configuration, with `public_origin` set to the
+HTTPS origin that Tailscale Serve reports:
 
 ```sh
 tailscale serve --https=443 http://127.0.0.1:8081
 tailscale serve status
 ```
 
-Open the HTTPS URL shown by `tailscale serve status` from another device on the
-same tailnet. Tailscale provides the private network boundary, while Cellar's
-password still protects the operator console. `secure_cookies = true` is the
-right setting for this HTTPS path.
+Disable Cellar's direct listener with `[web.tailscale] enabled = false`. This
+avoids a second HTTP entrance alongside HTTPS. Tailscale's transport encryption
+and browser HTTPS solve different boundaries; an HTTP tailnet URL is not HTTPS.
 
-For a direct tailnet connection, open `http://<tailscale-ip>:<web-port>` on the
-phone and sign in with the Cellar operator password. This direct listener is
-still password-protected. Use Tailscale Serve when HTTPS is required.
+The optional direct Tailscale listener remains available for private tailnet
+deployments without `public_origin`. It requires a provisioned password and
+uses the port in `web.bind`. It is not the recommended remote browser path.
 
-For a Kubernetes deployment, expose the web Service through a Tailscale
-Ingress or an HTTPS ingress controller. Do not publish the bridge port to the
-tailnet unless the gamemode needs it there.
+## Verification
 
-## Mobile devices
-
-Open the LAN or Tailscale HTTPS URL in Safari, Chrome, or another current
-mobile browser, sign in, then use Add to Home Screen if a launcher is useful.
-The layout switches to stacked action rows and touch-sized controls. No mobile
-app or separate mobile API is required.
-
-For a terminal dashboard from a laptop or desktop, use:
+Open the HTTPS URL and check the certificate issuer, name and expiry. Sign in,
+confirm the live indicator connects over WSS, send `status`, then sign out and
+confirm the session is revoked. Verify:
 
 ```sh
-CELLAR_SESSION='your-session-cookie' cellar tui \
-  --url https://cellar.example.ts.net
+curl -I https://cellar.example.com/
+curl -I http://cellar.example.com/
 ```
 
-The session is a bearer credential. Do not put it in shell history, a systemd
-unit, a Docker image, or a shared chat. The read-only `CELLAR_API_TOKEN`
-surface is for integrations and does not authorize console commands.
+The first should show `Cache-Control: no-store`, HSTS and frame denial. The
+second should redirect at the proxy. From another machine, port 8081 must be
+unreachable. With `public_origin` configured, a direct loopback request using
+its default Host receives 421; supply the configured Host only for local probes.
+
+The browser suite includes a disposable TLS reverse proxy, real login and
+host-only cookie checks, WSS, wrong-scheme refusal, forwarded-header spoofing and
+logout. It uses a temporary self-signed test certificate; production clients
+must trust the actual deployment certificate.
+
+## Phones and terminal clients
+
+Open the HTTPS URL in a current browser and optionally use Add to Home Screen.
+The [operator workspace guide](WEB-UI.md) covers phone navigation, full status,
+keyboard use and recovery.
+
+CLI and TUI clients must use the same HTTPS URL when `public_origin` is set.
+Treat `CELLAR_SESSION` as a bearer credential and supply it through a protected
+environment, never a shared script or shell-history assignment. The read-only
+`CELLAR_API_TOKEN` does not authorize console commands.

@@ -35,6 +35,8 @@ cellar status     # inspect a running Cellar instance
 | **[Why Cellar?](docs/WHY-CELLAR.md)** | The practical advantages over direct s&box hosting and general-purpose managers. |
 | **[Installation](docs/INSTALLATION.md)** | Installers, Linux, Windows, containers, and services. |
 | **[Configuration](docs/CONFIGURATION.md)** | Every `cellar.toml` key and profile field. |
+| **[Operator workspace](docs/WEB-UI.md)** | Desktop and phone workflows, console, layout and recovery. |
+| **[HTTPS and remote access](docs/REMOTE-ACCESS.md)** | TLS proxy setup, pinned origin, Secure cookies and Tailscale Serve. |
 | **[CLI reference](docs/CLI.md)** | Commands, flags, and output contracts. |
 | **[Architecture](docs/ARCHITECTURE.md)** | Process supervision, the pty, profiles, and the bridge. |
 | **[Operations](docs/OPERATIONS.md)** | Probes, updates, backups, notifications, and recovery. |
@@ -68,8 +70,10 @@ AppleJack Framework page is an integration guide, not a Cellar dependency.
 - Discovers and runs gamemode commands through the profile prefix without
   hardcoding a named gamemode.
 - Offers a responsive operator UI with the AppleJack Framework visual language,
-  touch-sized controls,
-  dark surfaces, live status chips, and narrow-screen layouts.
+  a desktop rail and phone section selector, editable overview, searchable
+  console, light/dark themes and keyboard-accessible recovery controls.
+- Pins an optional external HTTPS origin, refuses mismatched browser origins,
+  and uses host-only Secure cookies behind a private TLS reverse proxy.
 - Connects to a database supplied by the gamemode. Cellar can inspect it, but
   it does not own game tables or silently run game migrations.
 - Can optionally snapshot the gamemode's bridge documents as verified JSON,

@@ -549,6 +549,8 @@ pub struct WebConfig {
     pub allow_insecure_http: bool,
     /// Mark operator cookies Secure when TLS is terminated before Cellar.
     pub secure_cookies: bool,
+    /// Exact external HTTPS origin when served through a private reverse proxy.
+    pub public_origin: Option<String>,
     /// Expose the operator UI on the host's Tailscale address when available.
     #[serde(default)]
     pub tailscale: TailscaleWebConfig,
@@ -591,6 +593,7 @@ impl Default for WebConfig {
             auth: WebAuthMode::default(),
             allow_insecure_http: false,
             secure_cookies: false,
+            public_origin: None,
             tailscale: TailscaleWebConfig::default(),
             password_hash: None,
         }
@@ -1052,6 +1055,35 @@ impl Config {
                 return Err(ConfigError::Invalid(
                     "web.secure_cookies = true is required for a non-loopback bind behind a TLS reverse proxy"
                         .into(),
+                ));
+            }
+        }
+
+        if self.web.enabled
+            && let Some(origin) = &self.web.public_origin
+        {
+            let valid = url::Url::parse(origin).ok().is_some_and(|url| {
+                url.scheme() == "https"
+                    && url.host_str().is_some()
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.query().is_none()
+                    && url.fragment().is_none()
+                    && url.path() == "/"
+                    && url.origin().ascii_serialization() == *origin
+            });
+            if !valid {
+                return Err(ConfigError::Invalid(
+                    "web.public_origin must be a canonical HTTPS origin without a path, credentials, query or fragment".into(),
+                ));
+            }
+            if self.web.auth != WebAuthMode::Password
+                || !self.web.secure_cookies
+                || self.web.password_hash.is_none()
+                || self.web.tailscale.enabled
+            {
+                return Err(ConfigError::Invalid(
+                    "web.public_origin requires auth = password, a provisioned password hash, secure_cookies = true and web.tailscale.enabled = false".into(),
                 ));
             }
         }
@@ -2513,6 +2545,29 @@ enabled = false
 
         config.web.password_hash = Some(Secret::new("$argon2id$v=19$m=1,t=1,p=1$hash"));
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn a_public_https_origin_requires_a_complete_security_policy() {
+        let mut config = minimal();
+        config.web.enabled = true;
+        config.web.public_origin = Some("https://cellar.example".into());
+        assert!(config.validate().is_err());
+        config.web.secure_cookies = true;
+        config.web.password_hash = Some(Secret::new("test-hash"));
+        config.web.tailscale.enabled = false;
+        config.validate().unwrap();
+        for origin in [
+            "http://cellar.example",
+            "https://cellar.example/",
+            "https://user@cellar.example",
+            "https://cellar.example/path",
+            "https://cellar.example?next=evil",
+            "https://cellar.example#fragment",
+        ] {
+            config.web.public_origin = Some(origin.into());
+            assert!(config.validate().is_err(), "{origin}");
+        }
     }
 
     #[test]

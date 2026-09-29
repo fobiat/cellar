@@ -398,8 +398,9 @@ async fn external_resources(
     .into_response()
 }
 
-async fn external_addresses(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response {
-    Json(addresses(&state).await).into_response()
+async fn external_addresses(State(state): State<Arc<AppState>>, _: ExternalApi, target: Target) -> Response {
+    let (_, _, descriptor) = state.active_snapshot(&target);
+    Json(addresses(&state, &descriptor).await).into_response()
 }
 
 async fn external_versions(State(state): State<Arc<AppState>>, _: ExternalApi) -> Response {
@@ -811,7 +812,7 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator, target: Target)
             source.contains("GroundedOrAuthored") && source.contains("Scene.Trace")
         });
 
-    let addresses = addresses(&state).await;
+    let addresses = addresses(&state, &descriptor).await;
     let anti_cheat = crate::security::inspect(descriptor.log_file.as_deref()).await;
     let invite_only = read_access_files(descriptor.data_dir.as_deref())
         .await
@@ -867,6 +868,8 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator, target: Target)
         "anti_cheat": anti_cheat,
         "web_auth": {
             "bind": state.web_bind,
+            "public_origin": state.web_public_origin,
+            "secure_cookies": state.web_secure_cookies,
             "mode": state.web_auth,
             "password_configured": state.web_password().is_some(),
         },
@@ -880,7 +883,7 @@ async fn status(State(state): State<Arc<AppState>>, _: Operator, target: Target)
     .into_response()
 }
 
-async fn addresses(state: &AppState) -> Vec<serde_json::Value> {
+async fn addresses(state: &AppState, descriptor: &crate::registry::Descriptor) -> Vec<serde_json::Value> {
     let tailscale_ip = tailscale_ip().await;
     let mut result = Vec::new();
     if let Some(ip) = &tailscale_ip {
@@ -894,6 +897,12 @@ async fn addresses(state: &AppState) -> Vec<serde_json::Value> {
     }
     if state.web_enabled {
         result.push(address("Cellar web", &state.web_bind, &tailscale_ip, true));
+        if let Some(origin) = &state.web_public_origin {
+            result.push(serde_json::json!({
+                "label": "Cellar HTTPS", "bind": state.web_bind,
+                "local_url": origin, "remote_url": null, "state": "configured reverse proxy",
+            }));
+        }
     }
     if let Some(bind) = state.web_tailscale_bind()
         && state.web_tailscale_is_enabled()
@@ -905,24 +914,22 @@ async fn addresses(state: &AppState) -> Vec<serde_json::Value> {
             true,
         ));
     }
-    if state.bridge_enabled()
-        && let Some(bind) = state.bridge_bind()
-    {
-        result.push(address("Document bridge", &bind, &tailscale_ip, false));
+    if descriptor.bridge_enabled {
+        result.push(address("Document bridge", &descriptor.bridge_bind, &tailscale_ip, false));
     }
-    let server_bind = format!("0.0.0.0:{}", state.server_port().unwrap_or_default());
+    let server_bind = format!("0.0.0.0:{}", descriptor.port);
     result.push(address(
         "Game server",
         &server_bind,
         &tailscale_ip,
-        state.server_direct_connect(),
+        descriptor.direct_connect,
     ));
-    let query_bind = format!("0.0.0.0:{}", state.query_port().unwrap_or_default());
+    let query_bind = format!("0.0.0.0:{}", descriptor.query_port);
     result.push(address(
         "Game query",
         &query_bind,
         &tailscale_ip,
-        state.server_direct_connect(),
+        descriptor.direct_connect,
     ));
     result
 }

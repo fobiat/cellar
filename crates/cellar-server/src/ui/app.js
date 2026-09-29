@@ -28,6 +28,82 @@ let consoleAutoScroll = true;
 let buildDriftState = "";
 let activeTab = "overview";
 let serviceWorker = null;
+let viewGeneration = 0;
+let reconnectTimer = null;
+let statusFresh = false;
+let lastStatusAt = null;
+const pendingReads = new Map();
+const pendingActions = new Set();
+
+function staleRequest() { return new DOMException("View superseded", "AbortError"); }
+function isStale(error) { return error?.name === "AbortError"; }
+
+async function request(path, options = {}) {
+  const generation = viewGeneration;
+  const read = !options.method || options.method === "GET";
+  const key = new URL(path, location.origin).pathname;
+  const controller = new AbortController();
+  if (read) {
+    pendingReads.get(key)?.abort();
+    pendingReads.set(key, controller);
+  }
+  const timer = setTimeout(() => controller.abort(new Error("Request timed out. Retry when Cellar is reachable.")), 30000);
+  const check = () => {
+    if (generation !== viewGeneration || (read && controller.signal.aborted)) throw staleRequest();
+  };
+  try {
+    const response = await fetch(path, { ...options, cache: "no-store", signal: read ? controller.signal : undefined });
+    const contents = await response.text();
+    check();
+    if (response.status === 401 && key !== "/api/login") {
+      showGate();
+      throw staleRequest();
+    }
+    return {
+      ok: response.ok, status: response.status, statusText: response.statusText,
+      json: async () => { check(); return JSON.parse(contents); },
+      text: async () => { check(); return contents; },
+    };
+  } finally {
+    clearTimeout(timer);
+    if (pendingReads.get(key) === controller) pendingReads.delete(key);
+  }
+}
+
+function invalidateView() {
+  viewGeneration += 1;
+  for (const controller of pendingReads.values()) controller.abort();
+  pendingReads.clear();
+  clearTimeout(reconnectTimer);
+  if (socket) {
+    socket.onclose = socket.onmessage = socket.onopen = socket.onerror = null;
+    socket.close();
+    socket = null;
+  }
+}
+
+function operationMessage(message, kind = "info") {
+  const target = $("#operation-status");
+  target.hidden = !message;
+  target.dataset.kind = kind;
+  target.textContent = message;
+}
+
+async function perform(button, work) {
+  if (pendingActions.has(button)) return;
+  pendingActions.add(button);
+  const label = button?.textContent;
+  if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); }
+  try { await work(); }
+  catch (error) { if (!isStale(error)) operationMessage(error.message || String(error), "error"); }
+  finally {
+    pendingActions.delete(button);
+    if (button) {
+      button.disabled = false; button.removeAttribute("aria-busy"); button.textContent = label;
+      if (!$("#confirm-dialog").open && !$("#palette").open) button.focus({ preventScroll: true });
+    }
+  }
+}
 
 /* A queue, not a single slot. Killing a server produces several failures at
  * once, and a toast that overwrites the previous one shows the least
@@ -121,6 +197,8 @@ function restoreTheme() {
  * `typed` is the tier-2 guard: pass the string that has to be entered before Confirm becomes available. Everything else is tier 1, and tier 0 does not call this at all.
  */
 function confirmAction({ title, body, typed }) {
+  const generation = viewGeneration;
+  const scope = lastStatus?.scope || selectedInstance || "primary";
   return new Promise((resolve) => {
     const dialog = $("#confirm-dialog");
     const input = $("#confirm-typed");
@@ -128,7 +206,7 @@ function confirmAction({ title, body, typed }) {
     const cancel = $("#confirm-cancel");
 
     $("#confirm-title").textContent = title;
-    $("#confirm-body").textContent = body || "";
+    $("#confirm-body").textContent = `${body || ""}\nViewing ${selectedInstance || "primary server"} · document scope ${scope}.`;
 
     input.hidden = !typed;
     input.value = "";
@@ -163,7 +241,7 @@ function confirmAction({ title, body, typed }) {
       dialog.oncancel = null;
       dialog.onkeydown = null;
       if (dialog.open) dialog.close();
-      resolve(answer);
+      resolve(answer && generation === viewGeneration);
     };
 
     go.onclick = () => settle(true);
@@ -181,21 +259,33 @@ function confirmAction({ title, body, typed }) {
  * `load` takes the node the pane renders into so a failure has somewhere to go
  * that is not only a toast. Pass null for a loader with no single container. */
 async function load(what, node, work) {
+  const generation = viewGeneration;
+  const container = node?.closest(".body") || node;
+  const feedback = container ? el("div", "load-feedback muted small", `Loading ${what}…`) : null;
+  if (feedback) { feedback.setAttribute("role", "status"); container.prepend(feedback); }
   if (node) node.setAttribute("aria-busy", "true");
   try {
     const result = await work();
     if (node) node.removeAttribute("data-load-error");
     return result;
   } catch (error) {
+    if (isStale(error) || generation !== viewGeneration) return null;
     const why = error && error.message ? error.message : String(error);
-    showToast(`${what} failed: ${why}`, "error");
     if (node) {
       node.setAttribute("data-load-error", why);
-      node.replaceChildren(el("p", "notice", `Could not load ${what}: ${why}`));
+      node.replaceChildren();
+      if (node.tagName === "TBODY") emptyRow(node, 8, `Could not load ${what}: ${why}`);
+      else node.append(el("p", "notice", `Could not load ${what}: ${why}`));
+      const retry = el("button", "chip", "Retry");
+      retry.onclick = () => { retry.remove(); load(what, node, work); };
+      container.prepend(retry);
+    } else {
+      operationMessage(`Could not load ${what}: ${why}`, "error");
     }
     return null;
   } finally {
-    if (node) node.removeAttribute("aria-busy");
+    feedback?.remove();
+    if (node && generation === viewGeneration) node.removeAttribute("aria-busy");
   }
 }
 
@@ -203,7 +293,7 @@ async function load(what, node, work) {
  * worth reading. `fetch` rejects only on a network fault, so a 500 with a JSON
  * body reached the caller as a successful parse of an error document. */
 async function api(path, options) {
-  const response = await fetch(path, options);
+  const response = await request(path, options);
   const body = await response.json().catch(() => null);
   if (!response.ok) {
     throw new Error((body && body.error) || `${response.status} ${response.statusText}`);
@@ -228,7 +318,7 @@ const OVERVIEW_MODULES = [
   { id: "player-history", label: "Player history", tab: "players", sub: "history" },
   { id: "access", label: "Access gate", tab: "players", sub: "access" },
   { id: "resources", label: "Resources", tab: "monitoring" },
-  { id: "timings", label: "Frame timings", tab: "monitoring" },
+  { id: "timings", label: "Frame timings", tab: "dispatch" },
   { id: "addresses", label: "Network addresses", tab: "monitoring" },
   { id: "anti-cheat", label: "Anti-cheat", tab: "monitoring" },
   { id: "console", label: "Console", tab: "dispatch" },
@@ -326,7 +416,7 @@ function renderOverviewEditor() {
   if (hint) {
     hint.textContent = overviewEditMode
       ? "Drag a card to move it. Drag its resize handle to change its width."
-      : "Your overview is ready. Customize it to arrange cards and choose what stays visible.";
+      : "Your workspace, arranged your way.";
   }
   if (status) {
     status.textContent = `${overviewLayout.length} module${overviewLayout.length === 1 ? "" : "s"} shown`;
@@ -400,7 +490,7 @@ function overviewGridStep(grid) {
 }
 
 function overviewGridColumns() {
-  if (window.innerWidth <= 680) return 1;
+   if (window.innerWidth <= 760) return 1;
   if (window.innerWidth <= 1100) return 6;
   return OVERVIEW_COLUMNS;
 }
@@ -475,7 +565,9 @@ function reorderOverviewModule(targetId, event) {
 function renderOverviewCards() {
   const target = $("#overview-grid");
   if (!target) return;
-  target.replaceChildren();
+  const layoutKey = JSON.stringify([overviewLayout, overviewEditMode, overviewGridColumns()]);
+  const rebuild = target.dataset.layout !== layoutKey;
+  if (rebuild) { target.replaceChildren(); target.dataset.layout = layoutKey; }
   target.classList.toggle("is-editing", overviewEditMode);
   const data = lastStatus || {};
   const server = data.server;
@@ -522,7 +614,7 @@ function renderOverviewCards() {
     },
     diagnostics: () => {
       const body = el("div", "overview-reading");
-      body.append(el("p", "overview-value lamp up", data.health ? "Live checks available" : "Waiting"));
+      body.append(el("p", "overview-value", data.health ? "Live checks available" : "Waiting"));
       body.append(el("p", "muted small", "Open Diagnostics for the complete preflight and runtime report."));
       return body;
     },
@@ -553,7 +645,7 @@ function renderOverviewCards() {
     timings: () => {
       const body = el("div", "overview-reading");
       body.append(el("p", "overview-value", timingHistory.length ? "Collecting" : "Waiting"));
-      body.append(el("p", "muted small", "Frame timing history is available in Monitoring."));
+      body.append(el("p", "muted small", "Measured engine stages and averages are available in Console."));
       return body;
     },
     addresses: () => {
@@ -631,6 +723,15 @@ function renderOverviewCards() {
   for (const entry of overviewLayout) {
     const module = overviewModule(entry.id);
     if (!module || !modules[entry.id]) continue;
+    const reading = modules[entry.id]();
+    if (entry.id === "health") reading.append(el("p", "overview-detail muted small", lifecycleAdvice(server)));
+    if (entry.id === "players" && server?.players?.length) reading.append(el("p", "overview-detail small", server.players.map(player => `${player.name} · ${formatUptime(player.joined_at)}`).join("\n")));
+    if (entry.id === "resources" && server?.resources) reading.append(el("p", "overview-detail muted small", `Host CPU ${percent(server.resources.host_cpu_percent)} · ${server.resources.process_count} processes`));
+    if (!rebuild) {
+      const body = target.querySelector(`[data-overview-id="${entry.id}"] > .body`);
+      if (body && body.textContent !== reading.textContent) body.replaceChildren(reading);
+      continue;
+    }
     const card = el("article", "panel overview-card");
     card.dataset.overviewId = module.id;
     card.style.setProperty("--overview-span", String(overviewRenderSpan(entry.span)));
@@ -665,9 +766,10 @@ function renderOverviewCards() {
     heading.append(title);
     const open = el("button", "chip", "open");
     open.type = "button";
+    open.setAttribute("aria-label", `Open ${module.label}`);
     open.onclick = () => showTab(module.tab, true, module.sub);
     heading.append(open);
-    card.append(heading, el("div", "body", modules[entry.id]()));
+    card.append(heading, el("div", "body", reading));
     if (overviewEditMode) {
       const resize = el("button", "overview-resize-handle", "resize");
       resize.type = "button";
@@ -676,10 +778,18 @@ function renderOverviewCards() {
       const size = el("span", "overview-size-label", `${entry.span}/12 columns`);
       resize.append(size);
       resize.addEventListener("pointerdown", (event) => startOverviewResize(event, module.id, card, size));
+      resize.addEventListener("keydown", event => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        entry.span = event.key === "Home" ? 3 : event.key === "End" ? 12 : overviewSpan(entry.span + (event.key === "ArrowRight" ? 1 : -1));
+        saveOverviewLayout(); renderOverviewCards();
+        target.querySelector(`[data-overview-id="${entry.id}"] .overview-resize-handle`)?.focus();
+      });
       card.append(resize);
     }
     target.append(card);
   }
+  if (!overviewLayout.length && rebuild) target.append(el("p", "state-banner", "Your overview is empty. Choose Edit layout to add modules, or use the sections to manage your server."));
 }
 
 /* ---- the instance strip -------------------------------------------------- */
@@ -709,12 +819,11 @@ async function loadInstances() {
   knownInstances.forEach((entry, index) => {
     const tile = el("button", "instance");
     tile.type = "button";
-    tile.setAttribute("role", "tab");
-    tile.setAttribute("aria-selected", String(entry.id === selectedInstance));
+    tile.setAttribute("aria-pressed", String(entry.id === selectedInstance));
     tile.dataset.instance = entry.id;
 
     const state = entry.unavailable ? "unavailable" : entry.running ? "running" : "stopped";
-    tile.append(el("span", `instance-dot lamp ${state === "running" ? "ok" : "down"}`));
+    tile.append(el("span", `instance-dot lamp ${state === "running" ? "up" : "down"}`));
     tile.append(el("span", "instance-id", entry.id));
 
     /* One muted suffix, and only what is not already obvious.
@@ -722,7 +831,7 @@ async function loadInstances() {
      * word on every tile forever. Everything else lives in the tooltip. */
     const notes = [];
     if (entry.scope !== entry.id) notes.push(entry.scope);
-    if (state !== "running") notes.push(state);
+    notes.push(state);
     if (!entry.required) notes.push("optional");
     if (notes.length) tile.append(el("span", "instance-meta", notes.join(" · ")));
 
@@ -745,19 +854,46 @@ async function loadInstances() {
  * wrong thing. */
 function selectInstance(id, tab, sub) {
   if (id === selectedInstance) return;
+  invalidateView();
   selectedInstance = id;
+  lastStatus = null;
+  statusFresh = false;
+  lastStatusAt = null;
+  missedEvents = backfilledLines = 0;
+  lastSeen = null;
+  hasConnectedOnce = false;
+  $("#command").value = "";
+  commandHistory = [];
+  historyCursor = 0;
+  $("#access-steam-id").value = "";
+  document.querySelectorAll(".strip .value, .metric-grid strong").forEach(node => { node.textContent = "Waiting"; });
+  $("#identity-facts").replaceChildren();
+  $("#identity-summary").textContent = `${id} · loading`;
+  $("#command-feedback").textContent = "Commands run on the selected server.";
+  $("#console").replaceChildren();
+  $("#doc-title").textContent = "No document open";
+  $("#doc-body").textContent = "";
+  $("#doc-history").replaceChildren();
+  $("#settings-import-file").value = "";
+  $("#settings-import-plan").replaceChildren();
+  operationMessage("");
+  document.querySelectorAll("main > section").forEach(section => { section.dataset.instanceStale = "true"; section.inert = true; });
   writeRoute();
   consoleRecords = [];
   cpuHistory = [];
   resourceHistory = [];
   timingHistory = [];
   playerHistory = new Map();
-  loadInstances();
+  load("servers", null, loadInstances);
   refreshStatus();
+  renderWorkspace();
+  load("the log", null, loadLogs);
+  connect();
   /* The tab is an argument because a link naming both, `#/i/pub/records`,
    * arrives as one navigation: switching the instance and then staying on
    * whatever tab was already open silently drops half of what was asked for. */
   showTab(tab || activeTab, false, sub);
+  writeRoute();
 }
 
 /* Append `?instance=` when one is selected. Every call that is about a
@@ -770,7 +906,7 @@ function forInstance(path) {
 }
 
 function alertsEnabled() {
-  return localStorage.getItem("cellar.alerts") === "on";
+  try { return localStorage.getItem("cellar.alerts") === "on"; } catch { return false; }
 }
 
 function renderAlertButton() {
@@ -798,7 +934,7 @@ async function enableAlerts() {
 }
 
 function notifyOperator(title, body) {
-  if (!alertsEnabled() || Notification.permission !== "granted") return;
+  if (!("Notification" in window) || !alertsEnabled() || Notification.permission !== "granted") return;
   if (serviceWorker) {
     serviceWorker.showNotification(title, { body, tag: "cellar-server" });
   } else {
@@ -806,7 +942,71 @@ function notifyOperator(title, body) {
   }
 }
 
-/* ---- routing ------------------------------------------------------------- */
+const SECTION_INFO = {
+  overview: ["Overview", "Health, players and recent activity at a glance."],
+  dispatch: ["Console", "Live output and commands for the selected server."],
+  monitoring: ["Monitoring", "Process resources, network addresses and engine evidence."],
+  players: ["Players", "Connected players, recorded history and access controls."],
+  database: ["Database", "Shared connection. The gamemode owns its schema."],
+  diagnostics: ["Diagnostics", "Checks and scheduled maintenance across this Cellar process."],
+  activity: ["Activity", "Operator commands and lifecycle events for this scope."],
+  records: ["Records", "Gamemode documents and revisions in the selected bridge scope."],
+  config: ["Configuration", "Profiles, live convars and build tools."],
+  settings: ["Settings & recovery", "Web access, verified backups and process-wide controls."],
+};
+
+function lifecycleAdvice(server) {
+  if (!server) return "No supervised process is available. Open Diagnostics to check the executable and configuration.";
+  return {
+    running: "Ready for players. Open Console to inspect live output or send a command.",
+    starting: "Starting. Waiting for the profile's readiness signal. Follow progress in Console.",
+    unhealthy: "The process is alive but has not reached readiness. Check Console and Diagnostics before restarting.",
+    backoff: "Waiting before the next automatic start attempt. Inspect the previous exit in Console.",
+    crash_looping: "Repeated crashes paused automatic restarts. Fix the cause in Console or Diagnostics, then restart.",
+    stop_failed: "Stop was not confirmed. A child process may still be running. Inspect Diagnostics before any further operation.",
+    stopping: "Stopping. Waiting for confirmed process termination.",
+    stopped: "Stopped. Inspect the last exit, then use Restart when you are ready to bring the server back.",
+  }[server.state] || "State is unknown. Inspect Diagnostics before taking action.";
+}
+
+function renderWorkspace() {
+  const [title, description] = SECTION_INFO[activeTab] || SECTION_INFO.overview;
+  const entry = knownInstances.find(item => item.id === selectedInstance) || knownInstances[0];
+  const server = lastStatus?.server;
+  $("#workspace-title").textContent = title;
+  $("#workspace-description").textContent = description;
+  $("#workspace-context").textContent = `${server?.hostname || entry?.server?.hostname || entry?.id || "Server workspace"} · scope ${lastStatus?.scope || entry?.scope || "loading"}`;
+  $("#section-select").value = activeTab;
+  document.title = `${title} · ${server?.hostname || entry?.id || "Cellar"} · Cellar`;
+  const state = statusFresh ? server?.state || "unavailable" : "waiting";
+  setLamp($("#workspace-state"), state === "running" ? "up" : ["unhealthy", "backoff", "starting", "stopping"].includes(state) ? "warn" : "down", statusFresh ? server ? stateLabel(server) : "Unavailable" : lastStatusAt ? "Status stale" : "Loading status");
+  $("#status-summary").textContent = statusFresh && server
+    ? `${server.players.length}/${server.max_players || "?"} players · ${formatUptime(server.started_at)} uptime · ${server.resources ? formatBytes(server.resources.memory_bytes) + " memory" : "waiting for resources"}`
+    : lastStatusAt ? `Last status received ${lastStatusAt.toLocaleTimeString()}. Values may be stale.` : "Waiting for server status";
+  const notice = $("#live-notice");
+  const offline = socket && socket.readyState !== WebSocket.OPEN;
+  notice.hidden = statusFresh && state === "running" && !offline;
+  notice.textContent = !statusFresh
+    ? "Waiting for Cellar. Controls are unavailable until fresh status arrives. Retrying automatically."
+    : offline ? "Live stream disconnected. Reconnecting automatically; status is still polled. Console gaps are recovered from the log when possible."
+    : lifecycleAdvice(server);
+  $("#restart").disabled = !statusFresh || !server || pendingActions.has($("#restart"));
+  $("#stop").disabled = !statusFresh || !server || server.state === "stopped" || pendingActions.has($("#stop"));
+  $("#command-send").disabled = !statusFresh || !server || !lastStatus?.health?.console;
+  $("#command").disabled = !statusFresh || !server || !lastStatus?.health?.console;
+}
+
+async function loadPane(key) {
+  const pane = TAB_LOADERS[key];
+  if (!pane) return;
+  const generation = viewGeneration;
+  const section = document.getElementById(`tab-${key.split("/")[0]}`);
+  await Promise.all([load(pane.what, $(pane.into), pane.run), section?.dataset.instanceStale ? refreshStatus() : Promise.resolve()]);
+  if (generation === viewGeneration && section) {
+    delete section.dataset.instanceStale;
+    section.inert = false;
+  }
+}
 
 /* The location hash is the tab state, not a JS variable.
  * It was a variable, which is why the PWA's two manifest shortcuts both landed on whichever tab happened to be default, why a reload lost the tab, and why a link to "the console on the dev instance" could not be written down at all.
@@ -909,6 +1109,9 @@ function showTab(name, moveFocus, sub) {
   });
 
   if (moveFocus) $(`#tab-${name}`)?.focus();
+  renderWorkspace();
+  if (name === "overview") renderOverviewCards();
+  if (name === "dispatch") renderConsole();
 
   /* A chart drawn while its tab was hidden has no box to measure, so it was
    * drawn at the fallback size. Redraw once it is on screen rather than
@@ -916,8 +1119,7 @@ function showTab(name, moveFocus, sub) {
   redrawCharts();
 
   if (SUB_TABS[name]) showSub(name, activeSub(name));
-  const pane = TAB_LOADERS[name];
-  if (pane) load(pane.what, $(pane.into), pane.run);
+  loadPane(name);
 }
 
 /* A sub-tab is a tab: the same roles, the same roving tabindex, the same
@@ -939,8 +1141,7 @@ function showSub(tab, sub, moveFocus) {
 
   if (moveFocus) document.getElementById(`sub-${tab}-${sub}`)?.focus();
 
-  const pane = TAB_LOADERS[`${tab}/${sub}`];
-  if (pane) load(pane.what, $(pane.into), pane.run);
+  loadPane(`${tab}/${sub}`);
 }
 
 /* Left, Right, Home and End inside a tab bar, per the WAI-ARIA tabs pattern.
@@ -955,6 +1156,8 @@ function tablistKey(event) {
   const next = {
     ArrowLeft: here - 1,
     ArrowRight: here + 1,
+    ArrowUp: here - 1,
+    ArrowDown: here + 1,
     Home: 0,
     End: buttons.length - 1,
   }[event.key];
@@ -980,9 +1183,11 @@ const TAB_LOADERS = {
     what: "Cellar's version",
     into: "#cellar-update",
     run: async () => {
-      await loadCellarUpdate();
-      await loadBackups();
-      await loadPersistence();
+      await Promise.all([
+        load("Cellar updates", $("#cellar-update"), loadCellarUpdate),
+        load("database backups", $("#backups"), loadBackups),
+        load("persistence snapshots", $("#persistence-backups"), loadPersistence),
+      ]);
     },
   },
   monitoring: { what: "status", into: null, run: () => refreshStatus() },
@@ -1124,7 +1329,7 @@ function everyLabel(seconds) {
 }
 
 async function runJob(name) {
-  const response = await fetch(`/api/jobs/${encodeURIComponent(name)}/run`, { method: "POST" });
+  const response = await request(`/api/jobs/${encodeURIComponent(name)}/run`, { method: "POST" });
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
     showToast(`Could not run ${name}: ${text(data.error) || response.status}`, "error");
@@ -1218,7 +1423,7 @@ async function loadActivity() {
 /* The gamemode declares its safe commands, and a running profile can add
  * commands returned by the engine's own discovery command. */
 async function loadPalette() {
-  const data = await api("/api/instances");
+  const data = { instances: knownInstances, primary: selectedInstance || knownInstances[0]?.id };
   const target = $("#precinct-palette");
   target.replaceChildren();
 
@@ -1268,7 +1473,7 @@ async function loadPalette() {
 /* ---- access ------------------------------------------------------------- */
 
 async function loadAccess() {
-  const response = await fetch(forInstance("/api/access"));
+  const response = await request(forInstance("/api/access"));
   const data = await response.json();
   if (!response.ok) {
     $("#access-notice").textContent = text(data.error);
@@ -1325,7 +1530,7 @@ function renderAccessScope() {
 }
 
 async function changeAccess(body) {
-  const response = await fetch(forInstance("/api/access"), {
+  const response = await request(forInstance("/api/access"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -1343,7 +1548,7 @@ async function loadSettings() {
   featureRows.replaceChildren();
   settingRows.replaceChildren();
 
-  const response = await fetch(forInstance("/api/settings"));
+  const response = await request(forInstance("/api/settings"));
   const data = await response.json();
 
   if (!response.ok) {
@@ -1404,6 +1609,7 @@ async function loadSettings() {
 
     const input = el("input");
     input.type = "text";
+    input.setAttribute("aria-label", `Value for ${setting.id}`);
     input.value = text(setting.value);
     input.style.cssText = "width:90px;padding:3px 6px";
 
@@ -1429,7 +1635,7 @@ async function loadSettings() {
 }
 
 async function setSetting(kind, id, value) {
-  const response = await fetch(forInstance("/api/settings"), {
+  const response = await request(forInstance("/api/settings"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ kind, id, value }),
@@ -1446,7 +1652,7 @@ async function setSetting(kind, id, value) {
 }
 
 async function exportSettings(format, overrides) {
-  const response = await fetch(forInstance(`/api/settings/export?format=${format}&overrides=${overrides}`));
+  const response = await request(forInstance(`/api/settings/export?format=${format}&overrides=${overrides}`));
   $("#export").textContent = await response.text();
 }
 
@@ -1459,7 +1665,7 @@ async function loadCellarUpdate() {
   const rows = $("#cellar-update");
   rows.replaceChildren();
 
-  const response = await fetch("/api/versions");
+  const response = await request("/api/versions");
   const data = await response.json();
   const add = (label, value) => {
     const row = el("tr");
@@ -1488,10 +1694,11 @@ async function loadCellarUpdate() {
 async function loadBackups() {
   const rows = $("#backups");
   const policy = $("#backup-policy");
+  $("#backup-now").disabled = !lastStatus?.backup?.configured || !lastStatus?.backup?.enabled;
   rows.replaceChildren();
   policy.replaceChildren();
 
-  const response = await fetch("/api/db/backups");
+  const response = await request("/api/db/backups");
   const data = await response.json();
 
   if (!response.ok) {
@@ -1522,7 +1729,7 @@ async function loadBackups() {
   /* The job's own verdict, on the screen the backups are on.
    * Pressing "back up now" and seeing no new row is exactly when the reason is wanted, and it was two screens away in the job register: measured here, a passwordless URL failed the dump and the only tell on this
    * screen was that nothing appeared. */
-  const job = (await api("/api/jobs").catch(() => null))?.jobs
+  const job = (await api("/api/jobs").catch(error => { if (isStale(error)) throw error; return null; }))?.jobs
     ?.find((entry) => entry.name === "database-backup");
   if (job) {
     const cell = el("div");
@@ -1617,6 +1824,7 @@ async function loadPersistence() {
   rows.replaceChildren();
   policy.replaceChildren();
   const data = await api(forInstance("/api/persistence/backups"));
+  $("#persistence-backup-now").disabled = !data.enabled;
   const fact = (label, value) => {
     const cell = el("div");
     cell.append(el("span", "muted small", label), el("strong", null, text(value)));
@@ -1694,7 +1902,7 @@ async function loadReleases() {
   const rows = $("#versions");
   rows.replaceChildren();
 
-  const response = await fetch("/api/versions");
+  const response = await request("/api/versions");
   const data = await response.json();
 
   if (!response.ok) {
@@ -1760,7 +1968,7 @@ async function loadChangelog() {
   const target = $("#changelog");
   target.replaceChildren();
 
-  const response = await fetch("/api/changelog");
+  const response = await request("/api/changelog");
   const releases = await response.json();
 
   if (!Array.isArray(releases) || !releases.length) {
@@ -1794,20 +2002,36 @@ function firstSentence(item) {
 
 /* ---- status ------------------------------------------------------------- */
 
-async function refreshStatus() {
+let statusTask = null;
+function refreshStatus() {
+  if ($("#app").hidden) return Promise.resolve();
+  if (statusTask?.generation === viewGeneration) return statusTask.promise;
+  const generation = viewGeneration;
+  const promise = fetchStatus().finally(() => { if (statusTask?.generation === generation) statusTask = null; });
+  statusTask = { generation, promise };
+  return promise;
+}
+
+async function fetchStatus() {
   let data;
   try {
-    const response = await fetch(forInstance("/api/status"));
+    const response = await request(forInstance("/api/status"));
     if (response.status === 401) return showGate();
+    if (!response.ok) throw new Error(`Status unavailable (${response.status})`);
     data = await response.json();
-  } catch {
+  } catch (error) {
+    if (isStale(error)) return;
+    statusFresh = false;
     setLamp($("#stat-state"), "down", "unreachable");
+    renderWorkspace();
     return;
   }
 
   /* Kept so a confirm dialog can say what a destructive action costs without
    * a second round trip while the operator is waiting on the prompt. */
   lastStatus = data;
+  statusFresh = true;
+  lastStatusAt = new Date();
 
   const server = data.server;
   const bridge = data.bridge;
@@ -1840,6 +2064,7 @@ async function refreshStatus() {
       unhealthy: "warn",
       crash_looping: "down",
       stopped: "down",
+      stop_failed: "down",
     };
     setLamp($("#stat-state"), lamps[server.state] || "wait", stateLabel(server));
 
@@ -1914,7 +2139,8 @@ async function refreshStatus() {
   renderTailscaleWeb(data.web_tailscale);
   const access = data.access || {};
   setLamp($("#stat-access"), access.invite_only ? "up" : "wait", access.invite_only ? "invite-only" : "public");
-  renderOverviewCards();
+  if (activeTab === "overview") renderOverviewCards();
+  renderWorkspace();
 }
 
 /* Which server the console below belongs to, said in full.
@@ -2008,7 +2234,9 @@ function renderWebAuth(auth) {
     target.textContent = "Reminder: the UI has no password gate. Keep it on loopback, or configure CELLAR_WEB_PASSWORD_HASH before remote access.";
   } else {
     target.className = "notice up";
-    target.textContent = `Password authentication is configured for ${text(auth.bind)}.`;
+    target.textContent = auth.public_origin
+      ? `HTTPS origin ${text(auth.public_origin)} · Secure, HttpOnly operator cookies · password required.`
+      : `Password authentication is configured for ${text(auth.bind)}. ${auth.secure_cookies ? "Secure cookies require an HTTPS reverse proxy." : "Use HTTPS and secure cookies before exposing this UI beyond a private network."}`;
   }
 }
 
@@ -2032,7 +2260,7 @@ function renderTailscaleWeb(details) {
   toggle.textContent = details.enabled ? "Disable Tailscale web access" : "Enable Tailscale web access";
   toggle.onclick = async () => {
     toggle.disabled = true;
-    const response = await fetch("/api/web/tailscale", {
+    const response = await request("/api/web/tailscale", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ enabled: !details.enabled }),
@@ -2047,7 +2275,7 @@ function renderTailscaleWeb(details) {
 }
 
 async function refreshBuildHealth() {
-  const response = await fetch("/api/versions");
+  const response = await request("/api/versions");
   if (!response.ok) return;
   const data = await response.json();
   const drift = data.build_drift || {};
@@ -2084,7 +2312,7 @@ function applyTableTools() {
     for (const row of rows) row.hidden = Boolean(query) && !row.textContent.toLowerCase().includes(query);
     if (!sortId) continue;
     const column = Number($("#" + sortId)?.value || 0);
-    const sortable = rows.filter((row) => row.cells.length > column);
+    const sortable = rows.filter((row) => row.cells?.length > column);
     sortable.sort((a, b) => (a.cells[column]?.textContent || "").localeCompare(b.cells[column]?.textContent || "", undefined, { numeric: true }));
     for (const row of sortable) body.append(row);
   }
@@ -2215,7 +2443,7 @@ let playerHistory = new Map();
 /* The Connected panel: the roster is already arriving on the status poll, so
  * what this loads is the history it gets joined against. */
 async function loadConnected() {
-  const response = await fetch("/api/players");
+  const response = await request("/api/players");
   const players = await response.json();
   playerHistory = new Map(
     (Array.isArray(players) ? players : []).map((player) => [String(player.steam_id), player]),
@@ -2225,6 +2453,7 @@ async function loadConnected() {
 
 function renderRoster(players) {
   const body = $("#roster");
+  if (body.contains(document.activeElement)) return;
   body.replaceChildren();
 
   if (!players.length) {
@@ -2266,6 +2495,7 @@ function renderRoster(players) {
     );
     body.append(row);
   }
+  applyTableTools();
 }
 
 /* ---- console ------------------------------------------------------------ */
@@ -2283,14 +2513,31 @@ function appendLine(kind, at, who, message, live = false, level = "info", catego
    * Paused still collects. A pause that dropped lines would be a pause that
    * loses the ones you paused to read around. */
   if (consolePaused) return;
-  const node = lineNode(record);
-  if (!node) return;
+  pendingConsoleLines.push(record);
+  if (pendingConsoleLines.length > 1500) pendingConsoleLines.shift();
+  scheduleConsoleScroll();
+}
 
-  const console_ = $("#console");
-  const pinned = consoleAutoScroll;
-  console_.append(node);
-  while (console_.children.length > 1500) console_.firstChild.remove();
-  if (pinned) console_.scrollTop = console_.scrollHeight;
+let consoleScrollFrame = null;
+let pendingConsoleLines = [];
+function scheduleConsoleScroll() {
+  if (consoleScrollFrame !== null) return;
+  consoleScrollFrame = requestAnimationFrame(() => {
+    consoleScrollFrame = null;
+    const console_ = $("#console");
+    if (activeTab === "dispatch" && !consolePaused) {
+      const fragment = document.createDocumentFragment();
+      for (const record of pendingConsoleLines) {
+        const node = lineNode(record);
+        if (node) fragment.append(node);
+      }
+      console_.append(fragment);
+      while (console_.children.length > 1500) console_.firstChild.remove();
+      if (consoleAutoScroll) console_.scrollTop = console_.scrollHeight;
+    }
+    pendingConsoleLines = [];
+    if (activeTab === "overview") renderOverviewCards();
+  });
 }
 
 const LEVEL_RANK = { trace: 0, debug: 1, info: 2, warning: 3, error: 4 };
@@ -2332,6 +2579,7 @@ function lineNode(record) {
  * arrives. Still one pass, but now it happens on a click instead of on every
  * line the engine prints. */
 function renderConsole() {
+  pendingConsoleLines = [];
   const console_ = $("#console");
   if (consolePaused) return;
   const nodes = [];
@@ -2340,7 +2588,7 @@ function renderConsole() {
     if (node) nodes.push(node);
   }
   console_.replaceChildren(...nodes.slice(-1500));
-  if (consoleAutoScroll) console_.scrollTop = console_.scrollHeight;
+  scheduleConsoleScroll();
 }
 
 function renderAddresses(addresses) {
@@ -2366,11 +2614,18 @@ function commandsArriveOnTheStream() {
 
 async function runCommand(command) {
   if (!command.trim()) return;
+  if (!statusFresh || !lastStatus?.health?.console) {
+    $("#command-feedback").textContent = "Command not sent. Wait for a ready console and fresh server status.";
+    return;
+  }
+  const generation = viewGeneration;
+  const target = selectedInstance || "primary server";
+  $("#command-feedback").textContent = `Sending to ${target}…`;
   const echoLocally = !commandsArriveOnTheStream();
   if (echoLocally) appendLine("echo", now(), "you", `> ${command}`);
 
   try {
-    const response = await fetch(forInstance("/api/exec"), {
+    const response = await request(forInstance("/api/exec"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ command }),
@@ -2380,14 +2635,18 @@ async function runCommand(command) {
     if (!response.ok) {
       // Always shown: a refusal never reaches the event stream, because nothing was dispatched.
       appendLine("error", now(), "cellar", text(data.error));
+      $("#command-feedback").textContent = `Command refused by ${target}: ${text(data.error)}`;
       return;
     }
+    $("#command-feedback").textContent = `Reply received from ${target}. ${data.reply.length} output line(s).`;
     if (echoLocally) {
       for (const line of data.reply) appendLine("reply", now(), "reply", text(line));
       if (!data.reply.length) appendLine("reply", now(), "reply", "(no output)");
     }
   } catch (error) {
+    if (isStale(error) || generation !== viewGeneration) return;
     appendLine("error", now(), "cellar", String(error));
+    $("#command-feedback").textContent = `Command outcome unknown: ${error.message}. Inspect the log before retrying.`;
   }
 }
 
@@ -2446,11 +2705,16 @@ async function backfillSince(mark) {
 }
 
 function connect() {
+  if ($("#app").hidden) return;
+  const generation = viewGeneration;
+  clearTimeout(reconnectTimer);
   const protocol = location.protocol === "https:" ? "wss" : "ws";
   socket = new WebSocket(`${protocol}://${location.host}${forInstance("/api/events")}`);
 
   socket.onopen = () => {
+    if (generation !== viewGeneration) return;
     setLamp($("#connection-state"), "up", "live");
+    renderWorkspace();
     /* Only after a reconnect. On the first connection there is no gap: the
      * initial log load already covers everything before now. */
     if (hasConnectedOnce) {
@@ -2461,6 +2725,7 @@ function connect() {
   socket.onerror = () => setLamp($("#connection-state"), "down", "error");
 
   socket.onmessage = (message) => {
+    if (generation !== viewGeneration) return;
     const event = JSON.parse(message.data);
     switch (event.kind) {
       case "log":
@@ -2534,9 +2799,11 @@ function connect() {
 
   // Reconnect rather than going quietly dead: a dashboard that stops updating without saying so is worse than one that is obviously offline.
   socket.onclose = () => {
+    if (generation !== viewGeneration || $("#app").hidden) return;
     setLamp($("#connection-state"), "down", "reconnecting");
     appendLine("error", now(), "cellar", "--- disconnected: lines from here are recovered on reconnect ---");
-    setTimeout(connect, 3000);
+    renderWorkspace();
+    reconnectTimer = setTimeout(connect, 3000);
   };
 }
 
@@ -2546,7 +2813,7 @@ async function loadPlayers() {
   const body = $("#players");
   body.replaceChildren();
 
-  const response = await fetch("/api/players");
+  const response = await request("/api/players");
   const players = await response.json();
 
   if (!Array.isArray(players) || !players.length) {
@@ -2608,7 +2875,7 @@ async function loadDocuments() {
   renderRecordsScope();
 
   const prefix = $("#doc-prefix").value.trim();
-  const response = await fetch(forInstance(`/api/docs?prefix=${encodeURIComponent(prefix)}`));
+  const response = await request(forInstance(`/api/docs?prefix=${encodeURIComponent(prefix)}`));
   const documents = await response.json();
 
   if (!Array.isArray(documents)) {
@@ -2650,8 +2917,9 @@ async function loadDocuments() {
 }
 
 async function openDocument(key) {
-  const response = await fetch(forInstance(`/api/docs/${key}`));
+  const response = await request(forInstance(`/api/docs/${encodeURIComponent(key)}`));
   const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Document could not be opened");
 
   $("#doc-title").textContent = key;
   $("#doc-body").textContent = JSON.stringify(data.document.body, null, 2);
@@ -2679,7 +2947,7 @@ async function loadTables() {
   const list = $("#tables");
   list.replaceChildren();
 
-  const response = await fetch("/api/db/tables");
+  const response = await request("/api/db/tables");
   const tables = await response.json();
   if (!Array.isArray(tables)) {
     list.append(el("p", "muted", text(tables.error) || "The database did not answer."));
@@ -2700,7 +2968,7 @@ async function loadTables() {
 }
 
 async function loadDatabase() {
-  const response = await fetch("/api/db/info");
+  const response = await request("/api/db/info");
   const info = await response.json();
   if (response.ok) {
     databaseDirectControl = info.direct_control === true;
@@ -2714,6 +2982,8 @@ async function loadDatabase() {
       ? `${text(info.database)} · ${text(info.server_version)} · ${text(info.source || "external")} source · schema supplied by the gamemode`
       : "The gamemode owns the schema. Cellar only inspects it.";
   } else {
+    databaseDirectControl = false;
+    $("#database-direct-control").hidden = true;
     $("#db-connection").textContent = "unavailable";
     $("#db-version").textContent = text(info.error);
   }
@@ -2728,7 +2998,7 @@ async function loadDatabase() {
         + "The instance strip does not filter these tables; the gamemode decides what in them belongs to which server."
       : "";
   }
-  loadTables();
+  await loadTables();
 }
 
 async function executeWrite() {
@@ -2755,7 +3025,7 @@ async function executeWrite() {
 }
 
 async function browseTable(name) {
-  const response = await fetch(`/api/db/table/${encodeURIComponent(name)}?limit=50`);
+  const response = await request(`/api/db/table/${encodeURIComponent(name)}?limit=50`);
   const data = await response.json();
   $("#db-title").textContent = name;
   renderResult(data.result);
@@ -2763,7 +3033,7 @@ async function browseTable(name) {
 
 async function runQuery() {
   const sql = $("#sql").value;
-  const response = await fetch("/api/db/query", {
+  const response = await request("/api/db/query", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ sql }),
@@ -2874,6 +3144,7 @@ function redrawCharts() {
  * It used to carry a fixed `viewBox` and `preserveAspectRatio="none"`, so a 320-unit box painted across a 1180px panel stretched every unit by 3.7 while leaving the height alone. The line survived that; the axis labels did not, and "100%" came out nearly four times as wide as it was tall. Matching the viewBox to the element's own box means one unit is one pixel and nothing is
  * distorted. */
 function drawPercentChart(svg, series, compact = false) {
+  if (!svg.clientWidth) return;
   svg.replaceChildren();
   const width = Math.round(svg.clientWidth) || (compact ? 320 : 640);
   const height = Math.round(svg.clientHeight) || (compact ? 64 : 154);
@@ -2926,6 +3197,8 @@ function drawPercentChart(svg, series, compact = false) {
 let passwordSetup = false;
 
 function showGate(setup = false) {
+  invalidateView();
+  statusFresh = false;
   passwordSetup = setup;
   $("#gate").hidden = false;
   $("#app").hidden = true;
@@ -2933,6 +3206,9 @@ function showGate(setup = false) {
     ? "Choose the operator password for this Cellar instance. It is saved as an owner-only Argon2 hash."
     : "Operator sign in. The console behind this runs at full engine privilege.";
   $("#password-confirm-row").hidden = !setup;
+  $("#password-confirm").required = setup;
+  $("#password").value = "";
+  $("#password-confirm").value = "";
   $("#password").autocomplete = setup ? "new-password" : "current-password";
   $("#login-submit").textContent = setup ? "Save password" : "Sign in";
   $("#gate-notice").textContent = setup ? "First visit setup is required." : "";
@@ -2940,8 +3216,19 @@ function showGate(setup = false) {
 
 async function signIn(event) {
   event.preventDefault();
+  const button = $("#login-submit");
+  if (button.disabled) return;
+  button.disabled = true;
+  button.textContent = passwordSetup ? "Saving password…" : "Signing in…";
+  $("#gate-notice").textContent = "Checking securely with Cellar…";
+  try { await submitSignIn(); }
+  catch (error) { if (!isStale(error)) $("#gate-notice").textContent = `Could not reach Cellar: ${error.message}. Try again.`; }
+  finally { button.disabled = false; button.textContent = passwordSetup ? "Save password" : "Sign in"; }
+}
+
+async function submitSignIn() {
   const password = $("#password").value;
-  const response = await fetch(passwordSetup ? "/api/setup-password" : "/api/login", {
+  const response = await request(passwordSetup ? "/api/setup-password" : "/api/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(passwordSetup
@@ -2953,7 +3240,7 @@ async function signIn(event) {
     passwordSetup = false;
     $("#password-confirm-row").hidden = true;
     $("#login-submit").textContent = "Signing in…";
-    const login = await fetch("/api/login", {
+    const login = await request("/api/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ password }),
@@ -2966,9 +3253,11 @@ async function signIn(event) {
   }
 
   if (response.ok) {
+    $("#password").value = $("#password-confirm").value = "";
     $("#gate").hidden = true;
     $("#app").hidden = false;
-    start();
+    if (started) { connect(); refreshStatus(); loadPane(activeTab); }
+    else start();
   } else {
     const data = await response.json().catch(() => ({}));
     $("#gate-notice").textContent = text(data.error)
@@ -2994,6 +3283,7 @@ function watchForSilentFailures() {
   window.addEventListener("error", (event) => complain(event.message || "script error"));
   window.addEventListener("unhandledrejection", (event) => {
     const reason = event.reason;
+    if (isStale(reason)) { event.preventDefault(); return; }
     complain(reason && reason.message ? reason.message : String(reason));
   });
 }
@@ -3002,7 +3292,6 @@ async function start() {
   if (started) return;
   started = true;
   preparePanels();
-  watchForSilentFailures();
   /* Before anything else: the route names an instance, and every later fetch
    * is about whichever one this settles on. */
   const route = readRoute();
@@ -3031,13 +3320,14 @@ async function start() {
    * question and a cheaper one. */
   refreshBuildHealth();
   setInterval(() => {
+    if ($("#app").hidden || document.hidden) return;
     refreshStatus();
-    if (activeTab === "database") loadDatabase();
   }, 2000);
   /* Slower than the status poll: the strip changes when a server starts or
    * dies, not every two seconds, and each tick is a whole config read. */
-  setInterval(() => loadInstances().catch(() => {}), 10000);
-  setInterval(refreshBuildHealth, 30000);
+  setInterval(() => { if (!$("#app").hidden && !document.hidden) loadInstances().catch(() => {}); }, 10000);
+  setInterval(() => { if (!$("#app").hidden && !document.hidden) refreshBuildHealth(); }, 30000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshStatus(); });
   renderAlertButton();
   if (alertsEnabled() && "serviceWorker" in navigator) {
     navigator.serviceWorker.register("/service-worker.js").then((registration) => {
@@ -3068,6 +3358,7 @@ function preparePanels() {
   if (dispatch && consolePanel) dispatch.prepend(consolePanel);
 
   [...document.querySelectorAll("main .panel")].forEach((panel, index) => {
+    if (["overview-control-panel", "overview-editor-panel", "console-panel"].includes(panel.id)) return;
     const key = panelStateKey(panel, index);
     if (panel instanceof HTMLDetailsElement) {
       rememberPanel(panel, key);
@@ -3089,10 +3380,15 @@ function preparePanels() {
     panel.replaceWith(details);
     rememberPanel(details, key);
   });
+  document.querySelectorAll(".scroll").forEach(region => {
+    region.tabIndex = 0;
+    region.setAttribute("role", "region");
+    region.setAttribute("aria-label", region.closest(".panel")?.querySelector("summary, h2")?.textContent || "Scrollable data");
+  });
 }
 
 async function runRelease(action) {
-  const response = await fetch(`/api/release/${action}`, { method: "POST" });
+  const response = await request(`/api/release/${action}`, { method: "POST" });
   const data = await response.json();
   $("#release-notice").textContent = response.ok ? `${action} completed.` : text(data.output || data.error);
   for (const line of String(data.output || "").split("\n").filter(Boolean)) appendLine("reply", now(), action, line);
@@ -3100,7 +3396,7 @@ async function runRelease(action) {
 }
 
 async function loadLogs() {
-  const response = await fetch(forInstance("/api/logs?limit=250"));
+  const response = await request(forInstance("/api/logs?limit=250"));
   if (!response.ok) return;
   const data = await response.json();
   for (const line of data.lines || []) {
@@ -3124,10 +3420,11 @@ async function importSettings(apply) {
     body: "Every convar in the file is set on the running server.",
     typed: file.name,
   })) return;
-  const response = await fetch(forInstance("/api/settings/import"), {
+  const contents = await file.text();
+  const response = await request(forInstance("/api/settings/import"), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ contents: await file.text(), apply }),
+    body: JSON.stringify({ contents, apply }),
   });
   const data = await response.json();
   if (!response.ok) {
@@ -3159,10 +3456,11 @@ async function scanLogs() {
   if (query) params.set("q", query);
   if (level) params.set("level_min", level);
   if (category) params.set("category", category);
-  const response = await fetch(forInstance(`/api/logs?${params}`));
+  const response = await request(forInstance(`/api/logs?${params}`));
   const data = await response.json();
   if (!response.ok) return showToast(text(data.error), "error");
   consoleRecords = [];
+  $("#console").replaceChildren();
   for (const line of data.lines || []) {
     appendLine(line.level === "error" ? "error" : "", clock(line.at), line.tag, line.message, false, line.level, line.category);
     /* Seeds the high-water mark. Without this a reconnect on a quiet server
@@ -3175,7 +3473,7 @@ async function scanLogs() {
 
 async function loadConfigs() {
   const target = $("#config-list");
-  const response = await fetch("/api/configs");
+  const response = await request("/api/configs");
   const data = await response.json();
   target.replaceChildren();
   if (!response.ok) {
@@ -3221,7 +3519,7 @@ async function loadConfigs() {
 
 /* What the gamemode said about itself. */
 async function loadGamemode() {
-  const data = await api("/api/instances");
+  const data = { instances: knownInstances, primary: selectedInstance || knownInstances[0]?.id };
   const wanted = instanceId() || data.primary;
   const current = (data.instances || []).find((entry) => entry.id === wanted)
     || (data.instances || [])[0];
@@ -3264,7 +3562,7 @@ async function activateConfig(name) {
     typed: name,
   });
   if (!going) return;
-  const response = await fetch("/api/configs/activate", {
+  const response = await request("/api/configs/activate", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name }),
@@ -3275,6 +3573,25 @@ async function activateConfig(name) {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  watchForSilentFailures();
+  $("#section-select").onchange = event => showTab(event.target.value, true);
+  $("#palette-open").onclick = openPalette;
+  $("#palette-close").onclick = closePalette;
+  $("#palette").oncancel = event => { event.preventDefault(); closePalette(); };
+  $("#console-filters-toggle").onclick = () => {
+    const filters = $("#console-filters");
+    filters.hidden = !filters.hidden;
+    $("#console-filters-toggle").setAttribute("aria-expanded", String(!filters.hidden));
+  };
+  document.querySelectorAll(".section-jumps a").forEach(link => {
+    link.onclick = event => {
+      event.preventDefault();
+      const panel = $(link.getAttribute("href"));
+      if (panel instanceof HTMLDetailsElement) panel.open = true;
+      panel?.scrollIntoView({ block: "start" });
+      panel?.querySelector("summary, button")?.focus({ preventScroll: true });
+    };
+  });
   document.querySelectorAll("nav.tabs button").forEach((button) => {
     button.onclick = () => showTab(button.dataset.tab, true);
     button.addEventListener("keydown", tablistKey);
@@ -3298,21 +3615,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   /* History and completion.
    * A console with no history is a console where a mistyped long command is retyped from scratch, and completion comes from the gamemode's own profile rather than a list Cellar maintains, so it is right for a gamemode nobody
    * anticipated. */
+  $("#command-form").onsubmit = event => {
+    event.preventDefault();
+    const input = $("#command");
+    const command = input.value.trim();
+    if (!command || input.disabled) return;
+    commandHistory = commandHistory.filter(entry => entry !== command);
+    commandHistory.push(command);
+    if (commandHistory.length > 100) commandHistory.shift();
+    historyCursor = commandHistory.length;
+    runCommand(command);
+    input.value = "";
+    input.focus();
+  };
   $("#command").addEventListener("keydown", (event) => {
     const input = $("#command");
-    if (event.key === "Enter") {
-      const command = input.value;
-      if (command.trim()) {
-        commandHistory = commandHistory.filter((entry) => entry !== command);
-        commandHistory.push(command);
-        if (commandHistory.length > 100) commandHistory.shift();
-        localStorage.setItem("cellar.console.history", JSON.stringify(commandHistory));
-      }
-      historyCursor = commandHistory.length;
-      runCommand(command);
-      input.value = "";
-      return;
-    }
     if (event.key === "ArrowUp" || event.key === "ArrowDown") {
       if (!commandHistory.length) return;
       event.preventDefault();
@@ -3336,7 +3653,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     chip.onclick = () => runCommand(chip.dataset.command);
   });
 
-  $("#doc-search").onclick = loadDocuments;
+  $("#doc-search").onclick = () => load("documents", $("#documents"), loadDocuments);
   $("#activity-refresh").onclick = () => load("activity", $("#activity"), () => loadActivity());
   $("#activity-search").addEventListener("keydown", (event) => {
     if (event.key === "Enter") load("activity", $("#activity"), () => loadActivity());
@@ -3346,15 +3663,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   $("#diagnostics-refresh").onclick = () =>
     load("diagnostics", $("#diagnostics-checks"), () => loadDiagnostics());
-  $("#logout").onclick = signOut;
-  $("#backup-now").onclick = backupNow;
-  $("#persistence-backup-now").onclick = backupPersistenceNow;
-  $("#cellar-exit").onclick = exitCellar;
-  $("#kill-cellar").onclick = emergencyKill;
-  $("#run-query").onclick = runQuery;
-  $("#execute-write").onclick = executeWrite;
-  $("#release-build").onclick = () => runRelease("build");
-  $("#release-publish").onclick = () => runRelease("publish");
+  const actions = {
+    logout: signOut, "backup-now": backupNow, "persistence-backup-now": backupPersistenceNow,
+    "cellar-exit": exitCellar, "kill-cellar": emergencyKill, "run-query": runQuery,
+    "execute-write": executeWrite, "release-build": () => runRelease("build"),
+    "release-publish": () => runRelease("publish"), stop: () => control("stop"), restart: () => control("restart"),
+  };
+  for (const [id, work] of Object.entries(actions)) {
+    const button = document.getElementById(id);
+    button.onclick = () => perform(button, work);
+  }
   $("#access-add").onclick = () => {
     const steamId = $("#access-steam-id").value.trim();
     if (!steamId) return;
@@ -3362,8 +3680,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     $("#access-steam-id").value = "";
   };
 
-  $("#stop").onclick = () => control("stop");
-  $("#restart").onclick = () => control("restart");
   $("#notification-toggle").onclick = enableAlerts;
   $("#console-filter").addEventListener("input", () => {
     localStorage.setItem("cellar.console.filter", $("#console-filter").value);
@@ -3377,9 +3693,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     localStorage.setItem("cellar.console.level", $("#console-level").value);
     renderConsole();
   });
+  $("#console-category").addEventListener("change", () => renderConsole());
   $("#console-pause").onclick = () => {
     consolePaused = !consolePaused;
     $("#console-pause").textContent = consolePaused ? "resume" : "pause";
+    $("#console-pause").setAttribute("aria-pressed", String(consolePaused));
     $("#console-state").textContent = consolePaused ? "Paused view. Incoming lines are still retained." : "Live output.";
     renderConsole();
   };
@@ -3403,11 +3721,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   };
   $("#console-scan").onclick = scanLogs;
   $("#console-clear").onclick = () => { consoleRecords = []; renderConsole(); };
-  try {
-    commandHistory = JSON.parse(localStorage.getItem("cellar.console.history") || "[]");
-  } catch {
-    commandHistory = [];
-  }
+  // Commands can contain credentials. History stays in memory for this page only.
+  try { localStorage.removeItem("cellar.console.history"); } catch {}
   historyCursor = commandHistory.length;
   $("#console-filter").value = localStorage.getItem("cellar.console.filter") || "";
   $("#console-level").value = localStorage.getItem("cellar.console.level") || "";
@@ -3419,12 +3734,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     $("#" + sortId)?.addEventListener("change", applyTableTools);
   }
 
-  const auth = await fetch("/api/auth");
+  const auth = await request("/api/auth");
   const authData = await auth.json().catch(() => ({}));
   if (auth.ok && authData.setup_required) {
     showGate(true);
   } else if (auth.ok && authData.password_required) {
-    const probe = await fetch(forInstance("/api/status"));
+    const probe = await request(forInstance("/api/status"));
     if (probe.status === 401) showGate();
     else {
       $("#app").hidden = false;
@@ -3505,17 +3820,17 @@ function paletteCandidates() {
 }
 
 function openPalette() {
+  if ($("#app").hidden || $("#confirm-dialog").open) return;
   paletteEntries = paletteCandidates();
   paletteCursor = 0;
-  $("#palette").hidden = false;
+  $("#palette").showModal();
   $("#palette-input").value = "";
   renderPalette();
   $("#palette-input").focus();
 }
 
 function closePalette() {
-  $("#palette").hidden = true;
-  $("#command").focus({ preventScroll: true });
+  $("#palette").close();
 }
 
 function paletteMatches() {
@@ -3531,20 +3846,21 @@ function renderPalette() {
   if (paletteCursor >= matches.length) paletteCursor = Math.max(0, matches.length - 1);
   list.replaceChildren();
 
-  if (!matches.length) {
-    list.append(el("li", "muted", "Nothing matches."));
-    return;
-  }
+  $("#palette-empty").hidden = matches.length > 0;
+  $("#palette-input").removeAttribute("aria-activedescendant");
 
   matches.forEach((entry, index) => {
     const item = el("li", index === paletteCursor ? "selected" : "");
     item.setAttribute("role", "option");
     item.setAttribute("aria-selected", String(index === paletteCursor));
+    item.id = `palette-option-${index}`;
+    if (index === paletteCursor) $("#palette-input").setAttribute("aria-activedescendant", item.id);
     item.append(el("span", "palette-label", entry.label));
     item.append(el("span", "palette-hint muted small", entry.hint));
     item.onclick = () => { closePalette(); entry.run(); };
     list.append(item);
   });
+  list.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
 }
 
 function paletteKey(event) {
@@ -3562,9 +3878,10 @@ function paletteKey(event) {
 /* Ctrl-K opens it; Ctrl-1 through Ctrl-9 selects instance N, which is the
  * gesture someone running three servers will actually reach for. */
 function globalKeys(event) {
+  if ($("#app").hidden || $("#confirm-dialog").open) return;
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
     event.preventDefault();
-    if ($("#palette").hidden) openPalette(); else closePalette();
+    if (!$("#palette").open) openPalette(); else closePalette();
     return;
   }
   if ((event.ctrlKey || event.metaKey) && /^[1-9]$/.test(event.key)) {
@@ -3597,12 +3914,13 @@ async function control(action) {
   /* Reading the response, at last. This used to await the fetch and drop it, so
    * a refused stop and a successful one looked identical: nothing happened on
    * screen either way until the next two second poll. */
-  const response = await fetch(forInstance(`/api/control/${action}`), { method: "POST" });
+  operationMessage(`${action === "stop" ? "Stopping" : "Restarting"} ${named}… Waiting for Cellar to confirm.`);
+  const response = await request(forInstance(`/api/control/${action}`), { method: "POST" });
   if (response.ok) {
-    showToast(`Asked ${named} to ${action}.`, "success");
+    operationMessage(`Cellar accepted ${action} for ${named}. Check the live state for readiness.`, "success");
   } else {
     const data = await response.json().catch(() => ({}));
-    showToast(`Could not ${action} ${named}: ${text(data.error) || response.status}`, "error");
+    operationMessage(`Could not ${action} ${named}: ${text(data.error) || response.status}`, "error");
   }
   refreshStatus();
 }
@@ -3619,10 +3937,10 @@ async function emergencyKill() {
 
   let response;
   try {
-    response = await fetch("/api/control/kill", { method: "POST" });
+    response = await request("/api/control/kill", { method: "POST" });
   } catch {
     // Cellar dies a fraction of a second after it replies, so a dropped connection here is the request working, not the request failing.
-    showToast("Cellar is gone. This page has nothing left to talk to.", "warn");
+    showToast("Connection lost before confirmation. Check the host to confirm whether Cellar stopped.", "warn");
     return;
   }
 
@@ -3640,7 +3958,7 @@ async function emergencyKill() {
  * nothing in the UI called it, so the only way out was to close the browser
  * and wait for the cookie to expire. */
 async function signOut() {
-  await fetch("/api/logout", { method: "POST" });
+  await request("/api/logout", { method: "POST" });
   location.reload();
 }
 
@@ -3653,7 +3971,7 @@ async function exitCellar() {
     typed: "shut down",
   });
   if (!going) return;
-  const response = await fetch("/api/control/exit", { method: "POST" });
+  const response = await request("/api/control/exit", { method: "POST" });
   showToast(
     response.ok ? "Cellar is shutting down." : "Cellar refused the shutdown.",
     response.ok ? "warn" : "error",
@@ -3670,7 +3988,7 @@ async function deleteDocument(key) {
   });
   if (!going) return;
 
-  const response = await fetch(forInstance(`/api/docs/${key}`), { method: "DELETE" });
+  const response = await request(forInstance(`/api/docs/${encodeURIComponent(key)}`), { method: "DELETE" });
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
     showToast(`Could not delete ${key}: ${text(data.error) || response.status}`, "error");

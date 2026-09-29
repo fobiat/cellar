@@ -48,7 +48,7 @@ command = "status"
 `;
   const config = `
 ${common("alpha", "Alpha Sandbox", alphaLog, ["--players", "1"], "Alpha mode", "alpha", 0)}
-${twoInstances ? common("beta", "Beta World", betaLog, ["--players", "2", "--flood"], "Beta mode", "beta", 2) : ""}
+${twoInstances ? common("beta", "Beta World", betaLog, ["--players", "2"], "Beta mode", "beta", 2) : ""}
 
 [web]
 enabled = true
@@ -110,14 +110,24 @@ async function expectAccessible(page) {
   expect(results.violations.filter((violation) => ["serious", "critical"].includes(violation.impact))).toEqual([]);
 }
 
+async function section(page, name) {
+  if (await page.locator("#section-select").isVisible()) await page.locator("#section-select").selectOption(name);
+  else await page.locator(`#tabfor-${name}`).click();
+}
+
 test("covers the two instances, keyboard tabs, themes, mobile shell, and accessibility", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("#app")).toBeVisible();
   await expect(page.locator("#instance-strip .instance")).toHaveCount(2);
   await expect(page.locator("#identity-summary")).toContainText("Alpha Sandbox");
 
-  await page.locator("#tabfor-settings").focus();
-  await page.keyboard.press("Enter");
+  if (await page.locator("#section-select").isVisible()) {
+    await page.locator("#section-select").focus();
+    await page.locator("#section-select").selectOption("settings");
+  } else {
+    await page.locator("#tabfor-settings").focus();
+    await page.keyboard.press("Enter");
+  }
   await expect(page.locator("#tab-settings")).toBeVisible();
   await page.locator("#theme").selectOption("light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
@@ -126,7 +136,7 @@ test("covers the two instances, keyboard tabs, themes, mobile shell, and accessi
 
   await page.locator("#instance-strip .instance").nth(1).click();
   await expect(page.locator("#identity-summary")).toContainText("Beta World");
-  await page.locator("#tabfor-dispatch").click();
+  await section(page, "dispatch");
   await expect(page.locator("#precinct-title")).toContainText("Beta mode commands");
   await expect(page.locator("#precinct-title")).not.toContainText("AppleJack");
   await expect(page.locator("#precinct-palette")).not.toContainText(/applejack/i);
@@ -253,11 +263,31 @@ test("respects the console auto-scroll toggle", async ({ page }) => {
   await expect.poll(() => console.evaluate((element) => element.scrollTop + element.clientHeight >= element.scrollHeight - 1)).toBe(true);
 });
 
+test("keeps a 50000-event burst bounded and leaves command entry responsive", async ({ page }) => {
+  await page.goto("/#/dispatch");
+  await expect(page.locator("#connection-state")).toHaveText("live");
+  await expect(page.locator("#command")).toBeEnabled();
+  const result = await page.evaluate(async () => {
+    const started = performance.now();
+    for (let index = 0; index < 50_000; index++) {
+      socket.onmessage({ data: JSON.stringify({ kind: "log", at: new Date().toISOString(), logger: "burst", message: `Burst ${index}`, level: "info", category: "engine" }) });
+    }
+    await new Promise(requestAnimationFrame);
+    return { elapsed: performance.now() - started, records: consoleRecords.length, rows: document.querySelector("#console").children.length };
+  });
+  expect(result.records).toBeLessThanOrEqual(5000);
+  expect(result.rows).toBeLessThanOrEqual(1500);
+  expect(result.elapsed).toBeLessThan(5000);
+  await expect(page.locator("#console")).toContainText("Burst 49999");
+  await page.locator("#command").fill("status");
+  await page.locator("#command-send").click();
+  await expect(page.locator("#command-feedback")).toContainText("Reply received");
+});
+
 test("keeps destructive actions behind an explicit dialog", async ({ page }) => {
   await page.goto("/#/settings");
   await expect(page.locator("#tab-settings")).toBeVisible();
-  // The mobile tab bar and disclosure panels can overlap the auto-scroll hit area while the control is already visible. The assertion is about the typed confirmation, so click the resolved control directly.
-  await page.locator("#kill-cellar").click({ force: true });
+  await page.locator("#kill-cellar").click();
   await expect(page.locator("#confirm-dialog")).toBeVisible();
   await expect(page.locator("#confirm-body")).toContainText("terminated");
   await expect(page.locator("#confirm-go")).toBeDisabled();
@@ -278,6 +308,112 @@ test("keeps destructive actions behind an explicit dialog", async ({ page }) => 
   await page.keyboard.press("Escape");
   await expect(page.locator("#confirm-dialog")).toBeHidden();
   await expect(page.locator("#kill-cellar")).toBeFocused();
+});
+
+for (const route of ["overview", "dispatch", "monitoring", "players/connected", "players/history", "players/access", "database", "diagnostics", "activity", "records", "config/profile", "config/convars", "config/build", "settings"]) {
+test(`covers ${route} in both themes without overflow or inaccessible controls`, async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#workspace-state")).toContainText("running");
+  for (const theme of ["dark", "light"]) {
+    await page.locator("#theme").selectOption(theme);
+      await page.evaluate(route => { location.hash = `#/i/alpha/${route}`; }, route);
+      await expect(page.locator(`#tab-${route.split("/")[0]}`)).toBeVisible();
+      await expect(page.locator("main [aria-busy=true]")).toHaveCount(0);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await expectAccessible(page);
+  }
+});
+}
+
+test("supports 320px, 200% text, reduced motion and full status details", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/");
+  await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+  await expect(page.locator("#workspace-state")).toContainText("running");
+  await page.locator(".status-details summary").click();
+  await expect(page.locator("#stat-persistence")).toBeVisible();
+  await expect(page.locator("#stat-state")).toContainText("running");
+  for (const name of ["overview", "dispatch", "monitoring", "players", "database", "diagnostics", "activity", "records", "config", "settings"]) {
+    await section(page, name);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+  await expectAccessible(page);
+  const motion = await page.locator("#restart").evaluate(element => getComputedStyle(element).transitionDuration);
+  expect(motion).toBe("0s");
+});
+
+test("keeps overview focus and provides keyboard layout controls and a modal jump palette", async ({ page }) => {
+  await page.goto("/");
+  const open = page.getByRole("button", { name: "Open Server health", exact: true });
+  await open.focus();
+  await page.evaluate(() => refreshStatus());
+  await expect(open).toBeFocused();
+  await page.locator("#overview-customize").click();
+  const resize = page.getByRole("button", { name: "Resize Server health", exact: true });
+  await resize.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator('[data-overview-id="health"]')).toHaveAttribute("data-overview-span", "5");
+  await expect(resize).toBeFocused();
+  await page.locator("#palette-open").click();
+  await expect(page.locator("#palette-input")).toBeFocused();
+  await page.locator("#palette-input").fill("no-match-here");
+  await expect(page.locator("#palette-empty")).toBeVisible();
+  await expectAccessible(page);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#palette-open")).toBeFocused();
+  await page.locator("#palette-open").click();
+  await page.locator("#palette-input").fill("Monitoring");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#tab-monitoring")).toBeVisible();
+});
+
+test("isolates delayed instance reads and reconnects the selected console stream", async ({ page }) => {
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  let requested;
+  const pending = new Promise(resolve => { requested = resolve; });
+  await page.goto("/#/i/alpha/records");
+  await expect(page.locator("#workspace-state")).toContainText("running");
+  await page.route("**/api/docs?**", async route => {
+    if (new URL(route.request().url()).searchParams.get("instance") === "alpha") {
+      requested();
+      await held;
+      await route.fulfill({ json: [{ key: "alpha-only", revision: 1, bytes: 10 }] });
+    } else await route.fulfill({ json: [{ key: "beta-only", revision: 1, bytes: 10 }] });
+  });
+  await page.locator("#doc-search").click();
+  await pending;
+  await page.locator('[data-instance="beta"]').click();
+  await expect(page.locator("#documents")).toContainText("beta-only");
+  release();
+  await expect(page.locator("#documents")).not.toContainText("alpha-only");
+  await section(page, "dispatch");
+  await expect(page.locator("#connection-state")).toHaveText("live");
+  await page.locator("#command").fill("status");
+  await page.locator("#command-send").click();
+  await expect(page.locator("#command-feedback")).toContainText("Reply received from beta");
+  await expect(page.locator("#console")).toContainText("Beta World");
+  await expect(page.locator("#console")).not.toContainText("Alpha Sandbox");
+});
+
+test("explains lifecycle failures and refuses unconfirmed command success", async ({ page }) => {
+  await page.goto("/#/dispatch");
+  await expect(page.locator("#workspace-state")).toContainText("running");
+  const snapshot = await (await page.request.get("/api/status?instance=alpha")).json();
+  for (const [state, advice] of [["starting", "readiness signal"], ["unhealthy", "has not reached readiness"], ["crash_looping", "Repeated crashes"], ["stop_failed", "Stop was not confirmed"], ["stopped", "Restart"]]) {
+    await page.route("**/api/status?**", route => route.fulfill({ json: { ...snapshot, server: { ...snapshot.server, state } } }));
+    await page.evaluate(() => refreshStatus());
+    await expect(page.locator("#live-notice")).toContainText(advice);
+    await page.unroute("**/api/status?**");
+  }
+  await page.evaluate(() => refreshStatus());
+  await page.route("**/api/exec?**", route => route.fulfill({ status: 409, json: { error: "maintenance in progress" } }));
+  await page.locator("#command").fill("status");
+  await page.locator("#command-send").click();
+  await expect(page.locator("#command-feedback")).toContainText("Command refused");
+  await expect(page.locator("#command-feedback")).toContainText("maintenance in progress");
+  await expectAccessible(page);
 });
 
 test("renders a disconnected server with actionable accessible text", async ({ page }) => {

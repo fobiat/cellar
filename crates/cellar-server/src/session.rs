@@ -20,7 +20,8 @@ use axum::http::request::Parts;
 use cellar_core::config::WebAuthMode;
 
 pub fn password_required(state: &crate::state::AppState) -> bool {
-    !cellar_core::config::binds_loopback(&state.web_bind)
+    state.web_public_origin.is_some()
+        || !cellar_core::config::binds_loopback(&state.web_bind)
         || match state.web_auth {
             WebAuthMode::Password => true,
             WebAuthMode::None => false,
