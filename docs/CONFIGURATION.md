@@ -509,6 +509,40 @@ and it announces itself before acting.
 
 ---
 
+### Native backup connections
+
+Backup and restore pass `--no-defaults` first and select `utf8mb4` explicitly.
+They no longer read system, user or installation option files. Move required
+connection settings into the database URL before upgrading. The password stays
+in the child environment, outside arguments. Keep certificate private keys in
+operator-managed files; the URL carries their paths only.
+
+| URL setting | Native client behaviour |
+| --- | --- |
+| Host, port, user, password, database | Percent-decoded credentials/database; explicit TCP, including `localhost` and IPv6 |
+| `socket` | Explicit socket transport and socket path |
+| `ssl-mode=disabled` | TLS disabled; refuses certificate options |
+| `ssl-mode=preferred` (default) | TLS enabled without certificate verification; opportunistic on clients that allow fallback |
+| `ssl-mode=verify_identity` | TLS with server certificate verification; requires explicit `ssl-ca` |
+| `ssl-ca`, `ssl-cert`, `ssl-key` | Explicit CA, client certificate and private-key paths; compact aliases `sslca`, `sslcert`, `sslkey` also work |
+| `charset=utf8mb4` | Accepted; other charsets are refused |
+| `statement-cache-capacity` | Accepted as a pool-only numeric setting |
+
+`sslmode` is an alias for `ssl-mode`. Modes are case insensitive. Native clients
+cannot portably express SQLx `REQUIRED` or `VERIFY_CA`, so backups refuse those
+modes. Use `VERIFY_IDENTITY` with a CA when verification is required. Collation,
+timezone, custom authentication/plugin settings, unknown options, and duplicate
+settings are refused before a native process runs. Password authentication and
+native installed authentication plugins remain supported; option-file plugin
+configuration is removed. A native TLS, certificate or authentication failure
+fails the operation and is never retried with weaker settings.
+
+This policy governs backup clients only. SQLx continues to interpret the URL for
+normal queries. Dumps use hexadecimal binary values. Restore accepts trusted
+operator-controlled dumps: header and completion checks detect damage, but do
+not validate SQL authority. Statements in a dump can change the session charset
+and execute privileged SQL; the initial UTF-8 selection does not constrain them.
+
 ## `[backup]`
 
 Logical dumps of whatever `database.url` points at. See

@@ -111,3 +111,8 @@ security boundary. The database grant is the security boundary.
 Cellar's old operational migration switch remains accepted for v0.1 config
 files. It is ignored when `schema_owner = "gamemode"`, with a warning at
 startup. This prevents an upgrade from silently mutating a live game database.
+
+Native logical backup and restore have a separate connection policy from SQLx.
+See [native backup connections](CONFIGURATION.md#native-backup-connections) for
+explicit TLS and socket settings and the removal of implicit option files.
+Restore requires a trusted dump and database privileges for its statements.

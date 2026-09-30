@@ -37,12 +37,16 @@ async fn a_dump_restores_the_rows_it_was_taken_from() {
         .await
         .unwrap();
     sqlx::query(
-        "CREATE TABLE cellar_restore_proof (id INT PRIMARY KEY, body VARCHAR(64) NOT NULL)",
+        "CREATE TABLE cellar_restore_proof (id INT PRIMARY KEY, body VARCHAR(128) CHARACTER SET utf8mb4 NOT NULL, payload VARBINARY(64) NOT NULL)",
     )
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::query("INSERT INTO cellar_restore_proof VALUES (1, 'must survive')")
+    let text = "must survive: café 漢字 🧪 ' \\ ";
+    let binary = vec![0, 0x80, 0xff, b'\\', b'\'', 0x1a];
+    sqlx::query("INSERT INTO cellar_restore_proof VALUES (1, ?, ?)")
+        .bind(text)
+        .bind(&binary)
         .execute(&pool)
         .await
         .unwrap();
@@ -55,6 +59,12 @@ async fn a_dump_restores_the_rows_it_was_taken_from() {
     };
     let dump = cellar_mariadb::backup(&url, &MariaDbConfig::default(), &backup).expect("dump");
 
+    let content = std::fs::read_to_string(&dump).unwrap();
+    assert!(content.contains("SET NAMES utf8mb4"));
+    std::fs::write(&dump, format!(
+        "SET @cellar_initial_charset = CONCAT(@@character_set_client, ',', @@character_set_connection, ',', @@character_set_results);\n{content}\nCREATE TABLE cellar_restore_charset_proof (body VARCHAR(64));\nINSERT INTO cellar_restore_charset_proof VALUES (@cellar_initial_charset);\n"
+    )).unwrap();
+
     // Both halves of the damage a restore has to undo: rows deleted, and a table gone entirely.
     sqlx::query("DROP TABLE cellar_restore_proof")
         .execute(&pool)
@@ -65,11 +75,58 @@ async fn a_dump_restores_the_rows_it_was_taken_from() {
         cellar_mariadb::restore(&dump, &url, &MariaDbConfig::default()).expect("restore");
     assert!(restored.bytes > 0);
 
+    let charset: String = sqlx::query_scalar("SELECT body FROM cellar_restore_charset_proof")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(charset, "utf8mb4,utf8mb4,utf8mb4");
+    sqlx::query("DROP TABLE cellar_restore_charset_proof")
+        .execute(&pool)
+        .await
+        .unwrap();
+
     let body: String = sqlx::query_scalar("SELECT body FROM cellar_restore_proof WHERE id = 1")
         .fetch_one(&pool)
         .await
         .expect("the dropped table and its row came back");
-    assert_eq!(body, "must survive");
+    assert_eq!(body, text);
+    let payload: Vec<u8> =
+        sqlx::query_scalar("SELECT payload FROM cellar_restore_proof WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(payload, binary);
+
+    let mut wrong_password = reqwest::Url::parse(&url).unwrap();
+    wrong_password
+        .set_password(Some("incorrect-fixture-password"))
+        .unwrap();
+    assert!(matches!(
+        cellar_mariadb::backup(wrong_password.as_str(), &MariaDbConfig::default(), &backup),
+        Err(cellar_mariadb::BackupError::Dump(_))
+    ));
+    assert!(matches!(
+        cellar_mariadb::restore(&dump, wrong_password.as_str(), &MariaDbConfig::default()),
+        Err(cellar_mariadb::BackupError::Restore(_))
+    ));
+    let mut bad_ca = reqwest::Url::parse(&url).unwrap();
+    bad_ca.set_query(Some(
+        "ssl-mode=verify_identity&ssl-ca=%2Fnonexistent-cellar-fixture-ca.pem",
+    ));
+    assert!(matches!(
+        cellar_mariadb::backup(bad_ca.as_str(), &MariaDbConfig::default(), &backup),
+        Err(cellar_mariadb::BackupError::Dump(_))
+    ));
+    assert!(matches!(
+        cellar_mariadb::restore(&dump, bad_ca.as_str(), &MariaDbConfig::default()),
+        Err(cellar_mariadb::BackupError::Restore(_))
+    ));
+    assert_eq!(
+        cellar_mariadb::backup::list(directory.path())
+            .unwrap()
+            .len(),
+        1
+    );
 
     sqlx::query("DROP TABLE cellar_restore_proof")
         .execute(&pool)

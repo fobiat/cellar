@@ -421,6 +421,13 @@ and the order is the point:
 
 Cellar takes these itself, on a timer, and can put one back:
 
+Native backup clients ignore option files and use explicit UTF-8 and connection
+settings from the database URL. Check the supported settings in
+[Configuration](CONFIGURATION.md#native-backup-connections) before upgrading.
+Only restore dumps whose source and SQL you trust. File verification detects
+incomplete dumps; it does not make SQL safe or prevent a dump from changing its
+session charset.
+
 ```sh
 cellar db backup      # dump now, verify it, prune to backup.retain
 cellar db backups     # what is on disk, newest first

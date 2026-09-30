@@ -15,6 +15,8 @@ use thiserror::Error;
 pub enum BackupError {
     #[error("CELLAR_DATABASE_URL is not a mysql URL")]
     InvalidUrl,
+    #[error("native backup client cannot preserve this connection setting: {0}")]
+    UnsupportedOption(&'static str),
     #[error("could not create backup directory: {0}")]
     Directory(#[from] std::io::Error),
     #[error("mariadb-dump failed: {0}")]
@@ -149,7 +151,7 @@ pub fn restore(
     database_url: &str,
     mariadb: &MariaDbConfig,
 ) -> Result<Restored, BackupError> {
-    let (user, password, host, port, database) = parse_url(database_url)?;
+    let connection = NativeConnection::parse(database_url)?;
 
     if !dump.exists() {
         return Err(BackupError::NoSuchDump(dump.to_path_buf()));
@@ -170,17 +172,11 @@ pub fn restore(
     let bytes = fs::metadata(dump)?.len();
     let handle = fs::File::open(dump)?;
 
-    let result = Command::new(client(mariadb, "mariadb"))
-        .args([
-            "--host",
-            host.as_str(),
-            "--port",
-            port.as_str(),
-            "--user",
-            user.as_str(),
-            database.as_str(),
-        ])
-        .env("MYSQL_PWD", password)
+    let result = connection
+        .command(client(mariadb, "mariadb"))
+        .arg("--binary-mode")
+        .arg("--")
+        .arg(&connection.database)
         .stdin(Stdio::from(handle))
         .stdout(Stdio::null())
         .output()?;
@@ -192,7 +188,7 @@ pub fn restore(
     }
 
     Ok(Restored {
-        database,
+        database: connection.database,
         bytes,
         from: dump.to_path_buf(),
     })
@@ -237,7 +233,7 @@ pub fn create(
     mariadb: &MariaDbConfig,
     backup: &BackupConfig,
 ) -> Result<PathBuf, BackupError> {
-    let (user, password, host, port, database) = parse_url(database_url)?;
+    let connection = NativeConnection::parse(database_url)?;
     let directory = backup
         .directory
         .clone()
@@ -250,23 +246,19 @@ pub fn create(
 
     let reserved = ReservedDump::create(&directory)?;
 
-    let result = Command::new(client(mariadb, "mariadb-dump"))
+    let result = connection
+        .command(client(mariadb, "mariadb-dump"))
         .args([
             "--single-transaction",
             "--routines",
             "--events",
             "--triggers",
-            "--host",
-            host.as_str(),
-            "--port",
-            port.as_str(),
-            "--user",
-            user.as_str(),
-            "--result-file",
-            reserved.path().to_string_lossy().as_ref(),
-            database.as_str(),
+            "--hex-blob",
         ])
-        .env("MYSQL_PWD", password)
+        .arg("--result-file")
+        .arg(reserved.path())
+        .arg("--")
+        .arg(&connection.database)
         .output()
         .map_err(BackupError::Directory)?;
 
@@ -342,34 +334,119 @@ fn prune(directory: &Path, retain: usize) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-fn parse_url(url: &str) -> Result<(String, String, String, String, String), BackupError> {
-    let rest = url
-        .strip_prefix("mysql://")
-        .or_else(|| url.strip_prefix("mariadb://"))
-        .ok_or(BackupError::InvalidUrl)?;
-    // The last '@', not the first: a password may contain one, and `sqlx` splits the same way, so a URL the pool accepts is a URL this dumps.
-    let (credentials, host_database) = rest.rsplit_once('@').ok_or(BackupError::InvalidUrl)?;
-    // No password is a URL sqlx connects with, so refusing it here meant Cellar would read a database happily and refuse to back it up, and say so only when somebody finally needed the dump.
-    let (user, password) = credentials.split_once(':').unwrap_or((credentials, ""));
-    let (host_port, database) = host_database
-        .split_once('/')
-        .ok_or(BackupError::InvalidUrl)?;
-    let (host, port) = host_port.split_once(':').unwrap_or((host_port, "3306"));
-    if user.is_empty() || host.is_empty() || database.is_empty() {
-        return Err(BackupError::InvalidUrl);
-    }
-    Ok((
-        percent_decode(user),
-        percent_decode(password),
-        host.to_owned(),
-        port.to_owned(),
-        database.to_owned(),
-    ))
+struct NativeConnection {
+    user: String,
+    password: String,
+    host: String,
+    port: u16,
+    database: String,
+    options: Vec<String>,
 }
 
-/// Percent-decoding, for the credentials only.
-/// A password containing `@`, `:` or `/` has to be percent-encoded to be a URL at all, and every driver decodes it before authenticating. Passing the encoded text to `mariadb-dump` authenticates with a different password than the pool used, which reads as "the backup credentials are wrong" and is really "the backup never decoded them".
-fn percent_decode(text: &str) -> String {
+impl NativeConnection {
+    fn parse(text: &str) -> Result<Self, BackupError> {
+        let url = reqwest::Url::parse(text).map_err(|_| BackupError::InvalidUrl)?;
+        if !matches!(url.scheme(), "mysql" | "mariadb") || url.fragment().is_some() {
+            return Err(BackupError::InvalidUrl);
+        }
+        let user = percent_decode(url.username())?;
+        let password = percent_decode(url.password().unwrap_or(""))?;
+        let host = url
+            .host_str()
+            .ok_or(BackupError::InvalidUrl)?
+            .trim_matches(['[', ']'])
+            .to_owned();
+        let database = percent_decode(url.path().trim_start_matches('/'))?;
+        if user.is_empty() || host.is_empty() || database.is_empty() {
+            return Err(BackupError::InvalidUrl);
+        }
+        let mut options = Vec::new();
+        let mut socket = None;
+        let mut tls_mode = "preferred".to_owned();
+        let mut ca = false;
+        let mut seen = std::collections::HashSet::new();
+        for (key, value) in url.query_pairs() {
+            let key = match key.as_ref() {
+                "sslmode" => "ssl-mode",
+                "sslca" => "ssl-ca",
+                "sslcert" => "ssl-cert",
+                "sslkey" => "ssl-key",
+                other => other,
+            };
+            if !seen.insert(key.to_owned()) || value.contains('\0') {
+                return Err(BackupError::UnsupportedOption(
+                    "duplicate or invalid URL option",
+                ));
+            }
+            match key {
+                "ssl-mode" => tls_mode = value.to_ascii_lowercase().replace('-', "_"),
+                "ssl-ca" | "ssl-cert" | "ssl-key" if !value.is_empty() => {
+                    ca |= key == "ssl-ca";
+                    options.push(format!("--{key}={value}"));
+                }
+                "socket" if !value.is_empty() => socket = Some(value.into_owned()),
+                "charset" if value.eq_ignore_ascii_case("utf8mb4") => {}
+                "charset" => return Err(BackupError::UnsupportedOption("charset must be utf8mb4")),
+                "statement-cache-capacity" if value.parse::<usize>().is_ok() => {}
+                _ => {
+                    return Err(BackupError::UnsupportedOption(
+                        "unsupported URL option; see native backup configuration",
+                    ));
+                }
+            }
+        }
+        match tls_mode.as_str() {
+            "disabled" if options.is_empty() => options.push("--skip-ssl".into()),
+            "preferred" => options.extend(["--ssl".into(), "--skip-ssl-verify-server-cert".into()]),
+            "verify_identity" if ca => {
+                options.extend(["--ssl".into(), "--ssl-verify-server-cert".into()])
+            }
+            "verify_identity" => {
+                return Err(BackupError::UnsupportedOption(
+                    "VERIFY_IDENTITY requires explicit ssl-ca",
+                ));
+            }
+            "required" | "verify_ca" => {
+                return Err(BackupError::UnsupportedOption(
+                    "REQUIRED and VERIFY_CA are unsupported; use VERIFY_IDENTITY with ssl-ca",
+                ));
+            }
+            _ => {
+                return Err(BackupError::UnsupportedOption(
+                    "invalid or conflicting ssl-mode",
+                ));
+            }
+        }
+        if let Some(socket) = socket {
+            options.extend(["--protocol=SOCKET".into(), format!("--socket={socket}")]);
+        } else {
+            options.push("--protocol=TCP".into());
+        }
+        Ok(Self {
+            user,
+            password,
+            host,
+            port: url.port().unwrap_or(3306),
+            database,
+            options,
+        })
+    }
+
+    fn command(&self, executable: PathBuf) -> Command {
+        let mut command = Command::new(executable);
+        command
+            .args(["--no-defaults", "--default-character-set=utf8mb4"])
+            .args(&self.options)
+            .arg(format!("--host={}", self.host))
+            .arg(format!("--port={}", self.port))
+            .arg(format!("--user={}", self.user))
+            .env("MYSQL_PWD", &self.password);
+        command
+    }
+}
+
+/// Decode URL credentials and database names without accepting invalid UTF-8.
+fn percent_decode(text: &str) -> Result<String, BackupError> {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -385,7 +462,11 @@ fn percent_decode(text: &str) -> String {
         out.push(bytes[index]);
         index += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    let decoded = String::from_utf8(out).map_err(|_| BackupError::InvalidUrl)?;
+    if decoded.contains('\0') {
+        return Err(BackupError::InvalidUrl);
+    }
+    Ok(decoded)
 }
 
 #[cfg(test)]
@@ -520,15 +601,157 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn both_callers_pass_isolated_arguments_and_password_outside_argv() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let bin = directory.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        let script = r#"#!/bin/sh
+[ "$1" = '--no-defaults' ] || exit 81
+[ "$2" = '--default-character-set=utf8mb4' ] || exit 82
+[ "$MYSQL_PWD" = 'p@ss' ] || exit 83
+for argument do
+    case "$argument" in *p@ss*) exit 84;; esac
+done
+case "$0" in
+    *mariadb-dump)
+        while [ "$#" -gt 0 ]; do
+            if [ "$1" = '--result-file' ]; then
+                shift
+                { printf '%s\n' '-- MariaDB dump'; i=0; while [ "$i" -lt 80 ]; do printf '%s\n' '-- padding'; i=$((i+1)); done; printf '%s\n' '-- Dump completed'; } > "$1"
+                exit 0
+            fi
+            shift
+        done
+        exit 85;;
+    *) cat > /dev/null;;
+esac
+"#;
+        for name in ["mariadb", "mariadb-dump"] {
+            let path = bin.join(name);
+            fs::write(&path, script).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let config = MariaDbConfig {
+            install_dir: Some(directory.path().to_owned()),
+            ..MariaDbConfig::default()
+        };
+        let backup = BackupConfig {
+            directory: Some(directory.path().join("dumps")),
+            ..BackupConfig::default()
+        };
+        let url = "mysql://u:p%40ss@localhost/db?ssl-mode=disabled";
+        let dump = create(url, &config, &backup).unwrap();
+        assert_eq!(restore(&dump, url, &config).unwrap().database, "db");
+    }
+
+    #[test]
+    fn native_connection_negotiates_utf8mb4() {
+        let Ok(url) = std::env::var("CELLAR_TEST_DATABASE_URL") else {
+            eprintln!("skipping native negotiation: CELLAR_TEST_DATABASE_URL is not set");
+            return;
+        };
+        let connection = NativeConnection::parse(&url).unwrap();
+        let result = connection.command(PathBuf::from("mariadb"))
+            .args(["--batch", "--skip-column-names", "--execute=SELECT @@character_set_client, @@character_set_connection, @@character_set_results", "--"])
+            .arg(&connection.database).output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap().trim(),
+            "utf8mb4\tutf8mb4\tutf8mb4"
+        );
+    }
+
+    #[test]
+    fn native_arguments_isolate_defaults_and_preserve_connection_options() {
+        let connection = NativeConnection::parse("mysql://u:p%40ss@[::1]:33306/a%20b?ssl-mode=verify_identity&ssl-ca=%2Fcerts%2Fca.pem&sslcert=%2Fcerts%2Fclient.pem&sslkey=%2Fcerts%2Fclient.key").unwrap();
+        let command = connection.command(PathBuf::from("mariadb"));
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_str().unwrap())
+            .collect();
+        assert_eq!(
+            &args[..2],
+            &["--no-defaults", "--default-character-set=utf8mb4"]
+        );
+        for expected in [
+            "--protocol=TCP",
+            "--host=::1",
+            "--port=33306",
+            "--user=u",
+            "--ssl-verify-server-cert",
+            "--ssl-ca=/certs/ca.pem",
+            "--ssl-cert=/certs/client.pem",
+            "--ssl-key=/certs/client.key",
+        ] {
+            assert!(args.contains(&expected), "missing {expected}");
+        }
+        assert!(!args.iter().any(|arg| arg.contains("p@ss")));
+        assert_eq!(connection.database, "a b");
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == "MYSQL_PWD" && value.unwrap() == "p@ss")
+        );
+        let socket = NativeConnection::parse(
+            "mysql://u@localhost/db?socket=%2Frun%2Fdb.sock&ssl-mode=disabled",
+        )
+        .unwrap();
+        let command = socket.command(PathBuf::from("mariadb-dump"));
+        assert!(command.get_args().any(|arg| arg == "--protocol=SOCKET"));
+        assert!(command.get_args().any(|arg| arg == "--socket=/run/db.sock"));
+        assert!(command.get_args().any(|arg| arg == "--skip-ssl"));
+    }
+
+    #[test]
+    fn required_settings_are_refused_instead_of_silently_discarded() {
+        for query in [
+            "charset=big5",
+            "collation=utf8mb4_bin",
+            "init-command=SET%20NAMES%20big5",
+            "ssl-mode=required",
+            "ssl-mode=verify_ca",
+            "ssl-mode=verify_identity",
+            "ssl-mode=disabled&ssl-ca=ca.pem",
+            "sslmode=disabled&ssl-mode=preferred",
+            "auth-plugin=custom",
+            "timezone=UTC",
+            "socket=",
+            "sslkey=",
+        ] {
+            let error = NativeConnection::parse(&format!("mysql://u:secret@localhost/db?{query}"))
+                .err()
+                .unwrap();
+            assert!(
+                matches!(error, BackupError::UnsupportedOption(_)),
+                "{query}: {error}"
+            );
+            assert!(!error.to_string().contains("secret"));
+        }
+        for text in [
+            "mysql://u:%FF@localhost/db",
+            "mysql://u:p@localhost/db%00",
+            "mysql://u:p@localhost/db#fragment",
+        ] {
+            assert!(NativeConnection::parse(text).is_err());
+        }
+    }
+
+    #[test]
     fn parses_the_provisioned_url_shape() {
-        let parsed = match parse_url("mysql://cellar:secret@127.0.0.1:33306/cellar") {
+        let parsed = match NativeConnection::parse("mysql://cellar:secret@127.0.0.1:33306/cellar") {
             Ok(parsed) => parsed,
             Err(error) => panic!("test URL should parse: {error}"),
         };
-        assert_eq!(parsed.0, "cellar");
-        assert_eq!(parsed.2, "127.0.0.1");
-        assert_eq!(parsed.3, "33306");
-        assert_eq!(parsed.4, "cellar");
+        assert_eq!(parsed.user, "cellar");
+        assert_eq!(parsed.host, "127.0.0.1");
+        assert_eq!(parsed.port, 33306);
+        assert_eq!(parsed.database, "cellar");
     }
 
     /// Whatever the pool connects with, this has to dump.
@@ -552,13 +775,13 @@ mod tests {
         ];
 
         for (url, user, password, database) in cases {
-            let parsed = match parse_url(url) {
+            let parsed = match NativeConnection::parse(url) {
                 Ok(parsed) => parsed,
                 Err(error) => panic!("{url} should parse: {error}"),
             };
-            assert_eq!(parsed.0, user, "user of {url}");
-            assert_eq!(parsed.1, password, "password of {url}");
-            assert_eq!(parsed.4, database, "database of {url}");
+            assert_eq!(parsed.user, user, "user of {url}");
+            assert_eq!(parsed.password, password, "password of {url}");
+            assert_eq!(parsed.database, database, "database of {url}");
         }
 
         // Still refused: these are not URLs this can act on at all.
@@ -567,7 +790,10 @@ mod tests {
             "mysql://cellar:secret@127.0.0.1",
             "mysql://:secret@127.0.0.1/cellar",
         ] {
-            assert!(parse_url(url).is_err(), "{url} should be refused");
+            assert!(
+                NativeConnection::parse(url).is_err(),
+                "{url} should be refused"
+            );
         }
     }
 }
